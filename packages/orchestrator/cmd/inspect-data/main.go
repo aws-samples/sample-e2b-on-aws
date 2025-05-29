@@ -8,7 +8,6 @@ import (
 	"log"
 
 	"github.com/e2b-dev/infra/packages/shared/pkg/storage"
-	"github.com/e2b-dev/infra/packages/shared/pkg/storage/s3"
 )
 
 func main() {
@@ -24,7 +23,6 @@ func main() {
 		*buildId,
 		"",
 		"",
-		false,
 	)
 
 	var storagePath string
@@ -46,7 +44,15 @@ func main() {
 
 	ctx := context.Background()
 
-	obj := s3.NewObject(ctx, s3.GetTemplateBucket(), storagePath)
+	storage, err := storage.GetTemplateStorageProvider(ctx)
+	if err != nil {
+		log.Fatalf("failed to get storage provider: %s", err)
+	}
+
+	obj, err := storage.OpenObject(ctx, storagePath)
+	if err != nil {
+		log.Fatalf("failed to open object: %s", err)
+	}
 
 	size, err := obj.Size()
 	if err != nil {
@@ -67,7 +73,7 @@ func main() {
 
 	fmt.Printf("\nMETADATA\n")
 	fmt.Printf("========\n")
-	fmt.Printf("Storage path       %s/%s\n", s3.GetTemplateBucket().Name, storagePath)
+	fmt.Printf("Storage            %s/%s\n", storage.GetDetails(), storagePath)
 	fmt.Printf("Build ID           %s\n", *buildId)
 	fmt.Printf("Size               %d B (%d MiB)\n", size, size/1024/1024)
 	fmt.Printf("Block size         %d B\n", blockSize)

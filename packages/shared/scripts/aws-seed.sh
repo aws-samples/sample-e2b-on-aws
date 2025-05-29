@@ -5,10 +5,10 @@ echo "AWS Database Seed Script"
 echo "========================"
 
 # Ensure all required environment variables are set
-DB_HOST=${DB_HOST:-"xxxxxx"}
+DB_HOST=${DB_HOST:-"database-e2b.cluster-cqjwsuyea136.us-east-1.rds.amazonaws.com"}
 DB_PORT=${DB_PORT:-"5432"}
-DB_USER=${DB_USER:-"xxxx"}
-DB_PASSWORD=${DB_PASSWORD:-"xxxxxx"}
+DB_USER=${DB_USER:-"postgres"}
+DB_PASSWORD=${DB_PASSWORD:-"Longyuan123"}
 DB_NAME=${DB_NAME:-"postgres"}
 
 echo "Using database: $DB_HOST"
