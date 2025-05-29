@@ -3,18 +3,20 @@ package db
 import (
 	"context"
 	"fmt"
+	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/e2b-dev/infra/packages/shared/pkg/id"
 	"github.com/e2b-dev/infra/packages/shared/pkg/models"
 	"github.com/e2b-dev/infra/packages/shared/pkg/models/env"
 	"github.com/e2b-dev/infra/packages/shared/pkg/models/envbuild"
 	"github.com/e2b-dev/infra/packages/shared/pkg/models/snapshot"
-
-	"github.com/google/uuid"
 )
 
 type SnapshotInfo struct {
 	SandboxID          string
+	SandboxStartedAt   time.Time
 	BaseTemplateID     string
 	VCPU               int64
 	RAMMB              int64
@@ -23,6 +25,7 @@ type SnapshotInfo struct {
 	KernelVersion      string
 	FirecrackerVersion string
 	EnvdVersion        string
+	EnvdSecured        bool
 }
 
 // Check if there exists snapshot with the ID, if yes then return a new
@@ -33,6 +36,9 @@ func (db *DB) NewSnapshotBuild(
 	teamID uuid.UUID,
 ) (*models.EnvBuild, error) {
 	tx, err := db.Client.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to start transaction: %w", err)
+	}
 	defer tx.Rollback()
 
 	s, err := tx.
@@ -75,6 +81,8 @@ func (db *DB) NewSnapshotBuild(
 			SetBaseEnvID(snapshotConfig.BaseTemplateID).
 			SetEnv(e).
 			SetMetadata(snapshotConfig.Metadata).
+			SetSandboxStartedAt(snapshotConfig.SandboxStartedAt).
+			SetEnvSecure(snapshotConfig.EnvdSecured).
 			Save(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create snapshot '%s': %w", snapshotConfig.SandboxID, err)
@@ -86,6 +94,7 @@ func (db *DB) NewSnapshotBuild(
 			Snapshot.
 			UpdateOne(s).
 			SetMetadata(snapshotConfig.Metadata).
+			SetSandboxStartedAt(snapshotConfig.SandboxStartedAt).
 			Save(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("failed to update snapshot '%s': %w", snapshotConfig.SandboxID, err)
@@ -102,7 +111,7 @@ func (db *DB) NewSnapshotBuild(
 		SetKernelVersion(snapshotConfig.KernelVersion).
 		SetFirecrackerVersion(snapshotConfig.FirecrackerVersion).
 		SetEnvdVersion(snapshotConfig.EnvdVersion).
-		SetStatus(envbuild.StatusBuilding).
+		SetStatus(envbuild.StatusSnapshotting).
 		SetTotalDiskSizeMB(snapshotConfig.TotalDiskSizeMB).
 		Save(ctx)
 	if err != nil {
@@ -115,40 +124,6 @@ func (db *DB) NewSnapshotBuild(
 	}
 
 	return b, nil
-}
-
-func (db *DB) GetLastSnapshot(ctx context.Context, sandboxID string, teamID uuid.UUID) (
-	*models.Snapshot,
-	*models.EnvBuild,
-	error,
-) {
-	e, err := db.
-		Client.
-		Env.
-		Query().
-		Where(
-			env.HasBuildsWith(envbuild.StatusEQ(envbuild.StatusSuccess)),
-			env.HasSnapshotsWith(snapshot.SandboxID(sandboxID)),
-			env.TeamID(teamID),
-		).
-		WithSnapshots(func(query *models.SnapshotQuery) {
-			query.Where(snapshot.SandboxID(sandboxID)).Only(ctx)
-		}).
-		WithBuilds(func(query *models.EnvBuildQuery) {
-			query.Where(envbuild.StatusEQ(envbuild.StatusSuccess)).Order(models.Desc(envbuild.FieldFinishedAt)).Only(ctx)
-		}).Only(ctx)
-
-	notFound := models.IsNotFound(err)
-
-	if notFound {
-		return nil, nil, fmt.Errorf("no snapshot build found for '%s'", sandboxID)
-	}
-
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to get snapshot build for '%s': %w", sandboxID, err)
-	}
-
-	return e.Edges.Snapshots[0], e.Edges.Builds[0], nil
 }
 
 func (db *DB) GetSnapshotBuilds(ctx context.Context, sandboxID string, teamID uuid.UUID) (
@@ -164,20 +139,17 @@ func (db *DB) GetSnapshotBuilds(ctx context.Context, sandboxID string, teamID uu
 			env.HasSnapshotsWith(snapshot.SandboxID(sandboxID)),
 			env.TeamID(teamID),
 		).
-		WithSnapshots(func(query *models.SnapshotQuery) {
-			query.Where(snapshot.SandboxID(sandboxID)).Only(ctx)
-		}).
 		WithBuilds().
 		Only(ctx)
 
 	notFound := models.IsNotFound(err)
 
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to get snapshot build for '%s': %w", sandboxID, err)
+	if notFound {
+		return nil, nil, EnvNotFound{}
 	}
 
-	if notFound {
-		return nil, nil, fmt.Errorf("no snapshot build found for '%s'", sandboxID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to get snapshot build for '%s': %w", sandboxID, err)
 	}
 
 	return e, e.Edges.Builds, nil

@@ -1,3 +1,6 @@
+ENV := $(shell cat ../../.last_used_env || echo "not-set")
+-include ../../.env.${ENV}
+
 client := gcloud compute instances list --format='csv(name)' --project $(GCP_PROJECT_ID) | grep "client"
 
 .PHONY: init
@@ -12,6 +15,8 @@ generate:
 	# https://grpc.io/docs/languages/go/quickstart/
 	@echo "Generating..."
 	@protoc --go_out=../shared/pkg/grpc/orchestrator/ --go_opt=paths=source_relative --go-grpc_out=../shared/pkg/grpc/orchestrator/ --go-grpc_opt=paths=source_relative orchestrator.proto
+	@protoc --go_out=../shared/pkg/grpc/orchestrator-info/ --go_opt=paths=source_relative --go-grpc_out=../shared/pkg/grpc/orchestrator-info/ --go-grpc_opt=paths=source_relative info.proto
+	@protoc --go_out=../shared/pkg/grpc/template-manager/ --go_opt=paths=source_relative --go-grpc_out=../shared/pkg/grpc/template-manager/ --go-grpc_opt=paths=source_relative template-manager.proto
 	@echo "Done"
 
 .PHONY: build
@@ -19,8 +24,7 @@ build:
 	$(eval COMMIT_SHA := $(shell git rev-parse --short HEAD))
 	@rm -rf .shared/
 	@cp -r ../shared .shared/
-	@echo "Building with Docker workspace module approach"
-	@sudo docker build --platform linux/amd64 --output=bin --build-arg COMMIT_SHA="$(COMMIT_SHA)" .
+	@docker build --platform linux/amd64 --output=bin --build-arg COMMIT_SHA="$(COMMIT_SHA)" .
 	@rm -rf .shared/
 
 .PHONY: build-local
@@ -33,9 +37,22 @@ build-local:
 build-debug:
 	CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -race -gcflags=all="-N -l" -o bin/orchestrator .
 
+.PHONY: run-debug
+run-debug:
+	make build-debug
+	sudo -E GOTRACEBACK=crash \
+	GODEBUG=madvdontneed=1 \
+	NODE_ID="testclient" \
+	TEMPLATE_BUCKET_NAME=$(TEMPLATE_BUCKET_NAME) \
+	ENVD_TIMEOUT=$(ENVD_TIMEOUT) \
+	ORCHESTRATOR_SERVICES=$(ORCHESTRATOR_SERVICES) \
+	GCP_DOCKER_REPOSITORY_NAME=$(GCP_DOCKER_REPOSITORY_NAME) \
+	GOOGLE_SERVICE_ACCOUNT_BASE64=$(GOOGLE_SERVICE_ACCOUNT_BASE64) \
+	./bin/orchestrator
+
 .PHONY: upload-gcp
 upload-gcp:
-	./upload.sh $(GCP_PROJECT_ID)
+	./upload-orchestrator.sh $(GCP_PROJECT_ID)
 
 .PHONY: upload-aws
 upload-aws:
@@ -53,8 +70,8 @@ upload-aws:
 	sudo docker build --platform linux/amd64 --tag "$(AWS_ACCOUNT_ID).dkr.ecr.us-east-1.amazonaws.com/$(IMAGE):latest" --build-arg COMMIT_SHA="$(COMMIT_SHA)" .
 	sudo docker push "$(AWS_ACCOUNT_ID).dkr.ecr.us-east-1.amazonaws.com/$(IMAGE):latest"
 
-.PHONY: upload
-upload:
+.PHONY: upload/orchestrator
+upload/orchestrator:
 	@if [ -n "$(GCP_PROJECT_ID)" ] && [ -n "$(GCP_REGION)" ]; then \
 		$(MAKE) upload-gcp; \
 	elif [ -n "$(AWS_ACCOUNT_ID)" ] && [ -n "$(AWS_REGION)" ]; then \
@@ -64,19 +81,22 @@ upload:
 		exit 1; \
 	fi
 
-.PHONY: build-and-upload
-build-and-upload:
-	# @rm -rf .shared/
-	# @cp -r ../shared .shared/
-	$(MAKE) build
-	# @rm -rf .shared/
-	$(eval E2B_EXECUTE_FILE_BUCKET := $(shell grep CFNSOFTWAREBUCKET /opt/config.properties | cut -d'=' -f2))
-	@echo "Using bucket: $(E2B_EXECUTE_FILE_BUCKET)"
-	aws s3 cp bin/orchestrator s3://$(E2B_EXECUTE_FILE_BUCKET)/orchestrator
+.PHONY: upload/template-manager
+upload/template-manager:
+	./upload-template-manager.sh $(GCP_PROJECT_ID)
+
+.PHONY: build-and-upload/orchestrator
+build-and-upload/orchestrator: build upload/orchestrator
+	@if [ -n "$(E2B_EXECUTE_FILE_BUCKET)" ] && [ -n "$(AWS_REGION)" ]; then \
+		aws s3 cp bin/orchestrator s3://$(E2B_EXECUTE_FILE_BUCKET)/orchestrator; \
+	fi
+
+.PHONY: build-and-upload/template-manager
+build-and-upload/template-manager: build upload/template-manager
 
 .PHONY: mock
 mock:
-	sudo TEMPLATE_BUCKET_NAME=$(TEMPLATE_BUCKET_NAME) CONSUL_TOKEN=$(CONSUL_TOKEN) NODE_ID="test-client" go run cmd/mock-sandbox/mock.go -template 5wzg6c91u51yaebviysf -build "f0370054-b669-eeee-b33b-573d5287c6ef" -alive 1 -count 2
+	sudo TEMPLATE_BUCKET_NAME=$(TEMPLATE_BUCKET_NAME) CONSUL_TOKEN=$(CONSUL_TOKEN) NODE_ID="testclient" go run cmd/mock-sandbox/mock.go -template 5wzg6c91u51yaebviysf -build "f0370054-b669-eeee-b33b-573d5287c6ef" -alive 1 -count 2
 
 .PHONY: mock-aws
 mock-aws:
@@ -114,7 +134,7 @@ kill-old:
 
 .PHONY: mock-snapshot
 mock-snapshot:
-	sudo TEMPLATE_BUCKET_NAME=$(TEMPLATE_BUCKET_NAME) CONSUL_TOKEN=$(CONSUL_TOKEN) NODE_ID="test-client" go run cmd/mock-snapshot/mock.go  -template 5wzg6c91u51yaebviysf -build "f0370054-b669-4d7e-b33b-573d5287c6ef" -alive 1 -count 1
+	sudo TEMPLATE_BUCKET_NAME=$(TEMPLATE_BUCKET_NAME) CONSUL_TOKEN=$(CONSUL_TOKEN) NODE_ID="testclient" go run cmd/mock-snapshot/mock.go  -template 5wzg6c91u51yaebviysf -build "f0370054-b669-4d7e-b33b-573d5287c6ef" -alive 1 -count 1
 
 .PHONY: mock-snapshot-aws
 mock-snapshot-aws:
@@ -130,3 +150,21 @@ mock-snapshot-aws:
 .PHONY: test
 test:
 	go test -v ./...
+
+.PHONY: build-template
+build-template:
+	sudo -E TEMPLATE_BUCKET_NAME=$(TEMPLATE_BUCKET_NAME) \
+	GOOGLE_SERVICE_ACCOUNT_BASE64=$(GOOGLE_SERVICE_ACCOUNT_BASE64) \
+	DOCKER_AUTH_BASE64=$(DOCKER_AUTH_BASE64) \
+	GCP_PROJECT_ID=$(GCP_PROJECT_ID) \
+	GCP_DOCKER_REPOSITORY_NAME=$(GCP_DOCKER_REPOSITORY_NAME) \
+	GCP_REGION=$(GCP_REGION) \
+	go run cmd/build-template/main.go \
+	-template $(TEMPLATE_ID) \
+	-build $(BUILD_ID) \
+	-kernel $(KERNEL_VERSION) \
+	-firecracker $(FIRECRACKER_VERSION)
+
+.PHONY: migrate
+migrate:
+	./upload-envs.sh /mnt/disks/fc-envs/v1 $(TEMPLATE_BUCKET_NAME)

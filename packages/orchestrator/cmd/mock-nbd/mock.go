@@ -8,9 +8,12 @@ import (
 	"os"
 	"os/signal"
 
+	"github.com/google/uuid"
 	"github.com/pojntfx/go-nbd/pkg/backend"
+	"go.opentelemetry.io/otel"
 
 	"github.com/e2b-dev/infra/packages/orchestrator/internal/sandbox/nbd"
+	"github.com/e2b-dev/infra/packages/shared/pkg/storage/header"
 )
 
 const blockSize = 4096
@@ -34,6 +37,23 @@ func (d *DeviceWithClose) Slice(offset, length int64) ([]byte, error) {
 	return b, nil
 }
 
+func (d *DeviceWithClose) BlockSize() int64 {
+	return blockSize
+}
+
+func (d *DeviceWithClose) Header() *header.Header {
+	size, err := d.Backend.Size()
+	if err != nil {
+		panic(err)
+	}
+
+	return header.NewHeader(header.NewTemplateMetadata(
+		uuid.New(),
+		uint64(blockSize),
+		uint64(size),
+	), nil)
+}
+
 func main() {
 	data := make([]byte, blockSize*8)
 	rand.Read(data)
@@ -47,6 +67,12 @@ func main() {
 
 	done := make(chan os.Signal, 1)
 	signal.Notify(done, os.Interrupt)
+	devicePool, err := nbd.NewDevicePool(ctx)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to create device pool: %v\n", err)
+
+		return
+	}
 
 	go func() {
 		<-done
@@ -63,7 +89,7 @@ func main() {
 		fmt.Printf("----------------------------------------\n")
 		fmt.Printf("[%d] starting mock nbd server\n", i)
 
-		readData, err := MockNbd(ctx, device, i)
+		readData, err := MockNbd(ctx, device, i, devicePool)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "[%d] failed to mock nbd: %v\n", i, err)
 
@@ -78,7 +104,7 @@ func main() {
 	}
 }
 
-func MockNbd(ctx context.Context, device *DeviceWithClose, index int) ([]byte, error) {
+func MockNbd(ctx context.Context, device *DeviceWithClose, index int, devicePool *nbd.DevicePool) ([]byte, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -87,7 +113,7 @@ func MockNbd(ctx context.Context, device *DeviceWithClose, index int) ([]byte, e
 		return nil, fmt.Errorf("failed to get size: %w", err)
 	}
 
-	deviceIndex, err := nbd.Pool.GetDevice(ctx)
+	deviceIndex, err := devicePool.GetDevice(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get device: %w", err)
 	}
@@ -99,14 +125,14 @@ func MockNbd(ctx context.Context, device *DeviceWithClose, index int) ([]byte, e
 
 		for {
 			counter += 1
-			err = nbd.Pool.ReleaseDevice(deviceIndex)
+			err = devicePool.ReleaseDevice(deviceIndex)
 			if err != nil {
 				if counter%10 == 0 {
 					fmt.Printf("[%d] failed to release device: %v\n", index, err)
 				}
 
 				if mnt != nil {
-					mnt.Close()
+					mnt.Close(ctx)
 				}
 
 				continue
@@ -118,12 +144,13 @@ func MockNbd(ctx context.Context, device *DeviceWithClose, index int) ([]byte, e
 		}
 	}()
 
-	mnt = nbd.NewDirectPathMount(device)
+	tracer := otel.Tracer("test")
+	mnt = nbd.NewDirectPathMount(tracer, device, devicePool)
 
 	go func() {
 		<-ctx.Done()
 
-		mnt.Close()
+		mnt.Close(context.TODO())
 	}()
 
 	_, err = mnt.Open(ctx)

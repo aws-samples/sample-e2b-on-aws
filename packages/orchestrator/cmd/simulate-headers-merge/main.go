@@ -7,10 +7,10 @@ import (
 	"log"
 	"os"
 
+	"github.com/google/uuid"
+
 	"github.com/e2b-dev/infra/packages/shared/pkg/storage"
 	"github.com/e2b-dev/infra/packages/shared/pkg/storage/header"
-	"github.com/e2b-dev/infra/packages/shared/pkg/storage/s3"
-	"github.com/google/uuid"
 )
 
 func main() {
@@ -26,7 +26,6 @@ func main() {
 		*baseBuildId,
 		"",
 		"",
-		false,
 	)
 
 	diffTemplate := storage.NewTemplateFiles(
@@ -34,7 +33,6 @@ func main() {
 		*diffBuildId,
 		"",
 		"",
-		false,
 	)
 
 	var baseStoragePath string
@@ -52,8 +50,20 @@ func main() {
 
 	ctx := context.Background()
 
-	baseObj := s3.NewObject(ctx, s3.GetTemplateBucket(), baseStoragePath)
-	diffObj := s3.NewObject(ctx, s3.GetTemplateBucket(), diffStoragePath)
+	storage, err := storage.GetTemplateStorageProvider(ctx)
+	if err != nil {
+		log.Fatalf("failed to get storage provider: %s", err)
+	}
+
+	baseObj, err := storage.OpenObject(ctx, baseStoragePath)
+	if err != nil {
+		log.Fatalf("failed to open object: %s", err)
+	}
+
+	diffObj, err := storage.OpenObject(ctx, diffStoragePath)
+	if err != nil {
+		log.Fatalf("failed to open object: %s", err)
+	}
 
 	baseHeader, err := header.Deserialize(baseObj)
 	if err != nil {
@@ -66,7 +76,7 @@ func main() {
 	}
 
 	fmt.Printf("\nBASE METADATA\n")
-	fmt.Printf("Storage path       %s/%s\n", s3.GetTemplateBucket().Name, baseStoragePath)
+	fmt.Printf("Storage path       %s/%s\n", storage.GetDetails(), baseStoragePath)
 	fmt.Printf("========\n")
 
 	for _, mapping := range baseHeader.Mapping {
@@ -97,7 +107,7 @@ func main() {
 	}
 
 	fmt.Printf("\nDIFF METADATA\n")
-	fmt.Printf("Storage path       %s/%s\n", s3.GetTemplateBucket().Name, diffStoragePath)
+	fmt.Printf("Storage path       %s/%s\n", storage.GetDetails(), diffStoragePath)
 	fmt.Printf("========\n")
 
 	onlyDiffMappings := make([]*header.BuildMap, 0)

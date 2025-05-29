@@ -15,7 +15,7 @@ type DB struct {
 	Client *models.Client
 }
 
-var databaseURL = os.Getenv("CFNDBURL")
+var databaseURL = os.Getenv("POSTGRES_CONNECTION_STRING")
 
 func NewClient() (*DB, error) {
 	if databaseURL == "" {

@@ -11,7 +11,11 @@ import (
 var (
 	// AccessTokensColumns holds the columns for the "access_tokens" table.
 	AccessTokensColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeUUID, Unique: true, Default: "gen_random_uuid()"},
 		{Name: "access_token", Type: field.TypeString, Unique: true, SchemaType: map[string]string{"postgres": "text"}},
+		{Name: "access_token_hash", Type: field.TypeString, Unique: true, SchemaType: map[string]string{"postgres": "text"}},
+		{Name: "access_token_mask", Type: field.TypeString, SchemaType: map[string]string{"postgres": "text"}},
+		{Name: "name", Type: field.TypeString, Default: "Unnamed Access Token", SchemaType: map[string]string{"postgres": "text"}},
 		{Name: "created_at", Type: field.TypeTime, Nullable: true, Default: "CURRENT_TIMESTAMP"},
 		{Name: "user_id", Type: field.TypeUUID},
 	}
@@ -23,7 +27,7 @@ var (
 		ForeignKeys: []*schema.ForeignKey{
 			{
 				Symbol:     "access_tokens_users_access_tokens",
-				Columns:    []*schema.Column{AccessTokensColumns[2]},
+				Columns:    []*schema.Column{AccessTokensColumns[6]},
 				RefColumns: []*schema.Column{UsersColumns[0]},
 				OnDelete:   schema.Cascade,
 			},
@@ -87,7 +91,7 @@ var (
 		{Name: "created_at", Type: field.TypeTime, Default: "CURRENT_TIMESTAMP"},
 		{Name: "updated_at", Type: field.TypeTime},
 		{Name: "finished_at", Type: field.TypeTime, Nullable: true},
-		{Name: "status", Type: field.TypeEnum, Enums: []string{"waiting", "building", "failed", "success", "uploaded"}, Default: "waiting", SchemaType: map[string]string{"postgres": "text"}},
+		{Name: "status", Type: field.TypeEnum, Enums: []string{"waiting", "building", "snapshotting", "failed", "success", "uploaded"}, Default: "waiting", SchemaType: map[string]string{"postgres": "text"}},
 		{Name: "dockerfile", Type: field.TypeString, Nullable: true, SchemaType: map[string]string{"postgres": "text"}},
 		{Name: "start_cmd", Type: field.TypeString, Nullable: true, SchemaType: map[string]string{"postgres": "text"}},
 		{Name: "vcpu", Type: field.TypeInt64},
@@ -120,6 +124,8 @@ var (
 		{Name: "base_env_id", Type: field.TypeString, SchemaType: map[string]string{"postgres": "text"}},
 		{Name: "sandbox_id", Type: field.TypeString, Unique: true, SchemaType: map[string]string{"postgres": "text"}},
 		{Name: "metadata", Type: field.TypeJSON, SchemaType: map[string]string{"postgres": "jsonb"}},
+		{Name: "sandbox_started_at", Type: field.TypeTime},
+		{Name: "env_secure", Type: field.TypeBool, Default: false},
 		{Name: "env_id", Type: field.TypeString, SchemaType: map[string]string{"postgres": "text"}},
 	}
 	// SnapshotsTable holds the schema information for the "snapshots" table.
@@ -130,7 +136,7 @@ var (
 		ForeignKeys: []*schema.ForeignKey{
 			{
 				Symbol:     "snapshots_envs_snapshots",
-				Columns:    []*schema.Column{SnapshotsColumns[5]},
+				Columns:    []*schema.Column{SnapshotsColumns[7]},
 				RefColumns: []*schema.Column{EnvsColumns[0]},
 				OnDelete:   schema.Cascade,
 			},
@@ -165,6 +171,8 @@ var (
 	TeamAPIKeysColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeUUID, Unique: true, Default: "gen_random_uuid()"},
 		{Name: "api_key", Type: field.TypeString, Unique: true, SchemaType: map[string]string{"postgres": "character varying(44)"}},
+		{Name: "api_key_hash", Type: field.TypeString, Unique: true, SchemaType: map[string]string{"postgres": "character varying(64)"}},
+		{Name: "api_key_mask", Type: field.TypeString, SchemaType: map[string]string{"postgres": "character varying(44)"}},
 		{Name: "created_at", Type: field.TypeTime, Default: "CURRENT_TIMESTAMP"},
 		{Name: "updated_at", Type: field.TypeTime, Nullable: true},
 		{Name: "name", Type: field.TypeString, Default: "Unnamed API Key", SchemaType: map[string]string{"postgres": "text"}},
@@ -180,13 +188,13 @@ var (
 		ForeignKeys: []*schema.ForeignKey{
 			{
 				Symbol:     "team_api_keys_teams_team_api_keys",
-				Columns:    []*schema.Column{TeamAPIKeysColumns[6]},
+				Columns:    []*schema.Column{TeamAPIKeysColumns[8]},
 				RefColumns: []*schema.Column{TeamsColumns[0]},
 				OnDelete:   schema.Cascade,
 			},
 			{
 				Symbol:     "team_api_keys_users_created_api_keys",
-				Columns:    []*schema.Column{TeamAPIKeysColumns[7]},
+				Columns:    []*schema.Column{TeamAPIKeysColumns[9]},
 				RefColumns: []*schema.Column{UsersColumns[0]},
 				OnDelete:   schema.SetNull,
 			},

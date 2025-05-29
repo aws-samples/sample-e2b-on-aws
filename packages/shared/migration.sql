@@ -1,3 +1,4 @@
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
 CREATE SCHEMA IF NOT EXISTS auth;
 
 -- Create RLS policies for user management
@@ -245,7 +246,7 @@ DECLARE
     generated_key TEXT;
 BEGIN
     -- Generate a random 20 byte string and encode it as hex, so it's 40 characters
-    generated_key := encode(extensions.gen_random_bytes(20), 'hex');
+    generated_key := encode(gen_random_bytes(20), 'hex');
     INSERT INTO public.team_api_keys (team_id, api_key)
     VALUES (NEW.id, key_prefix || generated_key);
     RETURN NEW;
@@ -268,7 +269,7 @@ DECLARE
     generated_key TEXT;
 BEGIN
     -- Generate a random 20 byte string and encode it as hex, so it's 40 characters
-    generated_key := encode(extensions.gen_random_bytes(20), 'hex');
+    generated_key := encode(gen_random_bytes(20), 'hex');
     INSERT INTO public.access_tokens (user_id, access_token)
     VALUES (NEW.id, key_prefix || generated_key);
     RETURN NEW;
@@ -395,7 +396,7 @@ DECLARE
     generated_key TEXT;
 BEGIN
     -- Generate a random 20 byte string and encode it as hex, so it's 40 characters
-    generated_key := encode(extensions.gen_random_bytes(20), 'hex');
+    generated_key := encode(gen_random_bytes(20), 'hex');
     RETURN team_api_key_prefix || generated_key;
 END
 $generate_team_api_key$ SECURITY DEFINER SET search_path = public;
@@ -411,7 +412,7 @@ DECLARE
     generated_token TEXT;
 BEGIN
     -- Generate a random 20 byte string and encode it as hex, so it's 40 characters
-    generated_token := encode(extensions.gen_random_bytes(20), 'hex');
+    generated_token := encode(gen_random_bytes(20), 'hex');
     RETURN access_token_prefix || generated_token;
 END
 $extra_for_post_user_signup$ SECURITY DEFINER SET search_path = public;

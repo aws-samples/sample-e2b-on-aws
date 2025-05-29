@@ -2,12 +2,7 @@ package network
 
 import (
 	"fmt"
-	"math/rand"
-	"slices"
-
-	consulApi "github.com/hashicorp/consul/api"
-
-	"github.com/e2b-dev/infra/packages/orchestrator/internal/consul"
+	"net"
 )
 
 // We are using a more debuggable IP address allocation for now that only covers 255 addresses.
@@ -25,6 +20,13 @@ const (
 type Slot struct {
 	Key string
 	Idx int
+}
+
+func NewSlot(key string, idx int) *Slot {
+	return &Slot{
+		Key: key,
+		Idx: idx,
+	}
 }
 
 func (s *Slot) VpeerName() string {
@@ -102,113 +104,15 @@ func (s *Slot) TapMask() int {
 	return tapMask
 }
 
+func (s *Slot) TapMaskString() string {
+	mask := net.CIDRMask(s.TapMask(), 32)
+	return net.IP(mask).String()
+}
+
 func (s *Slot) TapCIDR() string {
 	return fmt.Sprintf("%s/%d", s.TapIP(), s.TapMask())
 }
 
-func NewSlot() (*Slot, error) {
-	kv := consul.Client.KV()
-
-	var slot *Slot
-
-	trySlot := func(slotIdx int, key string) (*Slot, error) {
-		status, _, err := kv.CAS(&consulApi.KVPair{
-			Key:         key,
-			ModifyIndex: 0,
-		}, nil)
-		if err != nil {
-			return nil, fmt.Errorf("failed to write to Consul KV: %w", err)
-		}
-
-		if status {
-			return &Slot{
-				Idx: slotIdx,
-				Key: key,
-			}, nil
-		}
-
-		return nil, nil
-	}
-
-	for randomTry := 1; randomTry <= 10; randomTry++ {
-		slotIdx := rand.Intn(slotsSize)
-		key := getKVKey(slotIdx)
-
-		maybeSlot, err := trySlot(slotIdx, key)
-		if err != nil {
-			return nil, err
-		}
-
-		if maybeSlot != nil {
-			slot = maybeSlot
-
-			break
-		}
-	}
-
-	if slot == nil {
-		// This is a fallback for the case when all slots are taken.
-		// There is no Consul lock so it's possible that multiple sandboxes will try to acquire the same slot.
-		// In this case, only one of them will succeed and other will try with different slots.
-		reservedKeys, _, keysErr := kv.Keys(consul.ClientID+"/", "", nil)
-		if keysErr != nil {
-			return nil, fmt.Errorf("failed to read Consul KV: %w", keysErr)
-		}
-
-		for slotIdx := 0; slotIdx < slotsSize; slotIdx++ {
-			key := getKVKey(slotIdx)
-
-			if slices.Contains(reservedKeys, key) {
-				continue
-			}
-
-			maybeSlot, err := trySlot(slotIdx, key)
-			if err != nil {
-				return nil, err
-			}
-
-			if maybeSlot != nil {
-				slot = maybeSlot
-
-				break
-			}
-		}
-	}
-
-	if slot == nil {
-		return nil, fmt.Errorf("failed to acquire IP slot: no empty slots found")
-	}
-
-	return slot, nil
-}
-
-func (ips *Slot) Release() error {
-	kv := consul.Client.KV()
-
-	pair, _, err := kv.Get(ips.Key, nil)
-	if err != nil {
-		return fmt.Errorf("failed to release IPSlot: Failed to read Consul KV: %w", err)
-	}
-
-	if pair == nil {
-		return fmt.Errorf("IP slot %d was already released", ips.Idx)
-	}
-
-	status, _, err := kv.DeleteCAS(&consulApi.KVPair{
-		Key:         ips.Key,
-		ModifyIndex: pair.ModifyIndex,
-	}, nil)
-	if err != nil {
-		return fmt.Errorf("failed to release IPSlot: Failed to delete slot from Consul KV: %w", err)
-	}
-
-	if !status {
-		return fmt.Errorf("IP slot '%d' for was already realocated", ips.Idx)
-	}
-
-	return nil
-}
-
-func getKVKey(slotIdx int) string {
-	return fmt.Sprintf("%s/%d", consul.ClientID, slotIdx)
+func (s *Slot) TapMAC() string {
+	return "02:FC:00:00:00:05"
 }

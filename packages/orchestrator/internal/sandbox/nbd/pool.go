@@ -4,15 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"os"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/bits-and-blooms/bitset"
 	"go.opentelemetry.io/otel/metric"
+	"go.uber.org/zap"
 
 	"github.com/e2b-dev/infra/packages/shared/pkg/meters"
 )
@@ -47,7 +47,9 @@ type (
 //
 // Use `sudo modprobe nbd nbds_max=4096` to set the max number of devices to 4096, which is a good default for now.
 type DevicePool struct {
-	ctx context.Context
+	ctx  context.Context
+	exit chan error
+
 	// We use the bitset to speedup the free device lookup.
 	usedSlots *bitset.BitSet
 	mu        sync.Mutex
@@ -57,25 +59,24 @@ type DevicePool struct {
 	slotCounter metric.Int64UpDownCounter
 }
 
-var Pool *DevicePool
-
-func init() {
+func NewDevicePool(ctx context.Context) (*DevicePool, error) {
 	maxDevices, err := getMaxDevices()
 	if err != nil {
-		panic(fmt.Errorf("failed to get current max devices: %w", err))
+		return nil, fmt.Errorf("failed to get max devices: %w", err)
 	}
 
 	if maxDevices == 0 {
-		panic(fmt.Errorf("nbd module is not loaded or max devices is set to 0"))
+		return nil, errors.New("max devices is 0")
 	}
 
 	counter, err := meters.GetUpDownCounter(meters.NBDkSlotSReadyPoolCounterMeterName)
 	if err != nil {
-		panic(fmt.Errorf("failed to get nbd slot pool counter: %w", err))
+		return nil, fmt.Errorf("failed to get slot pool counter: %w", err)
 	}
 
 	pool := &DevicePool{
-		ctx:         context.Background(),
+		ctx:         ctx,
+		exit:        make(chan error, 1),
 		usedSlots:   bitset.New(maxDevices),
 		slots:       make(chan DeviceSlot, maxSlotsReady),
 		slotCounter: counter,
@@ -84,11 +85,13 @@ func init() {
 	go func() {
 		err = pool.Populate()
 		if err != nil {
-			log.Fatalf("failed during populating device pool: %v\n", err)
+			zap.L().Fatal("failed during populating device pool", zap.Error(err))
 		}
+
+		zap.L().Info("device pool populate closed")
 	}()
 
-	Pool = pool
+	return pool, nil
 }
 
 func getMaxDevices() (uint, error) {
@@ -117,16 +120,25 @@ func (d *DevicePool) Populate() error {
 		select {
 		case <-d.ctx.Done():
 			return d.ctx.Err()
+		case err := <-d.exit:
+			return err
 		default:
 			device, err := d.getFreeDeviceSlot()
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "[nbd pool]: failed to create network: %v\n", err)
+				zap.L().Error("[nbd pool]: failed to create network", zap.Error(err))
 
 				continue
 			}
 
 			d.slotCounter.Add(d.ctx, 1)
-			d.slots <- *device
+
+			// Use select to avoid panic if context is canceled before writing
+			select {
+			case err := <-d.exit:
+				return err
+			case d.slots <- *device:
+				// sent successfully
+			}
 		}
 	}
 }
@@ -259,22 +271,49 @@ func (d *DevicePool) ReleaseDevice(idx DeviceSlot) error {
 	return nil
 }
 
+// ReleaseDeviceWithRetry calls ReleaseDevice and retries if the device is in use.
+func (d *DevicePool) ReleaseDeviceWithRetry(idx DeviceSlot) error {
+	attempt := 0
+	for {
+		attempt++
+		err := d.ReleaseDevice(idx)
+		if errors.Is(err, ErrDeviceInUse{}) {
+			if attempt%100 == 0 {
+				zap.L().Error("error releasing device", zap.Int("attempt", attempt), zap.Error(err))
+			}
+
+			time.Sleep(500 * time.Millisecond)
+
+			continue
+		}
+
+		if err != nil {
+			return fmt.Errorf("error releasing device: %w", err)
+		}
+
+		break
+	}
+
+	return nil
+}
+
 func GetDevicePath(slot DeviceSlot) DevicePath {
 	return fmt.Sprintf("/dev/nbd%d", slot)
 }
 
-var reSlot = regexp.MustCompile(`^/dev/nbd(\d+)$`)
+func (d *DevicePool) Close(_ context.Context) error {
+	zap.L().Info("Closing device pool", zap.Uint("used_slots", d.usedSlots.Count()))
 
-func GetDeviceSlot(path DevicePath) (DeviceSlot, error) {
-	matches := reSlot.FindStringSubmatch(path)
-	if len(matches) != 2 {
-		return 0, fmt.Errorf("invalid nbd path: %s", path)
+	close(d.exit)
+
+	var errs error
+	for slotIdx, e := d.usedSlots.NextSet(0); e; slotIdx, e = d.usedSlots.NextSet(slotIdx + 1) {
+		slot := DeviceSlot(slotIdx)
+		err := d.ReleaseDeviceWithRetry(slot)
+		if err != nil {
+			errs = errors.Join(errs, fmt.Errorf("failed to release device %d: %w", slot, err))
+		}
 	}
 
-	slot, err := strconv.ParseUint(matches[1], 10, 0)
-	if err != nil {
-		return 0, fmt.Errorf("failed to parse slot from path: %w", err)
-	}
-
-	return DeviceSlot(slot), nil
+	return errs
 }

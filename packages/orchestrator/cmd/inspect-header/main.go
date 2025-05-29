@@ -9,7 +9,6 @@ import (
 
 	"github.com/e2b-dev/infra/packages/shared/pkg/storage"
 	"github.com/e2b-dev/infra/packages/shared/pkg/storage/header"
-	"github.com/e2b-dev/infra/packages/shared/pkg/storage/s3"
 )
 
 func main() {
@@ -23,7 +22,6 @@ func main() {
 		*buildId,
 		"",
 		"",
-		false,
 	)
 
 	var storagePath string
@@ -37,8 +35,15 @@ func main() {
 	}
 
 	ctx := context.Background()
+	storage, err := storage.GetTemplateStorageProvider(ctx)
+	if err != nil {
+		log.Fatalf("failed to get storage provider: %s", err)
+	}
 
-	obj := s3.NewObject(ctx, s3.GetTemplateBucket(), storagePath)
+	obj, err := storage.OpenObject(ctx, storagePath)
+	if err != nil {
+		log.Fatalf("failed to open object: %s", err)
+	}
 
 	h, err := header.Deserialize(obj)
 	if err != nil {
@@ -47,7 +52,7 @@ func main() {
 
 	fmt.Printf("\nMETADATA\n")
 	fmt.Printf("========\n")
-	fmt.Printf("Storage path       %s/%s\n", s3.GetTemplateBucket().Name, storagePath)
+	fmt.Printf("Storage            %s/%s\n", storage.GetDetails(), storagePath)
 	fmt.Printf("Version            %d\n", h.Metadata.Version)
 	fmt.Printf("Generation         %d\n", h.Metadata.Generation)
 	fmt.Printf("Build ID           %s\n", h.Metadata.BuildId)
