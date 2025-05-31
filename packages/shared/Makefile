@@ -7,8 +7,10 @@ generate-fc:
 
 .PHONY: generate-models
 generate-models:
-	rm -rf pkg/models/*
-	go generate ./pkg/generate_models.go
+	@echo "Generating models..."
+	@find pkg/models/* -not -path "pkg/models/clickhouse*" -delete
+	@go generate ./pkg/generate_models.go
+	@echo "Done"
 
 .PHONY: prep-cluster
 prep-cluster:
@@ -21,10 +23,10 @@ prep-cluster:
 	@export E2B_REGION=us-east-1
 	@export DB_HOST=database-e2b.cluster-cqjwsuyea136.us-east-1.rds.amazonaws.com
 	@if [ -z "$(POSTGRES_CONNECTION_STRING)" ]; then \
-		export POSTGRES_CONNECTION_STRING="postgresql://postgres:xxxxx1.rds.amazonaws.com:5432/postgres"; \
+		export POSTGRES_CONNECTION_STRING="postgresql://postgres:Longyuan123@database-e2b.cluster-cqjwsuyea136.us-east-1.rds.amazonaws.com:5432/postgres"; \
 	fi
 	@echo $(POSTGRES_CONNECTION_STRING)
-	@E2B_CLOUD=aws AWS_ENABLED=true E2B_REGION=us-east-1 POSTGRES_CONNECTION_STRING=$(POSTGRES_CONNECTION_STRING) DB_HOST=database-e2b.cluster-cqjwsuyea136.us-east-1.rds.amazonaws.com DB_USER=postgres DB_PASSWORD=xxxx DB_NAME=postgres DB_PORT=5432 ./scripts/aws-seed.sh
+	@E2B_CLOUD=aws AWS_ENABLED=true E2B_REGION=us-east-1 POSTGRES_CONNECTION_STRING=$(POSTGRES_CONNECTION_STRING) DB_HOST=database-e2b.cluster-cqjwsuyea136.us-east-1.rds.amazonaws.com DB_USER=postgres DB_PASSWORD=Longyuan123 DB_NAME=postgres DB_PORT=5432 ./scripts/aws-seed.sh
 	@echo "Building base template for AWS..."
 	@E2B_DOMAIN=$(DOMAIN_NAME) E2B_CLOUD=aws E2B_REGION=us-east-1 e2b tpl build -p scripts
 	@echo "Done"
@@ -59,10 +61,10 @@ prep-aws:
 	@export AWS_ENABLED=true
 	@export E2B_CLOUD=aws
 	@export E2B_REGION=us-east-1
-	@export POSTGRES_CONNECTION_STRING="xxxxx:5432/xxx"
-	@export DB_HOST=xxxxxx
+	@export POSTGRES_CONNECTION_STRING="postgresql://postgres:Longyuan123@database-e2b.cluster-cqjwsuyea136.us-east-1.rds.amazonaws.com:5432/postgres"
+	@export DB_HOST=database-e2b.cluster-cqjwsuyea136.us-east-1.rds.amazonaws.com
 	@export DB_USER=postgres
-	@export DB_PASSWORD=xxxxxx
+	@export DB_PASSWORD=Longyuan123
 	@export DB_NAME=postgres
 	@export DB_PORT=5432
 	

@@ -9,45 +9,38 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
 
-// RemoveDir deletes all objects under the specified directory prefix in the bucket
-func RemoveDir(ctx context.Context, bucket *BucketHandle, dirPath string) error {
-	// Create a paginator to list all objects with the directory prefix
-	objectLister := s3.NewListObjectsV2Paginator(bucket.Client, &s3.ListObjectsV2Input{
+func RemoveDir(ctx context.Context, bucket *BucketHandle, dir string) error {
+	paginator := s3.NewListObjectsV2Paginator(bucket.Client, &s3.ListObjectsV2Input{
 		Bucket: aws.String(bucket.Name),
-		Prefix: aws.String(dirPath + "/"),
+		Prefix: aws.String(dir + "/"),
 	})
 
-	// Process each page of results
-	for objectLister.HasMorePages() {
-		// Get the next page of objects
-		resultPage, err := objectLister.NextPage(ctx)
+	for paginator.HasMorePages() {
+		page, err := paginator.NextPage(ctx)
 		if err != nil {
-			return fmt.Errorf("failed to list objects in directory '%s': %w", dirPath, err)
+			return fmt.Errorf("error when listing S3 objects: %w", err)
 		}
 
-		// If no objects found, we're done
-		if len(resultPage.Contents) == 0 {
+		if len(page.Contents) == 0 {
 			break
 		}
 
-		// Prepare object identifiers for batch deletion
-		objectsToDelete := make([]types.ObjectIdentifier, len(resultPage.Contents))
-		for i, objectInfo := range resultPage.Contents {
-			objectsToDelete[i] = types.ObjectIdentifier{
-				Key: objectInfo.Key,
+		objects := make([]types.ObjectIdentifier, len(page.Contents))
+		for i, obj := range page.Contents {
+			objects[i] = types.ObjectIdentifier{
+				Key: obj.Key,
 			}
 		}
 
-		// Execute batch deletion
 		_, err = bucket.Client.DeleteObjects(ctx, &s3.DeleteObjectsInput{
 			Bucket: aws.String(bucket.Name),
 			Delete: &types.Delete{
-				Objects: objectsToDelete,
+				Objects: objects,
 			},
 		})
 
 		if err != nil {
-			return fmt.Errorf("failed to delete objects in directory '%s': %w", dirPath, err)
+			return fmt.Errorf("error when deleting S3 objects: %w", err)
 		}
 	}
 

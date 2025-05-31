@@ -6,140 +6,337 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"math"
+	"net/http"
 	"os"
 	"os/signal"
-	"sync"
-	"sync/atomic"
+	"slices"
 	"syscall"
 
+	"go.opentelemetry.io/otel"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"golang.org/x/sync/errgroup"
+
+	"github.com/e2b-dev/infra/packages/orchestrator/internal/grpcserver"
+	"github.com/e2b-dev/infra/packages/orchestrator/internal/proxy"
+	"github.com/e2b-dev/infra/packages/orchestrator/internal/sandbox"
+	"github.com/e2b-dev/infra/packages/orchestrator/internal/sandbox/nbd"
+	"github.com/e2b-dev/infra/packages/orchestrator/internal/sandbox/network"
 	"github.com/e2b-dev/infra/packages/orchestrator/internal/server"
+	"github.com/e2b-dev/infra/packages/orchestrator/internal/service"
+	"github.com/e2b-dev/infra/packages/orchestrator/internal/template/constants"
+	tmplserver "github.com/e2b-dev/infra/packages/orchestrator/internal/template/server"
 	"github.com/e2b-dev/infra/packages/shared/pkg/env"
+	"github.com/e2b-dev/infra/packages/shared/pkg/logger"
+	sbxlogger "github.com/e2b-dev/infra/packages/shared/pkg/logger/sandbox"
+	"github.com/e2b-dev/infra/packages/shared/pkg/smap"
 	"github.com/e2b-dev/infra/packages/shared/pkg/telemetry"
 )
 
-const defaultPort = 5008
+type Closeable interface {
+	Close(context.Context) error
+}
 
+const (
+	defaultPort      = 15008
+	defaultProxyPort = 15007
+
+	version = "0.1.0"
+
+	fileLockName = "/orchestrator.lock"
+)
+
+var forceStop = env.GetEnv("FORCE_STOP", "false") == "true"
 var commitSHA string
 
 func main() {
+	port := flag.Uint("port", defaultPort, "orchestrator server port")
+	proxyPort := flag.Uint("proxy-port", defaultProxyPort, "orchestrator proxy port")
+	flag.Parse()
+
+	if *port > math.MaxUint16 {
+		log.Fatalf("%d is larger than maximum possible port %d", port, math.MaxInt16)
+	}
+
+	if *proxyPort > math.MaxUint16 {
+		log.Fatalf("%d is larger than maximum possible proxy port %d", proxyPort, math.MaxInt16)
+	}
+
+	success := run(*port, *proxyPort)
+
+	log.Println("Stopping orchestrator, success:", success)
+
+	if success == false {
+		os.Exit(1)
+	}
+}
+
+func run(port, proxyPort uint) (success bool) {
+	success = true
+
+	services := service.GetServices()
+
+	// Check if the orchestrator crashed and restarted
+	// Skip this check in development mode
+	// We don't want to lock if the service is running with force stop; the subsequent start would fail.
+	if !env.IsDevelopment() && !forceStop {
+		info, err := os.Stat(fileLockName)
+		if err == nil {
+			log.Fatalf("Orchestrator was already started at %s, exiting", info.ModTime())
+		}
+
+		f, err := os.Create(fileLockName)
+		if err != nil {
+			log.Fatalf("Failed to create lock file %s: %v", fileLockName, err)
+		}
+		defer func() {
+			fileErr := f.Close()
+			if fileErr != nil {
+				log.Printf("Failed to close lock file %s: %v", fileLockName, fileErr)
+			}
+
+			// Remove the lock file on graceful shutdown
+			if success == true {
+				if fileErr = os.Remove(fileLockName); fileErr != nil {
+					log.Printf("Failed to remove lock file %s: %v", fileLockName, fileErr)
+				}
+			}
+		}()
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	sig, sigCancel := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer sigCancel()
 
-	var port uint
+	clientID := service.GetClientID()
+	if clientID == "" {
+		zap.L().Fatal("client ID is empty")
+	}
 
-	flag.UintVar(&port, "port", defaultPort, "orchestrator server port")
-	flag.Parse()
+	serviceName := service.GetServiceName(services)
+	serviceError := make(chan error)
+	defer close(serviceError)
 
-	wg := &sync.WaitGroup{}
-	exitCode := &atomic.Int32{}
-	telemetrySignal := make(chan struct{})
-
-	// defer waiting on the waitgroup so that this runs even when
+	var g errgroup.Group
+	// defer waiting on the group so that this runs even when
 	// there's a panic.
-	defer wg.Wait()
+	defer func(g *errgroup.Group) {
+		err := g.Wait()
+		if err != nil {
+			log.Printf("error while shutting down: %v", err)
+			success = false
+		}
+	}(&g)
 
 	if !env.IsLocal() {
-		shutdown := telemetry.InitOTLPExporter(ctx, server.ServiceName, "no")
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			<-telemetrySignal
+		shutdown := telemetry.InitOTLPExporter(ctx, serviceName, commitSHA, clientID)
+		defer func() {
 			if err := shutdown(ctx); err != nil {
 				log.Printf("telemetry shutdown: %v", err)
-				exitCode.Add(1)
+				success = false
 			}
 		}()
 	}
+
+	globalLogger := zap.Must(logger.NewLogger(ctx, logger.LoggerConfig{
+		ServiceName: serviceName,
+		IsInternal:  true,
+		IsDebug:     env.IsDebug(),
+		Cores:       []zapcore.Core{logger.GetOTELCore(serviceName)},
+	}))
+	defer func(l *zap.Logger) {
+		err := l.Sync()
+		if err != nil {
+			log.Printf("error while shutting down logger: %v", err)
+			success = false
+		}
+	}(globalLogger)
+	zap.ReplaceGlobals(globalLogger)
+
+	sbxLoggerExternal := sbxlogger.NewLogger(
+		ctx,
+		sbxlogger.SandboxLoggerConfig{
+			ServiceName:      serviceName,
+			IsInternal:       false,
+			CollectorAddress: os.Getenv("LOGS_COLLECTOR_ADDRESS"),
+		},
+	)
+	defer func(l *zap.Logger) {
+		err := l.Sync()
+		if err != nil {
+			log.Printf("error while shutting down sandbox logger: %v", err)
+			success = false
+		}
+	}(sbxLoggerExternal)
+	sbxlogger.SetSandboxLoggerExternal(sbxLoggerExternal)
+
+	sbxLoggerInternal := sbxlogger.NewLogger(
+		ctx,
+		sbxlogger.SandboxLoggerConfig{
+			ServiceName:      serviceName,
+			IsInternal:       true,
+			CollectorAddress: os.Getenv("LOGS_COLLECTOR_ADDRESS"),
+		},
+	)
+	defer func(l *zap.Logger) {
+		err := l.Sync()
+		if err != nil {
+			log.Printf("error while shutting down sandbox logger: %v", err)
+			success = false
+		}
+	}(sbxLoggerInternal)
+	sbxlogger.SetSandboxLoggerInternal(sbxLoggerInternal)
 
 	log.Println("Starting orchestrator", "commit", commitSHA)
 
-	// Check if AWS is enabled and setup AWS configuration
-	if os.Getenv("AWS_ENABLED") == "true" {
-		log.Println("AWS is enabled, setting up AWS configuration")
+	// The sandbox map is shared between the server and the proxy
+	// to propagate information about sandbox routing.
+	sandboxes := smap.New[*sandbox.Sandbox]()
 
-		// AWS region must be set for the AWS SDK to work correctly
-		if os.Getenv("AWS_REGION") == "" {
-			log.Println("AWS_REGION is not set, defaulting to us-east-1")
-			os.Setenv("AWS_REGION", "us-east-1")
-		}
-
-		// Verify S3 bucket name is set
-		if os.Getenv("TEMPLATE_AWS_BUCKET_NAME") == "" {
-			log.Fatalf("TEMPLATE_AWS_BUCKET_NAME must be set when AWS is enabled")
-		}
-
-		// Check AWS credentials (but don't fail if they're not set, as they might be provided through IAM roles)
-		if os.Getenv("AWS_ACCESS_KEY_ID") == "" || os.Getenv("AWS_SECRET_ACCESS_KEY") == "" {
-			log.Println("AWS_ACCESS_KEY_ID or AWS_SECRET_ACCESS_KEY not set. If not using IAM roles, authentication may fail.")
-		}
-
-		// Check if using temporary credentials
-		if os.Getenv("AWS_SESSION_TOKEN") != "" {
-			log.Println("Using temporary AWS credentials with session token")
-		}
-
-		log.Printf("AWS configuration: Region=%s, Bucket=%s",
-			os.Getenv("AWS_REGION"),
-			os.Getenv("TEMPLATE_AWS_BUCKET_NAME"))
-	}
-
-	srv, err := server.New(ctx, port)
+	sandboxProxy, err := proxy.NewSandboxProxy(proxyPort, sandboxes)
 	if err != nil {
-		log.Fatalf("failed to create server: %v", err)
+		zap.L().Fatal("failed to create sandbox proxy", zap.Error(err))
 	}
 
-	log.Println("Finised new server...")
+	tracer := otel.Tracer(serviceName)
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		var err error
+	networkPool, err := network.NewPool(ctx, network.NewSlotsPoolSize, network.ReusedSlotsPoolSize, clientID, tracer)
+	if err != nil {
+		zap.L().Fatal("failed to create network pool", zap.Error(err))
+	}
 
-		defer func() {
-			// recover the panic because the service manages a number of go routines
-			// that can panic, so catching this here allows for the rest of the process
-			// to terminate in a more orderly manner.
-			if perr := recover(); perr != nil {
-				// many of the panics use log.Panicf which means we're going to log
-				// some panic messages twice, but this seems ok, and temporary while
-				// we clean up logging.
-				log.Printf("caught panic in service: %v", perr)
-				exitCode.Add(1)
-				err = errors.Join(err, fmt.Errorf("server panic: %v", perr))
+	devicePool, err := nbd.NewDevicePool(ctx)
+	if err != nil {
+		zap.L().Fatal("failed to create device pool", zap.Error(err))
+	}
+
+	serviceInfo := service.NewInfoContainer(clientID, version, commitSHA)
+
+	grpcSrv := grpcserver.New(serviceInfo)
+
+	_, err = server.New(ctx, grpcSrv, networkPool, devicePool, tracer, serviceInfo, sandboxProxy, sandboxes)
+	if err != nil {
+		zap.L().Fatal("failed to create server", zap.Error(err))
+	}
+
+	tmplSbxLoggerExternal := sbxlogger.NewLogger(
+		ctx,
+		sbxlogger.SandboxLoggerConfig{
+			ServiceName:      constants.ServiceNameTemplate,
+			IsInternal:       false,
+			CollectorAddress: os.Getenv("LOGS_COLLECTOR_ADDRESS"),
+		},
+	)
+	defer func(l *zap.Logger) {
+		err := l.Sync()
+		if err != nil {
+			log.Printf("error while shutting down template manager sandbox logger: %v", err)
+			success = false
+		}
+	}(tmplSbxLoggerExternal)
+
+	var closers []Closeable
+	closers = append(closers,
+		grpcSrv,
+		networkPool,
+		devicePool,
+		sandboxProxy,
+	)
+
+	// Initialize the template manager only if the service is enabled
+	if slices.Contains(services, service.TemplateManager) {
+		tmpl, err := tmplserver.New(
+			ctx,
+			tracer,
+			globalLogger,
+			tmplSbxLoggerExternal,
+			grpcSrv,
+			networkPool,
+			devicePool,
+			sandboxProxy,
+			sandboxes,
+		)
+		if err != nil {
+			zap.L().Fatal("failed to create template manager", zap.Error(err))
+		}
+
+		// Prepend to make sure it's awaited on graceful shutdown
+		closers = append([]Closeable{tmpl}, closers...)
+	}
+
+	service.NewInfoService(ctx, grpcSrv.GRPCServer(), serviceInfo, sandboxes)
+
+	g.Go(func() error {
+		zap.L().Info("Starting session proxy")
+		proxyErr := sandboxProxy.Start()
+		if proxyErr != nil && !errors.Is(proxyErr, http.ErrServerClosed) {
+			proxyErr = fmt.Errorf("proxy server: %w", proxyErr)
+			zap.L().Error("error starting proxy server", zap.Error(proxyErr))
+
+			select {
+			case serviceError <- proxyErr:
+			default:
+				// Don't block if the serviceError channel is already closed
+				// or if the error is already sent
 			}
 
-			// if we encountered an err, but the signal context was NOT canceled, then
-			// the outer context needs to be canceled so the remainder of the service
-			// can shutdown.
-			if err != nil && sig.Err() == nil {
-				log.Printf("service ended early without signal")
-				cancel()
-			}
-		}()
+			return proxyErr
+		}
 
+		return nil
+	})
+
+	g.Go(func() (err error) {
 		// this sets the error declared above so the function
 		// in the defer can check it.
-		if err = srv.Start(ctx); err != nil {
-			log.Printf("orchestrator service: %v", err)
-			exitCode.Add(1)
+		grpcErr := grpcSrv.Start(ctx, port)
+		if grpcErr != nil {
+			grpcErr = fmt.Errorf("grpc server: %w", grpcErr)
+			zap.L().Error("grpc server error", zap.Error(grpcErr))
+
+			select {
+			case serviceError <- grpcErr:
+			default:
+				// Don't block if the serviceError channel is already closed
+				// or if the error is already sent
+			}
+
+			return grpcErr
 		}
-	}()
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		defer close(telemetrySignal)
-		<-sig.Done()
-		if err := srv.Close(ctx); err != nil {
-			log.Printf("grpc service: %v", err)
-			exitCode.Add(1)
+		return nil
+	})
+
+	// Wait for the shutdown signal or if some service fails
+	select {
+	case <-sig.Done():
+		zap.L().Info("Shutdown signal received")
+	case serviceErr := <-serviceError:
+		zap.L().Error("Service error", zap.Error(serviceErr))
+	}
+
+	closeCtx, cancelCloseCtx := context.WithCancel(context.Background())
+	defer cancelCloseCtx()
+	if forceStop {
+		cancelCloseCtx()
+	}
+
+	for _, c := range closers {
+		zap.L().Info(fmt.Sprintf("Closing %T, forced: %v", c, forceStop))
+		if err := c.Close(closeCtx); err != nil {
+			zap.L().Error("error during shutdown", zap.Error(err))
+			success = false
 		}
-	}()
+	}
 
-	wg.Wait()
+	zap.L().Info("Waiting for services to finish")
+	if err := g.Wait(); err != nil {
+		zap.L().Error("service group error", zap.Error(err))
+		success = false
+	}
 
-	os.Exit(int(exitCode.Load()))
+	return success
 }
