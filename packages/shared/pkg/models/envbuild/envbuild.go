@@ -29,6 +29,8 @@ const (
 	FieldDockerfile = "dockerfile"
 	// FieldStartCmd holds the string denoting the start_cmd field in the database.
 	FieldStartCmd = "start_cmd"
+	// FieldReadyCmd holds the string denoting the ready_cmd field in the database.
+	FieldReadyCmd = "ready_cmd"
 	// FieldVcpu holds the string denoting the vcpu field in the database.
 	FieldVcpu = "vcpu"
 	// FieldRAMMB holds the string denoting the ram_mb field in the database.
@@ -43,6 +45,8 @@ const (
 	FieldFirecrackerVersion = "firecracker_version"
 	// FieldEnvdVersion holds the string denoting the envd_version field in the database.
 	FieldEnvdVersion = "envd_version"
+	// FieldClusterNodeID holds the string denoting the cluster_node_id field in the database.
+	FieldClusterNodeID = "cluster_node_id"
 	// EdgeEnv holds the string denoting the env edge name in mutations.
 	EdgeEnv = "env"
 	// Table holds the table name of the envbuild in the database.
@@ -66,6 +70,7 @@ var Columns = []string{
 	FieldStatus,
 	FieldDockerfile,
 	FieldStartCmd,
+	FieldReadyCmd,
 	FieldVcpu,
 	FieldRAMMB,
 	FieldFreeDiskSizeMB,
@@ -73,6 +78,7 @@ var Columns = []string{
 	FieldKernelVersion,
 	FieldFirecrackerVersion,
 	FieldEnvdVersion,
+	FieldClusterNodeID,
 }
 
 // ValidColumn reports if the column name is valid (part of the table columns).
@@ -169,6 +175,11 @@ func ByStartCmd(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldStartCmd, opts...).ToFunc()
 }
 
+// ByReadyCmd orders the results by the ready_cmd field.
+func ByReadyCmd(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldReadyCmd, opts...).ToFunc()
+}
+
 // ByVcpu orders the results by the vcpu field.
 func ByVcpu(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldVcpu, opts...).ToFunc()
@@ -202,6 +213,11 @@ func ByFirecrackerVersion(opts ...sql.OrderTermOption) OrderOption {
 // ByEnvdVersion orders the results by the envd_version field.
 func ByEnvdVersion(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldEnvdVersion, opts...).ToFunc()
+}
+
+// ByClusterNodeID orders the results by the cluster_node_id field.
+func ByClusterNodeID(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldClusterNodeID, opts...).ToFunc()
 }
 
 // ByEnvField orders the results by env field.

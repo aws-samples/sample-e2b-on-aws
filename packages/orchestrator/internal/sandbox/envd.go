@@ -25,7 +25,6 @@ func doRequestWithInfiniteRetries(ctx context.Context, method, address string, r
 	for {
 		reqCtx, cancel := context.WithTimeout(ctx, requestTimeout)
 		request, err := http.NewRequestWithContext(reqCtx, method, address, bytes.NewReader(requestBody))
-
 		if err != nil {
 			cancel()
 			return nil, err
@@ -61,7 +60,7 @@ func (s *Sandbox) initEnvd(ctx context.Context, tracer trace.Tracer, envVars map
 	childCtx, childSpan := tracer.Start(ctx, "envd-init")
 	defer childSpan.End()
 
-	address := fmt.Sprintf("http://%s:%d/init", s.Slot.HostIP(), consts.DefaultEnvdServerPort)
+	address := fmt.Sprintf("http://%s:%d/init", s.Slot.HostIPString(), consts.DefaultEnvdServerPort)
 	jsonBody := &PostInitJSONBody{
 		EnvVars:     &envVars,
 		AccessToken: accessToken,

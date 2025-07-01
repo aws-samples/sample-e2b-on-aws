@@ -5,5 +5,3 @@ plugin
 orchestrator
 bin
 .shared
-
-__debug_bin*

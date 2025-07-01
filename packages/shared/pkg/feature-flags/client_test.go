@@ -1,6 +1,7 @@
 package feature_flags
 
 import (
+	"context"
 	"testing"
 
 	"github.com/launchdarkly/go-sdk-common/v3/ldcontext"
@@ -13,8 +14,10 @@ const (
 
 func TestOfflineDatastore(t *testing.T) {
 	clientCtx := ldcontext.NewBuilder(flagName).Build()
-	client, err := NewClient(0)
-	defer client.Close()
+	client, err := NewClient()
+	defer func() {
+		_ = client.Close(context.Background())
+	}()
 
 	assert.NoError(t, err)
 

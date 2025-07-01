@@ -10,9 +10,7 @@ import (
 	"github.com/e2b-dev/infra/packages/shared/pkg/utils"
 )
 
-var (
-	ErrorObjectNotExist = errors.New("object does not exist")
-)
+var ErrorObjectNotExist = errors.New("object does not exist")
 
 type Provider string
 
@@ -21,7 +19,7 @@ const (
 	AWSStorageProvider   Provider = "AWSBucket"
 	LocalStorageProvider Provider = "Local"
 
-	DefaultStorageProvider Provider = AWSStorageProvider
+	DefaultStorageProvider Provider = GCPStorageProvider
 
 	storageProviderEnv = "STORAGE_PROVIDER"
 )
@@ -44,7 +42,7 @@ type StorageObjectProvider interface {
 }
 
 func GetTemplateStorageProvider(ctx context.Context) (StorageProvider, error) {
-	var provider = Provider(env.GetEnv(storageProviderEnv, string(DefaultStorageProvider)))
+	provider := Provider(env.GetEnv(storageProviderEnv, string(DefaultStorageProvider)))
 
 	if provider == LocalStorageProvider {
 		basePath := env.GetEnv("LOCAL_TEMPLATE_STORAGE_BASE_PATH", "/tmp/templates")

@@ -14,7 +14,7 @@ import (
 	"go.opentelemetry.io/otel/metric"
 	"go.uber.org/zap"
 
-	"github.com/e2b-dev/infra/packages/shared/pkg/meters"
+	"github.com/e2b-dev/infra/packages/shared/pkg/telemetry"
 )
 
 // maxSlotsReady is the number of slots that are ready to be used.
@@ -59,7 +59,7 @@ type DevicePool struct {
 	slotCounter metric.Int64UpDownCounter
 }
 
-func NewDevicePool(ctx context.Context) (*DevicePool, error) {
+func NewDevicePool(ctx context.Context, meterProvider metric.MeterProvider) (*DevicePool, error) {
 	maxDevices, err := getMaxDevices()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get max devices: %w", err)
@@ -69,7 +69,8 @@ func NewDevicePool(ctx context.Context) (*DevicePool, error) {
 		return nil, errors.New("max devices is 0")
 	}
 
-	counter, err := meters.GetUpDownCounter(meters.NBDkSlotSReadyPoolCounterMeterName)
+	meter := meterProvider.Meter("orchestrator.device.pool")
+	counter, err := telemetry.GetUpDownCounter(meter, telemetry.NBDkSlotSReadyPoolCounterMeterName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get slot pool counter: %w", err)
 	}
@@ -239,18 +240,16 @@ func (d *DevicePool) getFreeDeviceSlot() (*DeviceSlot, error) {
 
 // Get device slot if there is one available.
 func (d *DevicePool) GetDevice(ctx context.Context) (DeviceSlot, error) {
-	for {
-		select {
-		case <-ctx.Done():
-			return 0, ctx.Err()
-		default:
-		}
-
-		slot := <-d.slots
-		d.slotCounter.Add(d.ctx, -1)
-
-		return slot, nil
+	select {
+	case <-ctx.Done():
+		return 0, ctx.Err()
+	default:
 	}
+
+	slot := <-d.slots
+	d.slotCounter.Add(d.ctx, -1)
+
+	return slot, nil
 }
 
 // ReleaseDevice will return an error if the device is not free and not release the slot — you can retry.
