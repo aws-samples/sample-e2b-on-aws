@@ -1,9 +1,10 @@
-ENV := $(shell cat ../../.last_used_env || echo "not-set")
--include ../../.env.${ENV}
+client := gcloud compute instances list --format='csv(name)' --project $(GCP_PROJECT_ID) | grep "client"
 
 .PHONY: init
 init:
 	brew install protobuf
+	go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.28
+	go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.2
 
 .PHONY: generate
 generate:
@@ -11,8 +12,6 @@ generate:
 	# https://grpc.io/docs/languages/go/quickstart/
 	@echo "Generating..."
 	@protoc --go_out=../shared/pkg/grpc/orchestrator/ --go_opt=paths=source_relative --go-grpc_out=../shared/pkg/grpc/orchestrator/ --go-grpc_opt=paths=source_relative orchestrator.proto
-	@protoc --go_out=../shared/pkg/grpc/orchestrator-info/ --go_opt=paths=source_relative --go-grpc_out=../shared/pkg/grpc/orchestrator-info/ --go-grpc_opt=paths=source_relative info.proto
-	@protoc --go_out=../shared/pkg/grpc/template-manager/ --go_opt=paths=source_relative --go-grpc_out=../shared/pkg/grpc/template-manager/ --go-grpc_opt=paths=source_relative template-manager.proto
 	@echo "Done"
 
 .PHONY: build
@@ -20,7 +19,8 @@ build:
 	$(eval COMMIT_SHA := $(shell git rev-parse --short HEAD))
 	@rm -rf .shared/
 	@cp -r ../shared .shared/
-	@docker build --platform linux/amd64 --output=bin --build-arg COMMIT_SHA="$(COMMIT_SHA)" .
+	@echo "Building with Docker workspace module approach"
+	@sudo docker build --platform linux/amd64 --output=bin --build-arg COMMIT_SHA="$(COMMIT_SHA)" .
 	@rm -rf .shared/
 
 .PHONY: build-local
@@ -46,19 +46,42 @@ run-debug:
 	GOOGLE_SERVICE_ACCOUNT_BASE64=$(GOOGLE_SERVICE_ACCOUNT_BASE64) \
 	./bin/orchestrator
 
-.PHONY: upload/orchestrator
-upload/orchestrator:
-	./upload-orchestrator.sh $(GCP_PROJECT_ID)
+.PHONY: upload-aws
+upload-aws:
+	@echo "AWS_REGION is $(AWS_REGION)"
+	# Create repository if it doesn't exist
+	$(eval IMAGE := e2b-orchestration/orchestrator)
+	@echo "Using region: us-east-1"
+	# aws ecr describe-repositories --repository-names $(IMAGE) --region us-east-1 || \
+	# aws ecr create-repository --repository-name $(IMAGE) --region us-east-1
+	# Login to ECR
+	aws ecr get-login-password --region us-east-1 | sudo docker login --username AWS --password-stdin $(AWS_ACCOUNT_ID).dkr.ecr.us-east-1.amazonaws.com
+	# Build and push Docker image
+	$(eval COMMIT_SHA := $(shell git rev-parse --short HEAD))
+	sudo docker buildx install || true # sets up the buildx as default docker builder
+	sudo docker build --platform linux/amd64 --tag "$(AWS_ACCOUNT_ID).dkr.ecr.us-east-1.amazonaws.com/$(IMAGE):latest" --build-arg COMMIT_SHA="$(COMMIT_SHA)" .
+	sudo docker push "$(AWS_ACCOUNT_ID).dkr.ecr.us-east-1.amazonaws.com/$(IMAGE):latest"
 
-.PHONY: upload/template-manager
-upload/template-manager:
-	./upload-template-manager.sh $(GCP_PROJECT_ID)
+.PHONY: upload
+upload:
+	@if [ -n "$(GCP_PROJECT_ID)" ] && [ -n "$(GCP_REGION)" ]; then \
+		$(MAKE) upload-gcp; \
+	elif [ -n "$(AWS_ACCOUNT_ID)" ] && [ -n "$(AWS_REGION)" ]; then \
+		$(MAKE) upload-aws; \
+	else \
+		echo "Either GCP_PROJECT_ID and GCP_REGION or AWS_ACCOUNT_ID and AWS_REGION must be set"; \
+		exit 1; \
+	fi
 
-.PHONY: build-and-upload/orchestrator
-build-and-upload/orchestrator: build upload/orchestrator
-
-.PHONY: build-and-upload/template-manager
-build-and-upload/template-manager: build upload/template-manager
+.PHONY: build-and-upload
+build-and-upload:
+	# @rm -rf .shared/
+	# @cp -r ../shared .shared/
+	$(MAKE) build
+	# @rm -rf .shared/
+	$(eval E2B_EXECUTE_FILE_BUCKET := $(shell grep CFNSOFTWAREBUCKET /opt/config.properties | cut -d'=' -f2))
+	@echo "Using bucket: $(E2B_EXECUTE_FILE_BUCKET)"
+	aws s3 cp bin/orchestrator s3://$(E2B_EXECUTE_FILE_BUCKET)/orchestrator
 
 .PHONY: mock
 mock:
