@@ -24,7 +24,10 @@ job "orchestrator" {
         port         = "orchestrator"
       }
     }
-
+    service {
+      name = "orchestrator-proxy"
+      port = "${proxy_port}"
+    }
     task "start" {
       driver = "raw_exec"
 
@@ -41,6 +44,11 @@ job "orchestrator" {
         TEMPLATE_AWS_BUCKET_NAME     = "${BUCKET_FC_TEMPLATE}"
         AWS_REGION                   = "${AWSREGION}"
         USE_FIRECRACKER_NATIVE_DIFF  = true
+        ORCHESTRATOR_SERVICES           = "orchestrator,template-manager"
+        ARTIFACTS_REGISTRY_PROVIDER     = "AWS_ECR"
+        AWS_DOCKER_REPOSITORY_NAME      = "e2bdev/base"
+
+
       }
 
       config {
