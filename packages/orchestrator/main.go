@@ -42,7 +42,7 @@ type Closeable interface {
 
 const (
 	defaultPort      = 5008
-	defaultProxyPort = 5009
+	defaultProxyPort = 5007
 
 	sandboxMetricExportPeriod = 5 * time.Second
 
