@@ -33,6 +33,8 @@ type EnvBuild struct {
 	Dockerfile *string `json:"dockerfile,omitempty"`
 	// StartCmd holds the value of the "start_cmd" field.
 	StartCmd *string `json:"start_cmd,omitempty"`
+	// ReadyCmd holds the value of the "ready_cmd" field.
+	ReadyCmd *string `json:"ready_cmd,omitempty"`
 	// Vcpu holds the value of the "vcpu" field.
 	Vcpu int64 `json:"vcpu,omitempty"`
 	// RAMMB holds the value of the "ram_mb" field.
@@ -47,6 +49,8 @@ type EnvBuild struct {
 	FirecrackerVersion string `json:"firecracker_version,omitempty"`
 	// EnvdVersion holds the value of the "envd_version" field.
 	EnvdVersion *string `json:"envd_version,omitempty"`
+	// ClusterNodeID holds the value of the "cluster_node_id" field.
+	ClusterNodeID *string `json:"cluster_node_id,omitempty"`
 	// Edges holds the relations/edges for other nodes in the graph.
 	// The values are being populated by the EnvBuildQuery when eager-loading is set.
 	Edges        EnvBuildEdges `json:"edges"`
@@ -82,7 +86,7 @@ func (*EnvBuild) scanValues(columns []string) ([]any, error) {
 		switch columns[i] {
 		case envbuild.FieldVcpu, envbuild.FieldRAMMB, envbuild.FieldFreeDiskSizeMB, envbuild.FieldTotalDiskSizeMB:
 			values[i] = new(sql.NullInt64)
-		case envbuild.FieldEnvID, envbuild.FieldStatus, envbuild.FieldDockerfile, envbuild.FieldStartCmd, envbuild.FieldKernelVersion, envbuild.FieldFirecrackerVersion, envbuild.FieldEnvdVersion:
+		case envbuild.FieldEnvID, envbuild.FieldStatus, envbuild.FieldDockerfile, envbuild.FieldStartCmd, envbuild.FieldReadyCmd, envbuild.FieldKernelVersion, envbuild.FieldFirecrackerVersion, envbuild.FieldEnvdVersion, envbuild.FieldClusterNodeID:
 			values[i] = new(sql.NullString)
 		case envbuild.FieldCreatedAt, envbuild.FieldUpdatedAt, envbuild.FieldFinishedAt:
 			values[i] = new(sql.NullTime)
@@ -155,6 +159,13 @@ func (eb *EnvBuild) assignValues(columns []string, values []any) error {
 				eb.StartCmd = new(string)
 				*eb.StartCmd = value.String
 			}
+		case envbuild.FieldReadyCmd:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field ready_cmd", values[i])
+			} else if value.Valid {
+				eb.ReadyCmd = new(string)
+				*eb.ReadyCmd = value.String
+			}
 		case envbuild.FieldVcpu:
 			if value, ok := values[i].(*sql.NullInt64); !ok {
 				return fmt.Errorf("unexpected type %T for field vcpu", values[i])
@@ -198,6 +209,13 @@ func (eb *EnvBuild) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				eb.EnvdVersion = new(string)
 				*eb.EnvdVersion = value.String
+			}
+		case envbuild.FieldClusterNodeID:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field cluster_node_id", values[i])
+			} else if value.Valid {
+				eb.ClusterNodeID = new(string)
+				*eb.ClusterNodeID = value.String
 			}
 		default:
 			eb.selectValues.Set(columns[i], values[i])
@@ -269,6 +287,11 @@ func (eb *EnvBuild) String() string {
 		builder.WriteString(*v)
 	}
 	builder.WriteString(", ")
+	if v := eb.ReadyCmd; v != nil {
+		builder.WriteString("ready_cmd=")
+		builder.WriteString(*v)
+	}
+	builder.WriteString(", ")
 	builder.WriteString("vcpu=")
 	builder.WriteString(fmt.Sprintf("%v", eb.Vcpu))
 	builder.WriteString(", ")
@@ -291,6 +314,11 @@ func (eb *EnvBuild) String() string {
 	builder.WriteString(", ")
 	if v := eb.EnvdVersion; v != nil {
 		builder.WriteString("envd_version=")
+		builder.WriteString(*v)
+	}
+	builder.WriteString(", ")
+	if v := eb.ClusterNodeID; v != nil {
+		builder.WriteString("cluster_node_id=")
 		builder.WriteString(*v)
 	}
 	builder.WriteByte(')')

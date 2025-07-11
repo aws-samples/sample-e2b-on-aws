@@ -22,6 +22,16 @@ type TeamAPIKey struct {
 	ID uuid.UUID `json:"id,omitempty"`
 	// APIKey holds the value of the "api_key" field.
 	APIKey string `json:"-"`
+	// APIKeyHash holds the value of the "api_key_hash" field.
+	APIKeyHash string `json:"-"`
+	// APIKeyPrefix holds the value of the "api_key_prefix" field.
+	APIKeyPrefix string `json:"api_key_prefix,omitempty"`
+	// APIKeyLength holds the value of the "api_key_length" field.
+	APIKeyLength int `json:"api_key_length,omitempty"`
+	// APIKeyMaskPrefix holds the value of the "api_key_mask_prefix" field.
+	APIKeyMaskPrefix string `json:"api_key_mask_prefix,omitempty"`
+	// APIKeyMaskSuffix holds the value of the "api_key_mask_suffix" field.
+	APIKeyMaskSuffix string `json:"api_key_mask_suffix,omitempty"`
 	// CreatedAt holds the value of the "created_at" field.
 	CreatedAt time.Time `json:"created_at,omitempty"`
 	// UpdatedAt holds the value of the "updated_at" field.
@@ -84,7 +94,9 @@ func (*TeamAPIKey) scanValues(columns []string) ([]any, error) {
 		switch columns[i] {
 		case teamapikey.FieldCreatedBy:
 			values[i] = &sql.NullScanner{S: new(uuid.UUID)}
-		case teamapikey.FieldAPIKey, teamapikey.FieldName:
+		case teamapikey.FieldAPIKeyLength:
+			values[i] = new(sql.NullInt64)
+		case teamapikey.FieldAPIKey, teamapikey.FieldAPIKeyHash, teamapikey.FieldAPIKeyPrefix, teamapikey.FieldAPIKeyMaskPrefix, teamapikey.FieldAPIKeyMaskSuffix, teamapikey.FieldName:
 			values[i] = new(sql.NullString)
 		case teamapikey.FieldCreatedAt, teamapikey.FieldUpdatedAt, teamapikey.FieldLastUsed:
 			values[i] = new(sql.NullTime)
@@ -116,6 +128,36 @@ func (tak *TeamAPIKey) assignValues(columns []string, values []any) error {
 				return fmt.Errorf("unexpected type %T for field api_key", values[i])
 			} else if value.Valid {
 				tak.APIKey = value.String
+			}
+		case teamapikey.FieldAPIKeyHash:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field api_key_hash", values[i])
+			} else if value.Valid {
+				tak.APIKeyHash = value.String
+			}
+		case teamapikey.FieldAPIKeyPrefix:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field api_key_prefix", values[i])
+			} else if value.Valid {
+				tak.APIKeyPrefix = value.String
+			}
+		case teamapikey.FieldAPIKeyLength:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field api_key_length", values[i])
+			} else if value.Valid {
+				tak.APIKeyLength = int(value.Int64)
+			}
+		case teamapikey.FieldAPIKeyMaskPrefix:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field api_key_mask_prefix", values[i])
+			} else if value.Valid {
+				tak.APIKeyMaskPrefix = value.String
+			}
+		case teamapikey.FieldAPIKeyMaskSuffix:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field api_key_mask_suffix", values[i])
+			} else if value.Valid {
+				tak.APIKeyMaskSuffix = value.String
 			}
 		case teamapikey.FieldCreatedAt:
 			if value, ok := values[i].(*sql.NullTime); !ok {
@@ -203,6 +245,20 @@ func (tak *TeamAPIKey) String() string {
 	builder.WriteString("TeamAPIKey(")
 	builder.WriteString(fmt.Sprintf("id=%v, ", tak.ID))
 	builder.WriteString("api_key=<sensitive>")
+	builder.WriteString(", ")
+	builder.WriteString("api_key_hash=<sensitive>")
+	builder.WriteString(", ")
+	builder.WriteString("api_key_prefix=")
+	builder.WriteString(tak.APIKeyPrefix)
+	builder.WriteString(", ")
+	builder.WriteString("api_key_length=")
+	builder.WriteString(fmt.Sprintf("%v", tak.APIKeyLength))
+	builder.WriteString(", ")
+	builder.WriteString("api_key_mask_prefix=")
+	builder.WriteString(tak.APIKeyMaskPrefix)
+	builder.WriteString(", ")
+	builder.WriteString("api_key_mask_suffix=")
+	builder.WriteString(tak.APIKeyMaskSuffix)
 	builder.WriteString(", ")
 	builder.WriteString("created_at=")
 	builder.WriteString(tak.CreatedAt.Format(time.ANSIC))

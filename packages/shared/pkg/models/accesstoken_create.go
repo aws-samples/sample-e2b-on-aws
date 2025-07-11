@@ -25,6 +25,56 @@ type AccessTokenCreate struct {
 	conflict []sql.ConflictOption
 }
 
+// SetAccessToken sets the "access_token" field.
+func (atc *AccessTokenCreate) SetAccessToken(s string) *AccessTokenCreate {
+	atc.mutation.SetAccessToken(s)
+	return atc
+}
+
+// SetAccessTokenHash sets the "access_token_hash" field.
+func (atc *AccessTokenCreate) SetAccessTokenHash(s string) *AccessTokenCreate {
+	atc.mutation.SetAccessTokenHash(s)
+	return atc
+}
+
+// SetAccessTokenPrefix sets the "access_token_prefix" field.
+func (atc *AccessTokenCreate) SetAccessTokenPrefix(s string) *AccessTokenCreate {
+	atc.mutation.SetAccessTokenPrefix(s)
+	return atc
+}
+
+// SetAccessTokenLength sets the "access_token_length" field.
+func (atc *AccessTokenCreate) SetAccessTokenLength(i int) *AccessTokenCreate {
+	atc.mutation.SetAccessTokenLength(i)
+	return atc
+}
+
+// SetAccessTokenMaskPrefix sets the "access_token_mask_prefix" field.
+func (atc *AccessTokenCreate) SetAccessTokenMaskPrefix(s string) *AccessTokenCreate {
+	atc.mutation.SetAccessTokenMaskPrefix(s)
+	return atc
+}
+
+// SetAccessTokenMaskSuffix sets the "access_token_mask_suffix" field.
+func (atc *AccessTokenCreate) SetAccessTokenMaskSuffix(s string) *AccessTokenCreate {
+	atc.mutation.SetAccessTokenMaskSuffix(s)
+	return atc
+}
+
+// SetName sets the "name" field.
+func (atc *AccessTokenCreate) SetName(s string) *AccessTokenCreate {
+	atc.mutation.SetName(s)
+	return atc
+}
+
+// SetNillableName sets the "name" field if the given value is not nil.
+func (atc *AccessTokenCreate) SetNillableName(s *string) *AccessTokenCreate {
+	if s != nil {
+		atc.SetName(*s)
+	}
+	return atc
+}
+
 // SetUserID sets the "user_id" field.
 func (atc *AccessTokenCreate) SetUserID(u uuid.UUID) *AccessTokenCreate {
 	atc.mutation.SetUserID(u)
@@ -46,8 +96,8 @@ func (atc *AccessTokenCreate) SetNillableCreatedAt(t *time.Time) *AccessTokenCre
 }
 
 // SetID sets the "id" field.
-func (atc *AccessTokenCreate) SetID(s string) *AccessTokenCreate {
-	atc.mutation.SetID(s)
+func (atc *AccessTokenCreate) SetID(u uuid.UUID) *AccessTokenCreate {
+	atc.mutation.SetID(u)
 	return atc
 }
 
@@ -63,6 +113,7 @@ func (atc *AccessTokenCreate) Mutation() *AccessTokenMutation {
 
 // Save creates the AccessToken in the database.
 func (atc *AccessTokenCreate) Save(ctx context.Context) (*AccessToken, error) {
+	atc.defaults()
 	return withHooks(ctx, atc.sqlSave, atc.mutation, atc.hooks)
 }
 
@@ -88,8 +139,37 @@ func (atc *AccessTokenCreate) ExecX(ctx context.Context) {
 	}
 }
 
+// defaults sets the default values of the builder before save.
+func (atc *AccessTokenCreate) defaults() {
+	if _, ok := atc.mutation.Name(); !ok {
+		v := accesstoken.DefaultName
+		atc.mutation.SetName(v)
+	}
+}
+
 // check runs all checks and user-defined validators on the builder.
 func (atc *AccessTokenCreate) check() error {
+	if _, ok := atc.mutation.AccessToken(); !ok {
+		return &ValidationError{Name: "access_token", err: errors.New(`models: missing required field "AccessToken.access_token"`)}
+	}
+	if _, ok := atc.mutation.AccessTokenHash(); !ok {
+		return &ValidationError{Name: "access_token_hash", err: errors.New(`models: missing required field "AccessToken.access_token_hash"`)}
+	}
+	if _, ok := atc.mutation.AccessTokenPrefix(); !ok {
+		return &ValidationError{Name: "access_token_prefix", err: errors.New(`models: missing required field "AccessToken.access_token_prefix"`)}
+	}
+	if _, ok := atc.mutation.AccessTokenLength(); !ok {
+		return &ValidationError{Name: "access_token_length", err: errors.New(`models: missing required field "AccessToken.access_token_length"`)}
+	}
+	if _, ok := atc.mutation.AccessTokenMaskPrefix(); !ok {
+		return &ValidationError{Name: "access_token_mask_prefix", err: errors.New(`models: missing required field "AccessToken.access_token_mask_prefix"`)}
+	}
+	if _, ok := atc.mutation.AccessTokenMaskSuffix(); !ok {
+		return &ValidationError{Name: "access_token_mask_suffix", err: errors.New(`models: missing required field "AccessToken.access_token_mask_suffix"`)}
+	}
+	if _, ok := atc.mutation.Name(); !ok {
+		return &ValidationError{Name: "name", err: errors.New(`models: missing required field "AccessToken.name"`)}
+	}
 	if _, ok := atc.mutation.UserID(); !ok {
 		return &ValidationError{Name: "user_id", err: errors.New(`models: missing required field "AccessToken.user_id"`)}
 	}
@@ -111,10 +191,10 @@ func (atc *AccessTokenCreate) sqlSave(ctx context.Context) (*AccessToken, error)
 		return nil, err
 	}
 	if _spec.ID.Value != nil {
-		if id, ok := _spec.ID.Value.(string); ok {
-			_node.ID = id
-		} else {
-			return nil, fmt.Errorf("unexpected AccessToken.ID type: %T", _spec.ID.Value)
+		if id, ok := _spec.ID.Value.(*uuid.UUID); ok {
+			_node.ID = *id
+		} else if err := _node.ID.Scan(_spec.ID.Value); err != nil {
+			return nil, err
 		}
 	}
 	atc.mutation.id = &_node.ID
@@ -125,13 +205,41 @@ func (atc *AccessTokenCreate) sqlSave(ctx context.Context) (*AccessToken, error)
 func (atc *AccessTokenCreate) createSpec() (*AccessToken, *sqlgraph.CreateSpec) {
 	var (
 		_node = &AccessToken{config: atc.config}
-		_spec = sqlgraph.NewCreateSpec(accesstoken.Table, sqlgraph.NewFieldSpec(accesstoken.FieldID, field.TypeString))
+		_spec = sqlgraph.NewCreateSpec(accesstoken.Table, sqlgraph.NewFieldSpec(accesstoken.FieldID, field.TypeUUID))
 	)
 	_spec.Schema = atc.schemaConfig.AccessToken
 	_spec.OnConflict = atc.conflict
 	if id, ok := atc.mutation.ID(); ok {
 		_node.ID = id
-		_spec.ID.Value = id
+		_spec.ID.Value = &id
+	}
+	if value, ok := atc.mutation.AccessToken(); ok {
+		_spec.SetField(accesstoken.FieldAccessToken, field.TypeString, value)
+		_node.AccessToken = value
+	}
+	if value, ok := atc.mutation.AccessTokenHash(); ok {
+		_spec.SetField(accesstoken.FieldAccessTokenHash, field.TypeString, value)
+		_node.AccessTokenHash = value
+	}
+	if value, ok := atc.mutation.AccessTokenPrefix(); ok {
+		_spec.SetField(accesstoken.FieldAccessTokenPrefix, field.TypeString, value)
+		_node.AccessTokenPrefix = value
+	}
+	if value, ok := atc.mutation.AccessTokenLength(); ok {
+		_spec.SetField(accesstoken.FieldAccessTokenLength, field.TypeInt, value)
+		_node.AccessTokenLength = value
+	}
+	if value, ok := atc.mutation.AccessTokenMaskPrefix(); ok {
+		_spec.SetField(accesstoken.FieldAccessTokenMaskPrefix, field.TypeString, value)
+		_node.AccessTokenMaskPrefix = value
+	}
+	if value, ok := atc.mutation.AccessTokenMaskSuffix(); ok {
+		_spec.SetField(accesstoken.FieldAccessTokenMaskSuffix, field.TypeString, value)
+		_node.AccessTokenMaskSuffix = value
+	}
+	if value, ok := atc.mutation.Name(); ok {
+		_spec.SetField(accesstoken.FieldName, field.TypeString, value)
+		_node.Name = value
 	}
 	if value, ok := atc.mutation.CreatedAt(); ok {
 		_spec.SetField(accesstoken.FieldCreatedAt, field.TypeTime, value)
@@ -162,7 +270,7 @@ func (atc *AccessTokenCreate) createSpec() (*AccessToken, *sqlgraph.CreateSpec) 
 // of the `INSERT` statement. For example:
 //
 //	client.AccessToken.Create().
-//		SetUserID(v).
+//		SetAccessToken(v).
 //		OnConflict(
 //			// Update the row with the new values
 //			// the was proposed for insertion.
@@ -171,7 +279,7 @@ func (atc *AccessTokenCreate) createSpec() (*AccessToken, *sqlgraph.CreateSpec) 
 //		// Override some of the fields with custom
 //		// update values.
 //		Update(func(u *ent.AccessTokenUpsert) {
-//			SetUserID(v+v).
+//			SetAccessToken(v+v).
 //		}).
 //		Exec(ctx)
 func (atc *AccessTokenCreate) OnConflict(opts ...sql.ConflictOption) *AccessTokenUpsertOne {
@@ -207,6 +315,18 @@ type (
 	}
 )
 
+// SetName sets the "name" field.
+func (u *AccessTokenUpsert) SetName(v string) *AccessTokenUpsert {
+	u.Set(accesstoken.FieldName, v)
+	return u
+}
+
+// UpdateName sets the "name" field to the value that was provided on create.
+func (u *AccessTokenUpsert) UpdateName() *AccessTokenUpsert {
+	u.SetExcluded(accesstoken.FieldName)
+	return u
+}
+
 // SetUserID sets the "user_id" field.
 func (u *AccessTokenUpsert) SetUserID(v uuid.UUID) *AccessTokenUpsert {
 	u.Set(accesstoken.FieldUserID, v)
@@ -235,6 +355,24 @@ func (u *AccessTokenUpsertOne) UpdateNewValues() *AccessTokenUpsertOne {
 	u.create.conflict = append(u.create.conflict, sql.ResolveWith(func(s *sql.UpdateSet) {
 		if _, exists := u.create.mutation.ID(); exists {
 			s.SetIgnore(accesstoken.FieldID)
+		}
+		if _, exists := u.create.mutation.AccessToken(); exists {
+			s.SetIgnore(accesstoken.FieldAccessToken)
+		}
+		if _, exists := u.create.mutation.AccessTokenHash(); exists {
+			s.SetIgnore(accesstoken.FieldAccessTokenHash)
+		}
+		if _, exists := u.create.mutation.AccessTokenPrefix(); exists {
+			s.SetIgnore(accesstoken.FieldAccessTokenPrefix)
+		}
+		if _, exists := u.create.mutation.AccessTokenLength(); exists {
+			s.SetIgnore(accesstoken.FieldAccessTokenLength)
+		}
+		if _, exists := u.create.mutation.AccessTokenMaskPrefix(); exists {
+			s.SetIgnore(accesstoken.FieldAccessTokenMaskPrefix)
+		}
+		if _, exists := u.create.mutation.AccessTokenMaskSuffix(); exists {
+			s.SetIgnore(accesstoken.FieldAccessTokenMaskSuffix)
 		}
 		if _, exists := u.create.mutation.CreatedAt(); exists {
 			s.SetIgnore(accesstoken.FieldCreatedAt)
@@ -270,6 +408,20 @@ func (u *AccessTokenUpsertOne) Update(set func(*AccessTokenUpsert)) *AccessToken
 	return u
 }
 
+// SetName sets the "name" field.
+func (u *AccessTokenUpsertOne) SetName(v string) *AccessTokenUpsertOne {
+	return u.Update(func(s *AccessTokenUpsert) {
+		s.SetName(v)
+	})
+}
+
+// UpdateName sets the "name" field to the value that was provided on create.
+func (u *AccessTokenUpsertOne) UpdateName() *AccessTokenUpsertOne {
+	return u.Update(func(s *AccessTokenUpsert) {
+		s.UpdateName()
+	})
+}
+
 // SetUserID sets the "user_id" field.
 func (u *AccessTokenUpsertOne) SetUserID(v uuid.UUID) *AccessTokenUpsertOne {
 	return u.Update(func(s *AccessTokenUpsert) {
@@ -300,7 +452,7 @@ func (u *AccessTokenUpsertOne) ExecX(ctx context.Context) {
 }
 
 // Exec executes the UPSERT query and returns the inserted/updated ID.
-func (u *AccessTokenUpsertOne) ID(ctx context.Context) (id string, err error) {
+func (u *AccessTokenUpsertOne) ID(ctx context.Context) (id uuid.UUID, err error) {
 	if u.create.driver.Dialect() == dialect.MySQL {
 		// In case of "ON CONFLICT", there is no way to get back non-numeric ID
 		// fields from the database since MySQL does not support the RETURNING clause.
@@ -314,7 +466,7 @@ func (u *AccessTokenUpsertOne) ID(ctx context.Context) (id string, err error) {
 }
 
 // IDX is like ID, but panics if an error occurs.
-func (u *AccessTokenUpsertOne) IDX(ctx context.Context) string {
+func (u *AccessTokenUpsertOne) IDX(ctx context.Context) uuid.UUID {
 	id, err := u.ID(ctx)
 	if err != nil {
 		panic(err)
@@ -341,6 +493,7 @@ func (atcb *AccessTokenCreateBulk) Save(ctx context.Context) ([]*AccessToken, er
 	for i := range atcb.builders {
 		func(i int, root context.Context) {
 			builder := atcb.builders[i]
+			builder.defaults()
 			var mut Mutator = MutateFunc(func(ctx context.Context, m Mutation) (Value, error) {
 				mutation, ok := m.(*AccessTokenMutation)
 				if !ok {
@@ -419,7 +572,7 @@ func (atcb *AccessTokenCreateBulk) ExecX(ctx context.Context) {
 //		// Override some of the fields with custom
 //		// update values.
 //		Update(func(u *ent.AccessTokenUpsert) {
-//			SetUserID(v+v).
+//			SetAccessToken(v+v).
 //		}).
 //		Exec(ctx)
 func (atcb *AccessTokenCreateBulk) OnConflict(opts ...sql.ConflictOption) *AccessTokenUpsertBulk {
@@ -466,6 +619,24 @@ func (u *AccessTokenUpsertBulk) UpdateNewValues() *AccessTokenUpsertBulk {
 			if _, exists := b.mutation.ID(); exists {
 				s.SetIgnore(accesstoken.FieldID)
 			}
+			if _, exists := b.mutation.AccessToken(); exists {
+				s.SetIgnore(accesstoken.FieldAccessToken)
+			}
+			if _, exists := b.mutation.AccessTokenHash(); exists {
+				s.SetIgnore(accesstoken.FieldAccessTokenHash)
+			}
+			if _, exists := b.mutation.AccessTokenPrefix(); exists {
+				s.SetIgnore(accesstoken.FieldAccessTokenPrefix)
+			}
+			if _, exists := b.mutation.AccessTokenLength(); exists {
+				s.SetIgnore(accesstoken.FieldAccessTokenLength)
+			}
+			if _, exists := b.mutation.AccessTokenMaskPrefix(); exists {
+				s.SetIgnore(accesstoken.FieldAccessTokenMaskPrefix)
+			}
+			if _, exists := b.mutation.AccessTokenMaskSuffix(); exists {
+				s.SetIgnore(accesstoken.FieldAccessTokenMaskSuffix)
+			}
 			if _, exists := b.mutation.CreatedAt(); exists {
 				s.SetIgnore(accesstoken.FieldCreatedAt)
 			}
@@ -499,6 +670,20 @@ func (u *AccessTokenUpsertBulk) Update(set func(*AccessTokenUpsert)) *AccessToke
 		set(&AccessTokenUpsert{UpdateSet: update})
 	}))
 	return u
+}
+
+// SetName sets the "name" field.
+func (u *AccessTokenUpsertBulk) SetName(v string) *AccessTokenUpsertBulk {
+	return u.Update(func(s *AccessTokenUpsert) {
+		s.SetName(v)
+	})
+}
+
+// UpdateName sets the "name" field to the value that was provided on create.
+func (u *AccessTokenUpsertBulk) UpdateName() *AccessTokenUpsertBulk {
+	return u.Update(func(s *AccessTokenUpsert) {
+		s.UpdateName()
+	})
 }
 
 // SetUserID sets the "user_id" field.
