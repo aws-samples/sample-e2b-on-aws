@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/e2b-dev/infra/packages/shared/pkg/storage/s3"
+	"github.com/e2b-dev/infra/packages/shared/pkg/storage"
 )
 
 type storageFile struct {
@@ -15,8 +15,8 @@ type storageFile struct {
 
 func newStorageFile(
 	ctx context.Context,
-	bucket *s3.BucketHandle,
-	bucketObjectPath string,
+	persistence storage.StorageProvider,
+	objectPath string,
 	path string,
 ) (*storageFile, error) {
 	f, err := os.Create(path)
@@ -26,13 +26,15 @@ func newStorageFile(
 
 	defer f.Close()
 
-	object := s3.NewObject(ctx, bucket, bucketObjectPath)
+	object, err := persistence.OpenObject(ctx, objectPath)
+	if err != nil {
+		return nil, err
+	}
 
 	_, err = object.WriteTo(f)
 	if err != nil {
 		cleanupErr := os.Remove(path)
-
-		return nil, fmt.Errorf("failed to write to file: %w", errors.Join(err, cleanupErr))
+		return nil, fmt.Errorf("NEW STORAGE failed to write to file: %w", errors.Join(err, cleanupErr))
 	}
 
 	return &storageFile{
@@ -45,5 +47,5 @@ func (f *storageFile) Path() string {
 }
 
 func (f *storageFile) Close() error {
-	return os.Remove(f.path)
+	return os.RemoveAll(f.path)
 }

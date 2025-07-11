@@ -11,15 +11,27 @@ const (
 	// Label holds the string label denoting the accesstoken type in the database.
 	Label = "access_token"
 	// FieldID holds the string denoting the id field in the database.
-	FieldID = "access_token"
+	FieldID = "id"
+	// FieldAccessToken holds the string denoting the access_token field in the database.
+	FieldAccessToken = "access_token"
+	// FieldAccessTokenHash holds the string denoting the access_token_hash field in the database.
+	FieldAccessTokenHash = "access_token_hash"
+	// FieldAccessTokenPrefix holds the string denoting the access_token_prefix field in the database.
+	FieldAccessTokenPrefix = "access_token_prefix"
+	// FieldAccessTokenLength holds the string denoting the access_token_length field in the database.
+	FieldAccessTokenLength = "access_token_length"
+	// FieldAccessTokenMaskPrefix holds the string denoting the access_token_mask_prefix field in the database.
+	FieldAccessTokenMaskPrefix = "access_token_mask_prefix"
+	// FieldAccessTokenMaskSuffix holds the string denoting the access_token_mask_suffix field in the database.
+	FieldAccessTokenMaskSuffix = "access_token_mask_suffix"
+	// FieldName holds the string denoting the name field in the database.
+	FieldName = "name"
 	// FieldUserID holds the string denoting the user_id field in the database.
 	FieldUserID = "user_id"
 	// FieldCreatedAt holds the string denoting the created_at field in the database.
 	FieldCreatedAt = "created_at"
 	// EdgeUser holds the string denoting the user edge name in mutations.
 	EdgeUser = "user"
-	// UserFieldID holds the string denoting the ID field of the User.
-	UserFieldID = "id"
 	// Table holds the table name of the accesstoken in the database.
 	Table = "access_tokens"
 	// UserTable is the table that holds the user relation/edge.
@@ -34,6 +46,13 @@ const (
 // Columns holds all SQL columns for accesstoken fields.
 var Columns = []string{
 	FieldID,
+	FieldAccessToken,
+	FieldAccessTokenHash,
+	FieldAccessTokenPrefix,
+	FieldAccessTokenLength,
+	FieldAccessTokenMaskPrefix,
+	FieldAccessTokenMaskSuffix,
+	FieldName,
 	FieldUserID,
 	FieldCreatedAt,
 }
@@ -48,12 +67,52 @@ func ValidColumn(column string) bool {
 	return false
 }
 
+var (
+	// DefaultName holds the default value on creation for the "name" field.
+	DefaultName string
+)
+
 // OrderOption defines the ordering options for the AccessToken queries.
 type OrderOption func(*sql.Selector)
 
 // ByID orders the results by the id field.
 func ByID(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldID, opts...).ToFunc()
+}
+
+// ByAccessToken orders the results by the access_token field.
+func ByAccessToken(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldAccessToken, opts...).ToFunc()
+}
+
+// ByAccessTokenHash orders the results by the access_token_hash field.
+func ByAccessTokenHash(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldAccessTokenHash, opts...).ToFunc()
+}
+
+// ByAccessTokenPrefix orders the results by the access_token_prefix field.
+func ByAccessTokenPrefix(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldAccessTokenPrefix, opts...).ToFunc()
+}
+
+// ByAccessTokenLength orders the results by the access_token_length field.
+func ByAccessTokenLength(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldAccessTokenLength, opts...).ToFunc()
+}
+
+// ByAccessTokenMaskPrefix orders the results by the access_token_mask_prefix field.
+func ByAccessTokenMaskPrefix(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldAccessTokenMaskPrefix, opts...).ToFunc()
+}
+
+// ByAccessTokenMaskSuffix orders the results by the access_token_mask_suffix field.
+func ByAccessTokenMaskSuffix(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldAccessTokenMaskSuffix, opts...).ToFunc()
+}
+
+// ByName orders the results by the name field.
+func ByName(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldName, opts...).ToFunc()
 }
 
 // ByUserID orders the results by the user_id field.
@@ -75,7 +134,7 @@ func ByUserField(field string, opts ...sql.OrderTermOption) OrderOption {
 func newUserStep() *sqlgraph.Step {
 	return sqlgraph.NewStep(
 		sqlgraph.From(Table, FieldID),
-		sqlgraph.To(UserInverseTable, UserFieldID),
+		sqlgraph.To(UserInverseTable, FieldID),
 		sqlgraph.Edge(sqlgraph.M2O, true, UserTable, UserColumn),
 	)
 }
