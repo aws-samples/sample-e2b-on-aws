@@ -12,6 +12,7 @@ import (
 	"entgo.io/ent"
 	"entgo.io/ent/dialect/sql"
 	"github.com/e2b-dev/infra/packages/shared/pkg/models/accesstoken"
+	"github.com/e2b-dev/infra/packages/shared/pkg/models/cluster"
 	"github.com/e2b-dev/infra/packages/shared/pkg/models/env"
 	"github.com/e2b-dev/infra/packages/shared/pkg/models/envalias"
 	"github.com/e2b-dev/infra/packages/shared/pkg/models/envbuild"
@@ -35,6 +36,7 @@ const (
 
 	// Node types.
 	TypeAccessToken = "AccessToken"
+	TypeCluster     = "Cluster"
 	TypeEnv         = "Env"
 	TypeEnvAlias    = "EnvAlias"
 	TypeEnvBuild    = "EnvBuild"
@@ -49,16 +51,24 @@ const (
 // AccessTokenMutation represents an operation that mutates the AccessToken nodes in the graph.
 type AccessTokenMutation struct {
 	config
-	op            Op
-	typ           string
-	id            *string
-	created_at    *time.Time
-	clearedFields map[string]struct{}
-	user          *uuid.UUID
-	cleareduser   bool
-	done          bool
-	oldValue      func(context.Context) (*AccessToken, error)
-	predicates    []predicate.AccessToken
+	op                       Op
+	typ                      string
+	id                       *uuid.UUID
+	access_token             *string
+	access_token_hash        *string
+	access_token_prefix      *string
+	access_token_length      *int
+	addaccess_token_length   *int
+	access_token_mask_prefix *string
+	access_token_mask_suffix *string
+	name                     *string
+	created_at               *time.Time
+	clearedFields            map[string]struct{}
+	user                     *uuid.UUID
+	cleareduser              bool
+	done                     bool
+	oldValue                 func(context.Context) (*AccessToken, error)
+	predicates               []predicate.AccessToken
 }
 
 var _ ent.Mutation = (*AccessTokenMutation)(nil)
@@ -81,7 +91,7 @@ func newAccessTokenMutation(c config, op Op, opts ...accesstokenOption) *AccessT
 }
 
 // withAccessTokenID sets the ID field of the mutation.
-func withAccessTokenID(id string) accesstokenOption {
+func withAccessTokenID(id uuid.UUID) accesstokenOption {
 	return func(m *AccessTokenMutation) {
 		var (
 			err   error
@@ -133,13 +143,13 @@ func (m AccessTokenMutation) Tx() (*Tx, error) {
 
 // SetID sets the value of the id field. Note that this
 // operation is only accepted on creation of AccessToken entities.
-func (m *AccessTokenMutation) SetID(id string) {
+func (m *AccessTokenMutation) SetID(id uuid.UUID) {
 	m.id = &id
 }
 
 // ID returns the ID value in the mutation. Note that the ID is only available
 // if it was provided to the builder or after it was returned from the database.
-func (m *AccessTokenMutation) ID() (id string, exists bool) {
+func (m *AccessTokenMutation) ID() (id uuid.UUID, exists bool) {
 	if m.id == nil {
 		return
 	}
@@ -150,12 +160,12 @@ func (m *AccessTokenMutation) ID() (id string, exists bool) {
 // That means, if the mutation is applied within a transaction with an isolation level such
 // as sql.LevelSerializable, the returned ids match the ids of the rows that will be updated
 // or updated by the mutation.
-func (m *AccessTokenMutation) IDs(ctx context.Context) ([]string, error) {
+func (m *AccessTokenMutation) IDs(ctx context.Context) ([]uuid.UUID, error) {
 	switch {
 	case m.op.Is(OpUpdateOne | OpDeleteOne):
 		id, exists := m.ID()
 		if exists {
-			return []string{id}, nil
+			return []uuid.UUID{id}, nil
 		}
 		fallthrough
 	case m.op.Is(OpUpdate | OpDelete):
@@ -163,6 +173,278 @@ func (m *AccessTokenMutation) IDs(ctx context.Context) ([]string, error) {
 	default:
 		return nil, fmt.Errorf("IDs is not allowed on %s operations", m.op)
 	}
+}
+
+// SetAccessToken sets the "access_token" field.
+func (m *AccessTokenMutation) SetAccessToken(s string) {
+	m.access_token = &s
+}
+
+// AccessToken returns the value of the "access_token" field in the mutation.
+func (m *AccessTokenMutation) AccessToken() (r string, exists bool) {
+	v := m.access_token
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldAccessToken returns the old "access_token" field's value of the AccessToken entity.
+// If the AccessToken object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *AccessTokenMutation) OldAccessToken(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldAccessToken is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldAccessToken requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldAccessToken: %w", err)
+	}
+	return oldValue.AccessToken, nil
+}
+
+// ResetAccessToken resets all changes to the "access_token" field.
+func (m *AccessTokenMutation) ResetAccessToken() {
+	m.access_token = nil
+}
+
+// SetAccessTokenHash sets the "access_token_hash" field.
+func (m *AccessTokenMutation) SetAccessTokenHash(s string) {
+	m.access_token_hash = &s
+}
+
+// AccessTokenHash returns the value of the "access_token_hash" field in the mutation.
+func (m *AccessTokenMutation) AccessTokenHash() (r string, exists bool) {
+	v := m.access_token_hash
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldAccessTokenHash returns the old "access_token_hash" field's value of the AccessToken entity.
+// If the AccessToken object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *AccessTokenMutation) OldAccessTokenHash(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldAccessTokenHash is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldAccessTokenHash requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldAccessTokenHash: %w", err)
+	}
+	return oldValue.AccessTokenHash, nil
+}
+
+// ResetAccessTokenHash resets all changes to the "access_token_hash" field.
+func (m *AccessTokenMutation) ResetAccessTokenHash() {
+	m.access_token_hash = nil
+}
+
+// SetAccessTokenPrefix sets the "access_token_prefix" field.
+func (m *AccessTokenMutation) SetAccessTokenPrefix(s string) {
+	m.access_token_prefix = &s
+}
+
+// AccessTokenPrefix returns the value of the "access_token_prefix" field in the mutation.
+func (m *AccessTokenMutation) AccessTokenPrefix() (r string, exists bool) {
+	v := m.access_token_prefix
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldAccessTokenPrefix returns the old "access_token_prefix" field's value of the AccessToken entity.
+// If the AccessToken object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *AccessTokenMutation) OldAccessTokenPrefix(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldAccessTokenPrefix is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldAccessTokenPrefix requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldAccessTokenPrefix: %w", err)
+	}
+	return oldValue.AccessTokenPrefix, nil
+}
+
+// ResetAccessTokenPrefix resets all changes to the "access_token_prefix" field.
+func (m *AccessTokenMutation) ResetAccessTokenPrefix() {
+	m.access_token_prefix = nil
+}
+
+// SetAccessTokenLength sets the "access_token_length" field.
+func (m *AccessTokenMutation) SetAccessTokenLength(i int) {
+	m.access_token_length = &i
+	m.addaccess_token_length = nil
+}
+
+// AccessTokenLength returns the value of the "access_token_length" field in the mutation.
+func (m *AccessTokenMutation) AccessTokenLength() (r int, exists bool) {
+	v := m.access_token_length
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldAccessTokenLength returns the old "access_token_length" field's value of the AccessToken entity.
+// If the AccessToken object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *AccessTokenMutation) OldAccessTokenLength(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldAccessTokenLength is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldAccessTokenLength requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldAccessTokenLength: %w", err)
+	}
+	return oldValue.AccessTokenLength, nil
+}
+
+// AddAccessTokenLength adds i to the "access_token_length" field.
+func (m *AccessTokenMutation) AddAccessTokenLength(i int) {
+	if m.addaccess_token_length != nil {
+		*m.addaccess_token_length += i
+	} else {
+		m.addaccess_token_length = &i
+	}
+}
+
+// AddedAccessTokenLength returns the value that was added to the "access_token_length" field in this mutation.
+func (m *AccessTokenMutation) AddedAccessTokenLength() (r int, exists bool) {
+	v := m.addaccess_token_length
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetAccessTokenLength resets all changes to the "access_token_length" field.
+func (m *AccessTokenMutation) ResetAccessTokenLength() {
+	m.access_token_length = nil
+	m.addaccess_token_length = nil
+}
+
+// SetAccessTokenMaskPrefix sets the "access_token_mask_prefix" field.
+func (m *AccessTokenMutation) SetAccessTokenMaskPrefix(s string) {
+	m.access_token_mask_prefix = &s
+}
+
+// AccessTokenMaskPrefix returns the value of the "access_token_mask_prefix" field in the mutation.
+func (m *AccessTokenMutation) AccessTokenMaskPrefix() (r string, exists bool) {
+	v := m.access_token_mask_prefix
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldAccessTokenMaskPrefix returns the old "access_token_mask_prefix" field's value of the AccessToken entity.
+// If the AccessToken object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *AccessTokenMutation) OldAccessTokenMaskPrefix(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldAccessTokenMaskPrefix is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldAccessTokenMaskPrefix requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldAccessTokenMaskPrefix: %w", err)
+	}
+	return oldValue.AccessTokenMaskPrefix, nil
+}
+
+// ResetAccessTokenMaskPrefix resets all changes to the "access_token_mask_prefix" field.
+func (m *AccessTokenMutation) ResetAccessTokenMaskPrefix() {
+	m.access_token_mask_prefix = nil
+}
+
+// SetAccessTokenMaskSuffix sets the "access_token_mask_suffix" field.
+func (m *AccessTokenMutation) SetAccessTokenMaskSuffix(s string) {
+	m.access_token_mask_suffix = &s
+}
+
+// AccessTokenMaskSuffix returns the value of the "access_token_mask_suffix" field in the mutation.
+func (m *AccessTokenMutation) AccessTokenMaskSuffix() (r string, exists bool) {
+	v := m.access_token_mask_suffix
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldAccessTokenMaskSuffix returns the old "access_token_mask_suffix" field's value of the AccessToken entity.
+// If the AccessToken object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *AccessTokenMutation) OldAccessTokenMaskSuffix(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldAccessTokenMaskSuffix is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldAccessTokenMaskSuffix requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldAccessTokenMaskSuffix: %w", err)
+	}
+	return oldValue.AccessTokenMaskSuffix, nil
+}
+
+// ResetAccessTokenMaskSuffix resets all changes to the "access_token_mask_suffix" field.
+func (m *AccessTokenMutation) ResetAccessTokenMaskSuffix() {
+	m.access_token_mask_suffix = nil
+}
+
+// SetName sets the "name" field.
+func (m *AccessTokenMutation) SetName(s string) {
+	m.name = &s
+}
+
+// Name returns the value of the "name" field in the mutation.
+func (m *AccessTokenMutation) Name() (r string, exists bool) {
+	v := m.name
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldName returns the old "name" field's value of the AccessToken entity.
+// If the AccessToken object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *AccessTokenMutation) OldName(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldName is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldName requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldName: %w", err)
+	}
+	return oldValue.Name, nil
+}
+
+// ResetName resets all changes to the "name" field.
+func (m *AccessTokenMutation) ResetName() {
+	m.name = nil
 }
 
 // SetUserID sets the "user_id" field.
@@ -311,7 +593,28 @@ func (m *AccessTokenMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *AccessTokenMutation) Fields() []string {
-	fields := make([]string, 0, 2)
+	fields := make([]string, 0, 9)
+	if m.access_token != nil {
+		fields = append(fields, accesstoken.FieldAccessToken)
+	}
+	if m.access_token_hash != nil {
+		fields = append(fields, accesstoken.FieldAccessTokenHash)
+	}
+	if m.access_token_prefix != nil {
+		fields = append(fields, accesstoken.FieldAccessTokenPrefix)
+	}
+	if m.access_token_length != nil {
+		fields = append(fields, accesstoken.FieldAccessTokenLength)
+	}
+	if m.access_token_mask_prefix != nil {
+		fields = append(fields, accesstoken.FieldAccessTokenMaskPrefix)
+	}
+	if m.access_token_mask_suffix != nil {
+		fields = append(fields, accesstoken.FieldAccessTokenMaskSuffix)
+	}
+	if m.name != nil {
+		fields = append(fields, accesstoken.FieldName)
+	}
 	if m.user != nil {
 		fields = append(fields, accesstoken.FieldUserID)
 	}
@@ -326,6 +629,20 @@ func (m *AccessTokenMutation) Fields() []string {
 // schema.
 func (m *AccessTokenMutation) Field(name string) (ent.Value, bool) {
 	switch name {
+	case accesstoken.FieldAccessToken:
+		return m.AccessToken()
+	case accesstoken.FieldAccessTokenHash:
+		return m.AccessTokenHash()
+	case accesstoken.FieldAccessTokenPrefix:
+		return m.AccessTokenPrefix()
+	case accesstoken.FieldAccessTokenLength:
+		return m.AccessTokenLength()
+	case accesstoken.FieldAccessTokenMaskPrefix:
+		return m.AccessTokenMaskPrefix()
+	case accesstoken.FieldAccessTokenMaskSuffix:
+		return m.AccessTokenMaskSuffix()
+	case accesstoken.FieldName:
+		return m.Name()
 	case accesstoken.FieldUserID:
 		return m.UserID()
 	case accesstoken.FieldCreatedAt:
@@ -339,6 +656,20 @@ func (m *AccessTokenMutation) Field(name string) (ent.Value, bool) {
 // database failed.
 func (m *AccessTokenMutation) OldField(ctx context.Context, name string) (ent.Value, error) {
 	switch name {
+	case accesstoken.FieldAccessToken:
+		return m.OldAccessToken(ctx)
+	case accesstoken.FieldAccessTokenHash:
+		return m.OldAccessTokenHash(ctx)
+	case accesstoken.FieldAccessTokenPrefix:
+		return m.OldAccessTokenPrefix(ctx)
+	case accesstoken.FieldAccessTokenLength:
+		return m.OldAccessTokenLength(ctx)
+	case accesstoken.FieldAccessTokenMaskPrefix:
+		return m.OldAccessTokenMaskPrefix(ctx)
+	case accesstoken.FieldAccessTokenMaskSuffix:
+		return m.OldAccessTokenMaskSuffix(ctx)
+	case accesstoken.FieldName:
+		return m.OldName(ctx)
 	case accesstoken.FieldUserID:
 		return m.OldUserID(ctx)
 	case accesstoken.FieldCreatedAt:
@@ -352,6 +683,55 @@ func (m *AccessTokenMutation) OldField(ctx context.Context, name string) (ent.Va
 // type.
 func (m *AccessTokenMutation) SetField(name string, value ent.Value) error {
 	switch name {
+	case accesstoken.FieldAccessToken:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetAccessToken(v)
+		return nil
+	case accesstoken.FieldAccessTokenHash:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetAccessTokenHash(v)
+		return nil
+	case accesstoken.FieldAccessTokenPrefix:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetAccessTokenPrefix(v)
+		return nil
+	case accesstoken.FieldAccessTokenLength:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetAccessTokenLength(v)
+		return nil
+	case accesstoken.FieldAccessTokenMaskPrefix:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetAccessTokenMaskPrefix(v)
+		return nil
+	case accesstoken.FieldAccessTokenMaskSuffix:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetAccessTokenMaskSuffix(v)
+		return nil
+	case accesstoken.FieldName:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetName(v)
+		return nil
 	case accesstoken.FieldUserID:
 		v, ok := value.(uuid.UUID)
 		if !ok {
@@ -373,13 +753,21 @@ func (m *AccessTokenMutation) SetField(name string, value ent.Value) error {
 // AddedFields returns all numeric fields that were incremented/decremented during
 // this mutation.
 func (m *AccessTokenMutation) AddedFields() []string {
-	return nil
+	var fields []string
+	if m.addaccess_token_length != nil {
+		fields = append(fields, accesstoken.FieldAccessTokenLength)
+	}
+	return fields
 }
 
 // AddedField returns the numeric value that was incremented/decremented on a field
 // with the given name. The second boolean return value indicates that this field
 // was not set, or was not defined in the schema.
 func (m *AccessTokenMutation) AddedField(name string) (ent.Value, bool) {
+	switch name {
+	case accesstoken.FieldAccessTokenLength:
+		return m.AddedAccessTokenLength()
+	}
 	return nil, false
 }
 
@@ -388,6 +776,13 @@ func (m *AccessTokenMutation) AddedField(name string) (ent.Value, bool) {
 // type.
 func (m *AccessTokenMutation) AddField(name string, value ent.Value) error {
 	switch name {
+	case accesstoken.FieldAccessTokenLength:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddAccessTokenLength(v)
+		return nil
 	}
 	return fmt.Errorf("unknown AccessToken numeric field %s", name)
 }
@@ -424,6 +819,27 @@ func (m *AccessTokenMutation) ClearField(name string) error {
 // It returns an error if the field is not defined in the schema.
 func (m *AccessTokenMutation) ResetField(name string) error {
 	switch name {
+	case accesstoken.FieldAccessToken:
+		m.ResetAccessToken()
+		return nil
+	case accesstoken.FieldAccessTokenHash:
+		m.ResetAccessTokenHash()
+		return nil
+	case accesstoken.FieldAccessTokenPrefix:
+		m.ResetAccessTokenPrefix()
+		return nil
+	case accesstoken.FieldAccessTokenLength:
+		m.ResetAccessTokenLength()
+		return nil
+	case accesstoken.FieldAccessTokenMaskPrefix:
+		m.ResetAccessTokenMaskPrefix()
+		return nil
+	case accesstoken.FieldAccessTokenMaskSuffix:
+		m.ResetAccessTokenMaskSuffix()
+		return nil
+	case accesstoken.FieldName:
+		m.ResetName()
+		return nil
 	case accesstoken.FieldUserID:
 		m.ResetUserID()
 		return nil
@@ -508,6 +924,446 @@ func (m *AccessTokenMutation) ResetEdge(name string) error {
 	return fmt.Errorf("unknown AccessToken edge %s", name)
 }
 
+// ClusterMutation represents an operation that mutates the Cluster nodes in the graph.
+type ClusterMutation struct {
+	config
+	op            Op
+	typ           string
+	id            *uuid.UUID
+	endpoint      *string
+	endpoint_tls  *bool
+	token         *string
+	clearedFields map[string]struct{}
+	done          bool
+	oldValue      func(context.Context) (*Cluster, error)
+	predicates    []predicate.Cluster
+}
+
+var _ ent.Mutation = (*ClusterMutation)(nil)
+
+// clusterOption allows management of the mutation configuration using functional options.
+type clusterOption func(*ClusterMutation)
+
+// newClusterMutation creates new mutation for the Cluster entity.
+func newClusterMutation(c config, op Op, opts ...clusterOption) *ClusterMutation {
+	m := &ClusterMutation{
+		config:        c,
+		op:            op,
+		typ:           TypeCluster,
+		clearedFields: make(map[string]struct{}),
+	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// withClusterID sets the ID field of the mutation.
+func withClusterID(id uuid.UUID) clusterOption {
+	return func(m *ClusterMutation) {
+		var (
+			err   error
+			once  sync.Once
+			value *Cluster
+		)
+		m.oldValue = func(ctx context.Context) (*Cluster, error) {
+			once.Do(func() {
+				if m.done {
+					err = errors.New("querying old values post mutation is not allowed")
+				} else {
+					value, err = m.Client().Cluster.Get(ctx, id)
+				}
+			})
+			return value, err
+		}
+		m.id = &id
+	}
+}
+
+// withCluster sets the old Cluster of the mutation.
+func withCluster(node *Cluster) clusterOption {
+	return func(m *ClusterMutation) {
+		m.oldValue = func(context.Context) (*Cluster, error) {
+			return node, nil
+		}
+		m.id = &node.ID
+	}
+}
+
+// Client returns a new `ent.Client` from the mutation. If the mutation was
+// executed in a transaction (ent.Tx), a transactional client is returned.
+func (m ClusterMutation) Client() *Client {
+	client := &Client{config: m.config}
+	client.init()
+	return client
+}
+
+// Tx returns an `ent.Tx` for mutations that were executed in transactions;
+// it returns an error otherwise.
+func (m ClusterMutation) Tx() (*Tx, error) {
+	if _, ok := m.driver.(*txDriver); !ok {
+		return nil, errors.New("models: mutation is not running in a transaction")
+	}
+	tx := &Tx{config: m.config}
+	tx.init()
+	return tx, nil
+}
+
+// SetID sets the value of the id field. Note that this
+// operation is only accepted on creation of Cluster entities.
+func (m *ClusterMutation) SetID(id uuid.UUID) {
+	m.id = &id
+}
+
+// ID returns the ID value in the mutation. Note that the ID is only available
+// if it was provided to the builder or after it was returned from the database.
+func (m *ClusterMutation) ID() (id uuid.UUID, exists bool) {
+	if m.id == nil {
+		return
+	}
+	return *m.id, true
+}
+
+// IDs queries the database and returns the entity ids that match the mutation's predicate.
+// That means, if the mutation is applied within a transaction with an isolation level such
+// as sql.LevelSerializable, the returned ids match the ids of the rows that will be updated
+// or updated by the mutation.
+func (m *ClusterMutation) IDs(ctx context.Context) ([]uuid.UUID, error) {
+	switch {
+	case m.op.Is(OpUpdateOne | OpDeleteOne):
+		id, exists := m.ID()
+		if exists {
+			return []uuid.UUID{id}, nil
+		}
+		fallthrough
+	case m.op.Is(OpUpdate | OpDelete):
+		return m.Client().Cluster.Query().Where(m.predicates...).IDs(ctx)
+	default:
+		return nil, fmt.Errorf("IDs is not allowed on %s operations", m.op)
+	}
+}
+
+// SetEndpoint sets the "endpoint" field.
+func (m *ClusterMutation) SetEndpoint(s string) {
+	m.endpoint = &s
+}
+
+// Endpoint returns the value of the "endpoint" field in the mutation.
+func (m *ClusterMutation) Endpoint() (r string, exists bool) {
+	v := m.endpoint
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldEndpoint returns the old "endpoint" field's value of the Cluster entity.
+// If the Cluster object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ClusterMutation) OldEndpoint(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldEndpoint is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldEndpoint requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldEndpoint: %w", err)
+	}
+	return oldValue.Endpoint, nil
+}
+
+// ResetEndpoint resets all changes to the "endpoint" field.
+func (m *ClusterMutation) ResetEndpoint() {
+	m.endpoint = nil
+}
+
+// SetEndpointTLS sets the "endpoint_tls" field.
+func (m *ClusterMutation) SetEndpointTLS(b bool) {
+	m.endpoint_tls = &b
+}
+
+// EndpointTLS returns the value of the "endpoint_tls" field in the mutation.
+func (m *ClusterMutation) EndpointTLS() (r bool, exists bool) {
+	v := m.endpoint_tls
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldEndpointTLS returns the old "endpoint_tls" field's value of the Cluster entity.
+// If the Cluster object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ClusterMutation) OldEndpointTLS(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldEndpointTLS is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldEndpointTLS requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldEndpointTLS: %w", err)
+	}
+	return oldValue.EndpointTLS, nil
+}
+
+// ResetEndpointTLS resets all changes to the "endpoint_tls" field.
+func (m *ClusterMutation) ResetEndpointTLS() {
+	m.endpoint_tls = nil
+}
+
+// SetToken sets the "token" field.
+func (m *ClusterMutation) SetToken(s string) {
+	m.token = &s
+}
+
+// Token returns the value of the "token" field in the mutation.
+func (m *ClusterMutation) Token() (r string, exists bool) {
+	v := m.token
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldToken returns the old "token" field's value of the Cluster entity.
+// If the Cluster object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ClusterMutation) OldToken(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldToken is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldToken requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldToken: %w", err)
+	}
+	return oldValue.Token, nil
+}
+
+// ResetToken resets all changes to the "token" field.
+func (m *ClusterMutation) ResetToken() {
+	m.token = nil
+}
+
+// Where appends a list predicates to the ClusterMutation builder.
+func (m *ClusterMutation) Where(ps ...predicate.Cluster) {
+	m.predicates = append(m.predicates, ps...)
+}
+
+// WhereP appends storage-level predicates to the ClusterMutation builder. Using this method,
+// users can use type-assertion to append predicates that do not depend on any generated package.
+func (m *ClusterMutation) WhereP(ps ...func(*sql.Selector)) {
+	p := make([]predicate.Cluster, len(ps))
+	for i := range ps {
+		p[i] = ps[i]
+	}
+	m.Where(p...)
+}
+
+// Op returns the operation name.
+func (m *ClusterMutation) Op() Op {
+	return m.op
+}
+
+// SetOp allows setting the mutation operation.
+func (m *ClusterMutation) SetOp(op Op) {
+	m.op = op
+}
+
+// Type returns the node type of this mutation (Cluster).
+func (m *ClusterMutation) Type() string {
+	return m.typ
+}
+
+// Fields returns all fields that were changed during this mutation. Note that in
+// order to get all numeric fields that were incremented/decremented, call
+// AddedFields().
+func (m *ClusterMutation) Fields() []string {
+	fields := make([]string, 0, 3)
+	if m.endpoint != nil {
+		fields = append(fields, cluster.FieldEndpoint)
+	}
+	if m.endpoint_tls != nil {
+		fields = append(fields, cluster.FieldEndpointTLS)
+	}
+	if m.token != nil {
+		fields = append(fields, cluster.FieldToken)
+	}
+	return fields
+}
+
+// Field returns the value of a field with the given name. The second boolean
+// return value indicates that this field was not set, or was not defined in the
+// schema.
+func (m *ClusterMutation) Field(name string) (ent.Value, bool) {
+	switch name {
+	case cluster.FieldEndpoint:
+		return m.Endpoint()
+	case cluster.FieldEndpointTLS:
+		return m.EndpointTLS()
+	case cluster.FieldToken:
+		return m.Token()
+	}
+	return nil, false
+}
+
+// OldField returns the old value of the field from the database. An error is
+// returned if the mutation operation is not UpdateOne, or the query to the
+// database failed.
+func (m *ClusterMutation) OldField(ctx context.Context, name string) (ent.Value, error) {
+	switch name {
+	case cluster.FieldEndpoint:
+		return m.OldEndpoint(ctx)
+	case cluster.FieldEndpointTLS:
+		return m.OldEndpointTLS(ctx)
+	case cluster.FieldToken:
+		return m.OldToken(ctx)
+	}
+	return nil, fmt.Errorf("unknown Cluster field %s", name)
+}
+
+// SetField sets the value of a field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *ClusterMutation) SetField(name string, value ent.Value) error {
+	switch name {
+	case cluster.FieldEndpoint:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetEndpoint(v)
+		return nil
+	case cluster.FieldEndpointTLS:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetEndpointTLS(v)
+		return nil
+	case cluster.FieldToken:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetToken(v)
+		return nil
+	}
+	return fmt.Errorf("unknown Cluster field %s", name)
+}
+
+// AddedFields returns all numeric fields that were incremented/decremented during
+// this mutation.
+func (m *ClusterMutation) AddedFields() []string {
+	return nil
+}
+
+// AddedField returns the numeric value that was incremented/decremented on a field
+// with the given name. The second boolean return value indicates that this field
+// was not set, or was not defined in the schema.
+func (m *ClusterMutation) AddedField(name string) (ent.Value, bool) {
+	return nil, false
+}
+
+// AddField adds the value to the field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *ClusterMutation) AddField(name string, value ent.Value) error {
+	switch name {
+	}
+	return fmt.Errorf("unknown Cluster numeric field %s", name)
+}
+
+// ClearedFields returns all nullable fields that were cleared during this
+// mutation.
+func (m *ClusterMutation) ClearedFields() []string {
+	return nil
+}
+
+// FieldCleared returns a boolean indicating if a field with the given name was
+// cleared in this mutation.
+func (m *ClusterMutation) FieldCleared(name string) bool {
+	_, ok := m.clearedFields[name]
+	return ok
+}
+
+// ClearField clears the value of the field with the given name. It returns an
+// error if the field is not defined in the schema.
+func (m *ClusterMutation) ClearField(name string) error {
+	return fmt.Errorf("unknown Cluster nullable field %s", name)
+}
+
+// ResetField resets all changes in the mutation for the field with the given name.
+// It returns an error if the field is not defined in the schema.
+func (m *ClusterMutation) ResetField(name string) error {
+	switch name {
+	case cluster.FieldEndpoint:
+		m.ResetEndpoint()
+		return nil
+	case cluster.FieldEndpointTLS:
+		m.ResetEndpointTLS()
+		return nil
+	case cluster.FieldToken:
+		m.ResetToken()
+		return nil
+	}
+	return fmt.Errorf("unknown Cluster field %s", name)
+}
+
+// AddedEdges returns all edge names that were set/added in this mutation.
+func (m *ClusterMutation) AddedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// AddedIDs returns all IDs (to other nodes) that were added for the given edge
+// name in this mutation.
+func (m *ClusterMutation) AddedIDs(name string) []ent.Value {
+	return nil
+}
+
+// RemovedEdges returns all edge names that were removed in this mutation.
+func (m *ClusterMutation) RemovedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// RemovedIDs returns all IDs (to other nodes) that were removed for the edge with
+// the given name in this mutation.
+func (m *ClusterMutation) RemovedIDs(name string) []ent.Value {
+	return nil
+}
+
+// ClearedEdges returns all edge names that were cleared in this mutation.
+func (m *ClusterMutation) ClearedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// EdgeCleared returns a boolean which indicates if the edge with the given name
+// was cleared in this mutation.
+func (m *ClusterMutation) EdgeCleared(name string) bool {
+	return false
+}
+
+// ClearEdge clears the value of the edge with the given name. It returns an error
+// if that edge is not defined in the schema.
+func (m *ClusterMutation) ClearEdge(name string) error {
+	return fmt.Errorf("unknown Cluster unique edge %s", name)
+}
+
+// ResetEdge resets all changes to the edge with the given name in this mutation.
+// It returns an error if the edge is not defined in the schema.
+func (m *ClusterMutation) ResetEdge(name string) error {
+	return fmt.Errorf("unknown Cluster edge %s", name)
+}
+
 // EnvMutation represents an operation that mutates the Env nodes in the graph.
 type EnvMutation struct {
 	config
@@ -522,6 +1378,7 @@ type EnvMutation struct {
 	spawn_count        *int64
 	addspawn_count     *int64
 	last_spawned_at    *time.Time
+	cluster_id         *uuid.UUID
 	clearedFields      map[string]struct{}
 	team               *uuid.UUID
 	clearedteam        bool
@@ -999,6 +1856,55 @@ func (m *EnvMutation) ResetLastSpawnedAt() {
 	delete(m.clearedFields, env.FieldLastSpawnedAt)
 }
 
+// SetClusterID sets the "cluster_id" field.
+func (m *EnvMutation) SetClusterID(u uuid.UUID) {
+	m.cluster_id = &u
+}
+
+// ClusterID returns the value of the "cluster_id" field in the mutation.
+func (m *EnvMutation) ClusterID() (r uuid.UUID, exists bool) {
+	v := m.cluster_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldClusterID returns the old "cluster_id" field's value of the Env entity.
+// If the Env object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EnvMutation) OldClusterID(ctx context.Context) (v *uuid.UUID, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldClusterID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldClusterID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldClusterID: %w", err)
+	}
+	return oldValue.ClusterID, nil
+}
+
+// ClearClusterID clears the value of the "cluster_id" field.
+func (m *EnvMutation) ClearClusterID() {
+	m.cluster_id = nil
+	m.clearedFields[env.FieldClusterID] = struct{}{}
+}
+
+// ClusterIDCleared returns if the "cluster_id" field was cleared in this mutation.
+func (m *EnvMutation) ClusterIDCleared() bool {
+	_, ok := m.clearedFields[env.FieldClusterID]
+	return ok
+}
+
+// ResetClusterID resets all changes to the "cluster_id" field.
+func (m *EnvMutation) ResetClusterID() {
+	m.cluster_id = nil
+	delete(m.clearedFields, env.FieldClusterID)
+}
+
 // ClearTeam clears the "team" edge to the Team entity.
 func (m *EnvMutation) ClearTeam() {
 	m.clearedteam = true
@@ -1262,7 +2168,7 @@ func (m *EnvMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *EnvMutation) Fields() []string {
-	fields := make([]string, 0, 8)
+	fields := make([]string, 0, 9)
 	if m.created_at != nil {
 		fields = append(fields, env.FieldCreatedAt)
 	}
@@ -1286,6 +2192,9 @@ func (m *EnvMutation) Fields() []string {
 	}
 	if m.last_spawned_at != nil {
 		fields = append(fields, env.FieldLastSpawnedAt)
+	}
+	if m.cluster_id != nil {
+		fields = append(fields, env.FieldClusterID)
 	}
 	return fields
 }
@@ -1311,6 +2220,8 @@ func (m *EnvMutation) Field(name string) (ent.Value, bool) {
 		return m.SpawnCount()
 	case env.FieldLastSpawnedAt:
 		return m.LastSpawnedAt()
+	case env.FieldClusterID:
+		return m.ClusterID()
 	}
 	return nil, false
 }
@@ -1336,6 +2247,8 @@ func (m *EnvMutation) OldField(ctx context.Context, name string) (ent.Value, err
 		return m.OldSpawnCount(ctx)
 	case env.FieldLastSpawnedAt:
 		return m.OldLastSpawnedAt(ctx)
+	case env.FieldClusterID:
+		return m.OldClusterID(ctx)
 	}
 	return nil, fmt.Errorf("unknown Env field %s", name)
 }
@@ -1401,6 +2314,13 @@ func (m *EnvMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetLastSpawnedAt(v)
 		return nil
+	case env.FieldClusterID:
+		v, ok := value.(uuid.UUID)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetClusterID(v)
+		return nil
 	}
 	return fmt.Errorf("unknown Env field %s", name)
 }
@@ -1464,6 +2384,9 @@ func (m *EnvMutation) ClearedFields() []string {
 	if m.FieldCleared(env.FieldLastSpawnedAt) {
 		fields = append(fields, env.FieldLastSpawnedAt)
 	}
+	if m.FieldCleared(env.FieldClusterID) {
+		fields = append(fields, env.FieldClusterID)
+	}
 	return fields
 }
 
@@ -1483,6 +2406,9 @@ func (m *EnvMutation) ClearField(name string) error {
 		return nil
 	case env.FieldLastSpawnedAt:
 		m.ClearLastSpawnedAt()
+		return nil
+	case env.FieldClusterID:
+		m.ClearClusterID()
 		return nil
 	}
 	return fmt.Errorf("unknown Env nullable field %s", name)
@@ -1515,6 +2441,9 @@ func (m *EnvMutation) ResetField(name string) error {
 		return nil
 	case env.FieldLastSpawnedAt:
 		m.ResetLastSpawnedAt()
+		return nil
+	case env.FieldClusterID:
+		m.ResetClusterID()
 		return nil
 	}
 	return fmt.Errorf("unknown Env field %s", name)
@@ -2144,6 +3073,7 @@ type EnvBuildMutation struct {
 	status                *envbuild.Status
 	dockerfile            *string
 	start_cmd             *string
+	ready_cmd             *string
 	vcpu                  *int64
 	addvcpu               *int64
 	ram_mb                *int64
@@ -2155,6 +3085,7 @@ type EnvBuildMutation struct {
 	kernel_version        *string
 	firecracker_version   *string
 	envd_version          *string
+	cluster_node_id       *string
 	clearedFields         map[string]struct{}
 	env                   *string
 	clearedenv            bool
@@ -2571,6 +3502,55 @@ func (m *EnvBuildMutation) ResetStartCmd() {
 	delete(m.clearedFields, envbuild.FieldStartCmd)
 }
 
+// SetReadyCmd sets the "ready_cmd" field.
+func (m *EnvBuildMutation) SetReadyCmd(s string) {
+	m.ready_cmd = &s
+}
+
+// ReadyCmd returns the value of the "ready_cmd" field in the mutation.
+func (m *EnvBuildMutation) ReadyCmd() (r string, exists bool) {
+	v := m.ready_cmd
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldReadyCmd returns the old "ready_cmd" field's value of the EnvBuild entity.
+// If the EnvBuild object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EnvBuildMutation) OldReadyCmd(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldReadyCmd is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldReadyCmd requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldReadyCmd: %w", err)
+	}
+	return oldValue.ReadyCmd, nil
+}
+
+// ClearReadyCmd clears the value of the "ready_cmd" field.
+func (m *EnvBuildMutation) ClearReadyCmd() {
+	m.ready_cmd = nil
+	m.clearedFields[envbuild.FieldReadyCmd] = struct{}{}
+}
+
+// ReadyCmdCleared returns if the "ready_cmd" field was cleared in this mutation.
+func (m *EnvBuildMutation) ReadyCmdCleared() bool {
+	_, ok := m.clearedFields[envbuild.FieldReadyCmd]
+	return ok
+}
+
+// ResetReadyCmd resets all changes to the "ready_cmd" field.
+func (m *EnvBuildMutation) ResetReadyCmd() {
+	m.ready_cmd = nil
+	delete(m.clearedFields, envbuild.FieldReadyCmd)
+}
+
 // SetVcpu sets the "vcpu" field.
 func (m *EnvBuildMutation) SetVcpu(i int64) {
 	m.vcpu = &i
@@ -2930,6 +3910,55 @@ func (m *EnvBuildMutation) ResetEnvdVersion() {
 	delete(m.clearedFields, envbuild.FieldEnvdVersion)
 }
 
+// SetClusterNodeID sets the "cluster_node_id" field.
+func (m *EnvBuildMutation) SetClusterNodeID(s string) {
+	m.cluster_node_id = &s
+}
+
+// ClusterNodeID returns the value of the "cluster_node_id" field in the mutation.
+func (m *EnvBuildMutation) ClusterNodeID() (r string, exists bool) {
+	v := m.cluster_node_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldClusterNodeID returns the old "cluster_node_id" field's value of the EnvBuild entity.
+// If the EnvBuild object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EnvBuildMutation) OldClusterNodeID(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldClusterNodeID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldClusterNodeID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldClusterNodeID: %w", err)
+	}
+	return oldValue.ClusterNodeID, nil
+}
+
+// ClearClusterNodeID clears the value of the "cluster_node_id" field.
+func (m *EnvBuildMutation) ClearClusterNodeID() {
+	m.cluster_node_id = nil
+	m.clearedFields[envbuild.FieldClusterNodeID] = struct{}{}
+}
+
+// ClusterNodeIDCleared returns if the "cluster_node_id" field was cleared in this mutation.
+func (m *EnvBuildMutation) ClusterNodeIDCleared() bool {
+	_, ok := m.clearedFields[envbuild.FieldClusterNodeID]
+	return ok
+}
+
+// ResetClusterNodeID resets all changes to the "cluster_node_id" field.
+func (m *EnvBuildMutation) ResetClusterNodeID() {
+	m.cluster_node_id = nil
+	delete(m.clearedFields, envbuild.FieldClusterNodeID)
+}
+
 // ClearEnv clears the "env" edge to the Env entity.
 func (m *EnvBuildMutation) ClearEnv() {
 	m.clearedenv = true
@@ -2991,7 +4020,7 @@ func (m *EnvBuildMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *EnvBuildMutation) Fields() []string {
-	fields := make([]string, 0, 14)
+	fields := make([]string, 0, 16)
 	if m.created_at != nil {
 		fields = append(fields, envbuild.FieldCreatedAt)
 	}
@@ -3013,6 +4042,9 @@ func (m *EnvBuildMutation) Fields() []string {
 	if m.start_cmd != nil {
 		fields = append(fields, envbuild.FieldStartCmd)
 	}
+	if m.ready_cmd != nil {
+		fields = append(fields, envbuild.FieldReadyCmd)
+	}
 	if m.vcpu != nil {
 		fields = append(fields, envbuild.FieldVcpu)
 	}
@@ -3033,6 +4065,9 @@ func (m *EnvBuildMutation) Fields() []string {
 	}
 	if m.envd_version != nil {
 		fields = append(fields, envbuild.FieldEnvdVersion)
+	}
+	if m.cluster_node_id != nil {
+		fields = append(fields, envbuild.FieldClusterNodeID)
 	}
 	return fields
 }
@@ -3056,6 +4091,8 @@ func (m *EnvBuildMutation) Field(name string) (ent.Value, bool) {
 		return m.Dockerfile()
 	case envbuild.FieldStartCmd:
 		return m.StartCmd()
+	case envbuild.FieldReadyCmd:
+		return m.ReadyCmd()
 	case envbuild.FieldVcpu:
 		return m.Vcpu()
 	case envbuild.FieldRAMMB:
@@ -3070,6 +4107,8 @@ func (m *EnvBuildMutation) Field(name string) (ent.Value, bool) {
 		return m.FirecrackerVersion()
 	case envbuild.FieldEnvdVersion:
 		return m.EnvdVersion()
+	case envbuild.FieldClusterNodeID:
+		return m.ClusterNodeID()
 	}
 	return nil, false
 }
@@ -3093,6 +4132,8 @@ func (m *EnvBuildMutation) OldField(ctx context.Context, name string) (ent.Value
 		return m.OldDockerfile(ctx)
 	case envbuild.FieldStartCmd:
 		return m.OldStartCmd(ctx)
+	case envbuild.FieldReadyCmd:
+		return m.OldReadyCmd(ctx)
 	case envbuild.FieldVcpu:
 		return m.OldVcpu(ctx)
 	case envbuild.FieldRAMMB:
@@ -3107,6 +4148,8 @@ func (m *EnvBuildMutation) OldField(ctx context.Context, name string) (ent.Value
 		return m.OldFirecrackerVersion(ctx)
 	case envbuild.FieldEnvdVersion:
 		return m.OldEnvdVersion(ctx)
+	case envbuild.FieldClusterNodeID:
+		return m.OldClusterNodeID(ctx)
 	}
 	return nil, fmt.Errorf("unknown EnvBuild field %s", name)
 }
@@ -3165,6 +4208,13 @@ func (m *EnvBuildMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetStartCmd(v)
 		return nil
+	case envbuild.FieldReadyCmd:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetReadyCmd(v)
+		return nil
 	case envbuild.FieldVcpu:
 		v, ok := value.(int64)
 		if !ok {
@@ -3213,6 +4263,13 @@ func (m *EnvBuildMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetEnvdVersion(v)
+		return nil
+	case envbuild.FieldClusterNodeID:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetClusterNodeID(v)
 		return nil
 	}
 	return fmt.Errorf("unknown EnvBuild field %s", name)
@@ -3307,11 +4364,17 @@ func (m *EnvBuildMutation) ClearedFields() []string {
 	if m.FieldCleared(envbuild.FieldStartCmd) {
 		fields = append(fields, envbuild.FieldStartCmd)
 	}
+	if m.FieldCleared(envbuild.FieldReadyCmd) {
+		fields = append(fields, envbuild.FieldReadyCmd)
+	}
 	if m.FieldCleared(envbuild.FieldTotalDiskSizeMB) {
 		fields = append(fields, envbuild.FieldTotalDiskSizeMB)
 	}
 	if m.FieldCleared(envbuild.FieldEnvdVersion) {
 		fields = append(fields, envbuild.FieldEnvdVersion)
+	}
+	if m.FieldCleared(envbuild.FieldClusterNodeID) {
+		fields = append(fields, envbuild.FieldClusterNodeID)
 	}
 	return fields
 }
@@ -3339,11 +4402,17 @@ func (m *EnvBuildMutation) ClearField(name string) error {
 	case envbuild.FieldStartCmd:
 		m.ClearStartCmd()
 		return nil
+	case envbuild.FieldReadyCmd:
+		m.ClearReadyCmd()
+		return nil
 	case envbuild.FieldTotalDiskSizeMB:
 		m.ClearTotalDiskSizeMB()
 		return nil
 	case envbuild.FieldEnvdVersion:
 		m.ClearEnvdVersion()
+		return nil
+	case envbuild.FieldClusterNodeID:
+		m.ClearClusterNodeID()
 		return nil
 	}
 	return fmt.Errorf("unknown EnvBuild nullable field %s", name)
@@ -3374,6 +4443,9 @@ func (m *EnvBuildMutation) ResetField(name string) error {
 	case envbuild.FieldStartCmd:
 		m.ResetStartCmd()
 		return nil
+	case envbuild.FieldReadyCmd:
+		m.ResetReadyCmd()
+		return nil
 	case envbuild.FieldVcpu:
 		m.ResetVcpu()
 		return nil
@@ -3394,6 +4466,9 @@ func (m *EnvBuildMutation) ResetField(name string) error {
 		return nil
 	case envbuild.FieldEnvdVersion:
 		m.ResetEnvdVersion()
+		return nil
+	case envbuild.FieldClusterNodeID:
+		m.ResetClusterNodeID()
 		return nil
 	}
 	return fmt.Errorf("unknown EnvBuild field %s", name)
@@ -3476,19 +4551,21 @@ func (m *EnvBuildMutation) ResetEdge(name string) error {
 // SnapshotMutation represents an operation that mutates the Snapshot nodes in the graph.
 type SnapshotMutation struct {
 	config
-	op            Op
-	typ           string
-	id            *uuid.UUID
-	created_at    *time.Time
-	base_env_id   *string
-	sandbox_id    *string
-	metadata      *map[string]string
-	clearedFields map[string]struct{}
-	env           *string
-	clearedenv    bool
-	done          bool
-	oldValue      func(context.Context) (*Snapshot, error)
-	predicates    []predicate.Snapshot
+	op                 Op
+	typ                string
+	id                 *uuid.UUID
+	created_at         *time.Time
+	base_env_id        *string
+	sandbox_id         *string
+	metadata           *map[string]string
+	sandbox_started_at *time.Time
+	env_secure         *bool
+	clearedFields      map[string]struct{}
+	env                *string
+	clearedenv         bool
+	done               bool
+	oldValue           func(context.Context) (*Snapshot, error)
+	predicates         []predicate.Snapshot
 }
 
 var _ ent.Mutation = (*SnapshotMutation)(nil)
@@ -3775,6 +4852,78 @@ func (m *SnapshotMutation) ResetMetadata() {
 	m.metadata = nil
 }
 
+// SetSandboxStartedAt sets the "sandbox_started_at" field.
+func (m *SnapshotMutation) SetSandboxStartedAt(t time.Time) {
+	m.sandbox_started_at = &t
+}
+
+// SandboxStartedAt returns the value of the "sandbox_started_at" field in the mutation.
+func (m *SnapshotMutation) SandboxStartedAt() (r time.Time, exists bool) {
+	v := m.sandbox_started_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldSandboxStartedAt returns the old "sandbox_started_at" field's value of the Snapshot entity.
+// If the Snapshot object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SnapshotMutation) OldSandboxStartedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldSandboxStartedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldSandboxStartedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldSandboxStartedAt: %w", err)
+	}
+	return oldValue.SandboxStartedAt, nil
+}
+
+// ResetSandboxStartedAt resets all changes to the "sandbox_started_at" field.
+func (m *SnapshotMutation) ResetSandboxStartedAt() {
+	m.sandbox_started_at = nil
+}
+
+// SetEnvSecure sets the "env_secure" field.
+func (m *SnapshotMutation) SetEnvSecure(b bool) {
+	m.env_secure = &b
+}
+
+// EnvSecure returns the value of the "env_secure" field in the mutation.
+func (m *SnapshotMutation) EnvSecure() (r bool, exists bool) {
+	v := m.env_secure
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldEnvSecure returns the old "env_secure" field's value of the Snapshot entity.
+// If the Snapshot object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SnapshotMutation) OldEnvSecure(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldEnvSecure is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldEnvSecure requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldEnvSecure: %w", err)
+	}
+	return oldValue.EnvSecure, nil
+}
+
+// ResetEnvSecure resets all changes to the "env_secure" field.
+func (m *SnapshotMutation) ResetEnvSecure() {
+	m.env_secure = nil
+}
+
 // ClearEnv clears the "env" edge to the Env entity.
 func (m *SnapshotMutation) ClearEnv() {
 	m.clearedenv = true
@@ -3836,7 +4985,7 @@ func (m *SnapshotMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *SnapshotMutation) Fields() []string {
-	fields := make([]string, 0, 5)
+	fields := make([]string, 0, 7)
 	if m.created_at != nil {
 		fields = append(fields, snapshot.FieldCreatedAt)
 	}
@@ -3851,6 +5000,12 @@ func (m *SnapshotMutation) Fields() []string {
 	}
 	if m.metadata != nil {
 		fields = append(fields, snapshot.FieldMetadata)
+	}
+	if m.sandbox_started_at != nil {
+		fields = append(fields, snapshot.FieldSandboxStartedAt)
+	}
+	if m.env_secure != nil {
+		fields = append(fields, snapshot.FieldEnvSecure)
 	}
 	return fields
 }
@@ -3870,6 +5025,10 @@ func (m *SnapshotMutation) Field(name string) (ent.Value, bool) {
 		return m.SandboxID()
 	case snapshot.FieldMetadata:
 		return m.Metadata()
+	case snapshot.FieldSandboxStartedAt:
+		return m.SandboxStartedAt()
+	case snapshot.FieldEnvSecure:
+		return m.EnvSecure()
 	}
 	return nil, false
 }
@@ -3889,6 +5048,10 @@ func (m *SnapshotMutation) OldField(ctx context.Context, name string) (ent.Value
 		return m.OldSandboxID(ctx)
 	case snapshot.FieldMetadata:
 		return m.OldMetadata(ctx)
+	case snapshot.FieldSandboxStartedAt:
+		return m.OldSandboxStartedAt(ctx)
+	case snapshot.FieldEnvSecure:
+		return m.OldEnvSecure(ctx)
 	}
 	return nil, fmt.Errorf("unknown Snapshot field %s", name)
 }
@@ -3932,6 +5095,20 @@ func (m *SnapshotMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetMetadata(v)
+		return nil
+	case snapshot.FieldSandboxStartedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetSandboxStartedAt(v)
+		return nil
+	case snapshot.FieldEnvSecure:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetEnvSecure(v)
 		return nil
 	}
 	return fmt.Errorf("unknown Snapshot field %s", name)
@@ -3996,6 +5173,12 @@ func (m *SnapshotMutation) ResetField(name string) error {
 		return nil
 	case snapshot.FieldMetadata:
 		m.ResetMetadata()
+		return nil
+	case snapshot.FieldSandboxStartedAt:
+		m.ResetSandboxStartedAt()
+		return nil
+	case snapshot.FieldEnvSecure:
+		m.ResetEnvSecure()
 		return nil
 	}
 	return fmt.Errorf("unknown Snapshot field %s", name)
@@ -4087,6 +5270,7 @@ type TeamMutation struct {
 	blocked_reason       *string
 	name                 *string
 	email                *string
+	cluster_id           *uuid.UUID
 	clearedFields        map[string]struct{}
 	users                map[uuid.UUID]struct{}
 	removedusers         map[uuid.UUID]struct{}
@@ -4502,6 +5686,55 @@ func (m *TeamMutation) ResetEmail() {
 	m.email = nil
 }
 
+// SetClusterID sets the "cluster_id" field.
+func (m *TeamMutation) SetClusterID(u uuid.UUID) {
+	m.cluster_id = &u
+}
+
+// ClusterID returns the value of the "cluster_id" field in the mutation.
+func (m *TeamMutation) ClusterID() (r uuid.UUID, exists bool) {
+	v := m.cluster_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldClusterID returns the old "cluster_id" field's value of the Team entity.
+// If the Team object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TeamMutation) OldClusterID(ctx context.Context) (v *uuid.UUID, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldClusterID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldClusterID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldClusterID: %w", err)
+	}
+	return oldValue.ClusterID, nil
+}
+
+// ClearClusterID clears the value of the "cluster_id" field.
+func (m *TeamMutation) ClearClusterID() {
+	m.cluster_id = nil
+	m.clearedFields[team.FieldClusterID] = struct{}{}
+}
+
+// ClusterIDCleared returns if the "cluster_id" field was cleared in this mutation.
+func (m *TeamMutation) ClusterIDCleared() bool {
+	_, ok := m.clearedFields[team.FieldClusterID]
+	return ok
+}
+
+// ResetClusterID resets all changes to the "cluster_id" field.
+func (m *TeamMutation) ResetClusterID() {
+	m.cluster_id = nil
+	delete(m.clearedFields, team.FieldClusterID)
+}
+
 // AddUserIDs adds the "users" edge to the User entity by ids.
 func (m *TeamMutation) AddUserIDs(ids ...uuid.UUID) {
 	if m.users == nil {
@@ -4792,7 +6025,7 @@ func (m *TeamMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *TeamMutation) Fields() []string {
-	fields := make([]string, 0, 7)
+	fields := make([]string, 0, 8)
 	if m.created_at != nil {
 		fields = append(fields, team.FieldCreatedAt)
 	}
@@ -4813,6 +6046,9 @@ func (m *TeamMutation) Fields() []string {
 	}
 	if m.email != nil {
 		fields = append(fields, team.FieldEmail)
+	}
+	if m.cluster_id != nil {
+		fields = append(fields, team.FieldClusterID)
 	}
 	return fields
 }
@@ -4836,6 +6072,8 @@ func (m *TeamMutation) Field(name string) (ent.Value, bool) {
 		return m.Tier()
 	case team.FieldEmail:
 		return m.Email()
+	case team.FieldClusterID:
+		return m.ClusterID()
 	}
 	return nil, false
 }
@@ -4859,6 +6097,8 @@ func (m *TeamMutation) OldField(ctx context.Context, name string) (ent.Value, er
 		return m.OldTier(ctx)
 	case team.FieldEmail:
 		return m.OldEmail(ctx)
+	case team.FieldClusterID:
+		return m.OldClusterID(ctx)
 	}
 	return nil, fmt.Errorf("unknown Team field %s", name)
 }
@@ -4917,6 +6157,13 @@ func (m *TeamMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetEmail(v)
 		return nil
+	case team.FieldClusterID:
+		v, ok := value.(uuid.UUID)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetClusterID(v)
+		return nil
 	}
 	return fmt.Errorf("unknown Team field %s", name)
 }
@@ -4956,6 +6203,9 @@ func (m *TeamMutation) ClearedFields() []string {
 	if m.FieldCleared(team.FieldBlockedReason) {
 		fields = append(fields, team.FieldBlockedReason)
 	}
+	if m.FieldCleared(team.FieldClusterID) {
+		fields = append(fields, team.FieldClusterID)
+	}
 	return fields
 }
 
@@ -4978,6 +6228,9 @@ func (m *TeamMutation) ClearField(name string) error {
 		return nil
 	case team.FieldBlockedReason:
 		m.ClearBlockedReason()
+		return nil
+	case team.FieldClusterID:
+		m.ClearClusterID()
 		return nil
 	}
 	return fmt.Errorf("unknown Team nullable field %s", name)
@@ -5007,6 +6260,9 @@ func (m *TeamMutation) ResetField(name string) error {
 		return nil
 	case team.FieldEmail:
 		m.ResetEmail()
+		return nil
+	case team.FieldClusterID:
+		m.ResetClusterID()
 		return nil
 	}
 	return fmt.Errorf("unknown Team field %s", name)
@@ -5195,22 +6451,28 @@ func (m *TeamMutation) ResetEdge(name string) error {
 // TeamAPIKeyMutation represents an operation that mutates the TeamAPIKey nodes in the graph.
 type TeamAPIKeyMutation struct {
 	config
-	op             Op
-	typ            string
-	id             *uuid.UUID
-	api_key        *string
-	created_at     *time.Time
-	updated_at     *time.Time
-	name           *string
-	last_used      *time.Time
-	clearedFields  map[string]struct{}
-	team           *uuid.UUID
-	clearedteam    bool
-	creator        *uuid.UUID
-	clearedcreator bool
-	done           bool
-	oldValue       func(context.Context) (*TeamAPIKey, error)
-	predicates     []predicate.TeamAPIKey
+	op                  Op
+	typ                 string
+	id                  *uuid.UUID
+	api_key             *string
+	api_key_hash        *string
+	api_key_prefix      *string
+	api_key_length      *int
+	addapi_key_length   *int
+	api_key_mask_prefix *string
+	api_key_mask_suffix *string
+	created_at          *time.Time
+	updated_at          *time.Time
+	name                *string
+	last_used           *time.Time
+	clearedFields       map[string]struct{}
+	team                *uuid.UUID
+	clearedteam         bool
+	creator             *uuid.UUID
+	clearedcreator      bool
+	done                bool
+	oldValue            func(context.Context) (*TeamAPIKey, error)
+	predicates          []predicate.TeamAPIKey
 }
 
 var _ ent.Mutation = (*TeamAPIKeyMutation)(nil)
@@ -5351,6 +6613,206 @@ func (m *TeamAPIKeyMutation) OldAPIKey(ctx context.Context) (v string, err error
 // ResetAPIKey resets all changes to the "api_key" field.
 func (m *TeamAPIKeyMutation) ResetAPIKey() {
 	m.api_key = nil
+}
+
+// SetAPIKeyHash sets the "api_key_hash" field.
+func (m *TeamAPIKeyMutation) SetAPIKeyHash(s string) {
+	m.api_key_hash = &s
+}
+
+// APIKeyHash returns the value of the "api_key_hash" field in the mutation.
+func (m *TeamAPIKeyMutation) APIKeyHash() (r string, exists bool) {
+	v := m.api_key_hash
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldAPIKeyHash returns the old "api_key_hash" field's value of the TeamAPIKey entity.
+// If the TeamAPIKey object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TeamAPIKeyMutation) OldAPIKeyHash(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldAPIKeyHash is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldAPIKeyHash requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldAPIKeyHash: %w", err)
+	}
+	return oldValue.APIKeyHash, nil
+}
+
+// ResetAPIKeyHash resets all changes to the "api_key_hash" field.
+func (m *TeamAPIKeyMutation) ResetAPIKeyHash() {
+	m.api_key_hash = nil
+}
+
+// SetAPIKeyPrefix sets the "api_key_prefix" field.
+func (m *TeamAPIKeyMutation) SetAPIKeyPrefix(s string) {
+	m.api_key_prefix = &s
+}
+
+// APIKeyPrefix returns the value of the "api_key_prefix" field in the mutation.
+func (m *TeamAPIKeyMutation) APIKeyPrefix() (r string, exists bool) {
+	v := m.api_key_prefix
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldAPIKeyPrefix returns the old "api_key_prefix" field's value of the TeamAPIKey entity.
+// If the TeamAPIKey object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TeamAPIKeyMutation) OldAPIKeyPrefix(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldAPIKeyPrefix is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldAPIKeyPrefix requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldAPIKeyPrefix: %w", err)
+	}
+	return oldValue.APIKeyPrefix, nil
+}
+
+// ResetAPIKeyPrefix resets all changes to the "api_key_prefix" field.
+func (m *TeamAPIKeyMutation) ResetAPIKeyPrefix() {
+	m.api_key_prefix = nil
+}
+
+// SetAPIKeyLength sets the "api_key_length" field.
+func (m *TeamAPIKeyMutation) SetAPIKeyLength(i int) {
+	m.api_key_length = &i
+	m.addapi_key_length = nil
+}
+
+// APIKeyLength returns the value of the "api_key_length" field in the mutation.
+func (m *TeamAPIKeyMutation) APIKeyLength() (r int, exists bool) {
+	v := m.api_key_length
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldAPIKeyLength returns the old "api_key_length" field's value of the TeamAPIKey entity.
+// If the TeamAPIKey object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TeamAPIKeyMutation) OldAPIKeyLength(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldAPIKeyLength is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldAPIKeyLength requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldAPIKeyLength: %w", err)
+	}
+	return oldValue.APIKeyLength, nil
+}
+
+// AddAPIKeyLength adds i to the "api_key_length" field.
+func (m *TeamAPIKeyMutation) AddAPIKeyLength(i int) {
+	if m.addapi_key_length != nil {
+		*m.addapi_key_length += i
+	} else {
+		m.addapi_key_length = &i
+	}
+}
+
+// AddedAPIKeyLength returns the value that was added to the "api_key_length" field in this mutation.
+func (m *TeamAPIKeyMutation) AddedAPIKeyLength() (r int, exists bool) {
+	v := m.addapi_key_length
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetAPIKeyLength resets all changes to the "api_key_length" field.
+func (m *TeamAPIKeyMutation) ResetAPIKeyLength() {
+	m.api_key_length = nil
+	m.addapi_key_length = nil
+}
+
+// SetAPIKeyMaskPrefix sets the "api_key_mask_prefix" field.
+func (m *TeamAPIKeyMutation) SetAPIKeyMaskPrefix(s string) {
+	m.api_key_mask_prefix = &s
+}
+
+// APIKeyMaskPrefix returns the value of the "api_key_mask_prefix" field in the mutation.
+func (m *TeamAPIKeyMutation) APIKeyMaskPrefix() (r string, exists bool) {
+	v := m.api_key_mask_prefix
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldAPIKeyMaskPrefix returns the old "api_key_mask_prefix" field's value of the TeamAPIKey entity.
+// If the TeamAPIKey object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TeamAPIKeyMutation) OldAPIKeyMaskPrefix(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldAPIKeyMaskPrefix is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldAPIKeyMaskPrefix requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldAPIKeyMaskPrefix: %w", err)
+	}
+	return oldValue.APIKeyMaskPrefix, nil
+}
+
+// ResetAPIKeyMaskPrefix resets all changes to the "api_key_mask_prefix" field.
+func (m *TeamAPIKeyMutation) ResetAPIKeyMaskPrefix() {
+	m.api_key_mask_prefix = nil
+}
+
+// SetAPIKeyMaskSuffix sets the "api_key_mask_suffix" field.
+func (m *TeamAPIKeyMutation) SetAPIKeyMaskSuffix(s string) {
+	m.api_key_mask_suffix = &s
+}
+
+// APIKeyMaskSuffix returns the value of the "api_key_mask_suffix" field in the mutation.
+func (m *TeamAPIKeyMutation) APIKeyMaskSuffix() (r string, exists bool) {
+	v := m.api_key_mask_suffix
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldAPIKeyMaskSuffix returns the old "api_key_mask_suffix" field's value of the TeamAPIKey entity.
+// If the TeamAPIKey object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TeamAPIKeyMutation) OldAPIKeyMaskSuffix(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldAPIKeyMaskSuffix is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldAPIKeyMaskSuffix requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldAPIKeyMaskSuffix: %w", err)
+	}
+	return oldValue.APIKeyMaskSuffix, nil
+}
+
+// ResetAPIKeyMaskSuffix resets all changes to the "api_key_mask_suffix" field.
+func (m *TeamAPIKeyMutation) ResetAPIKeyMaskSuffix() {
+	m.api_key_mask_suffix = nil
 }
 
 // SetCreatedAt sets the "created_at" field.
@@ -5709,9 +7171,24 @@ func (m *TeamAPIKeyMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *TeamAPIKeyMutation) Fields() []string {
-	fields := make([]string, 0, 7)
+	fields := make([]string, 0, 12)
 	if m.api_key != nil {
 		fields = append(fields, teamapikey.FieldAPIKey)
+	}
+	if m.api_key_hash != nil {
+		fields = append(fields, teamapikey.FieldAPIKeyHash)
+	}
+	if m.api_key_prefix != nil {
+		fields = append(fields, teamapikey.FieldAPIKeyPrefix)
+	}
+	if m.api_key_length != nil {
+		fields = append(fields, teamapikey.FieldAPIKeyLength)
+	}
+	if m.api_key_mask_prefix != nil {
+		fields = append(fields, teamapikey.FieldAPIKeyMaskPrefix)
+	}
+	if m.api_key_mask_suffix != nil {
+		fields = append(fields, teamapikey.FieldAPIKeyMaskSuffix)
 	}
 	if m.created_at != nil {
 		fields = append(fields, teamapikey.FieldCreatedAt)
@@ -5741,6 +7218,16 @@ func (m *TeamAPIKeyMutation) Field(name string) (ent.Value, bool) {
 	switch name {
 	case teamapikey.FieldAPIKey:
 		return m.APIKey()
+	case teamapikey.FieldAPIKeyHash:
+		return m.APIKeyHash()
+	case teamapikey.FieldAPIKeyPrefix:
+		return m.APIKeyPrefix()
+	case teamapikey.FieldAPIKeyLength:
+		return m.APIKeyLength()
+	case teamapikey.FieldAPIKeyMaskPrefix:
+		return m.APIKeyMaskPrefix()
+	case teamapikey.FieldAPIKeyMaskSuffix:
+		return m.APIKeyMaskSuffix()
 	case teamapikey.FieldCreatedAt:
 		return m.CreatedAt()
 	case teamapikey.FieldUpdatedAt:
@@ -5764,6 +7251,16 @@ func (m *TeamAPIKeyMutation) OldField(ctx context.Context, name string) (ent.Val
 	switch name {
 	case teamapikey.FieldAPIKey:
 		return m.OldAPIKey(ctx)
+	case teamapikey.FieldAPIKeyHash:
+		return m.OldAPIKeyHash(ctx)
+	case teamapikey.FieldAPIKeyPrefix:
+		return m.OldAPIKeyPrefix(ctx)
+	case teamapikey.FieldAPIKeyLength:
+		return m.OldAPIKeyLength(ctx)
+	case teamapikey.FieldAPIKeyMaskPrefix:
+		return m.OldAPIKeyMaskPrefix(ctx)
+	case teamapikey.FieldAPIKeyMaskSuffix:
+		return m.OldAPIKeyMaskSuffix(ctx)
 	case teamapikey.FieldCreatedAt:
 		return m.OldCreatedAt(ctx)
 	case teamapikey.FieldUpdatedAt:
@@ -5791,6 +7288,41 @@ func (m *TeamAPIKeyMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetAPIKey(v)
+		return nil
+	case teamapikey.FieldAPIKeyHash:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetAPIKeyHash(v)
+		return nil
+	case teamapikey.FieldAPIKeyPrefix:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetAPIKeyPrefix(v)
+		return nil
+	case teamapikey.FieldAPIKeyLength:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetAPIKeyLength(v)
+		return nil
+	case teamapikey.FieldAPIKeyMaskPrefix:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetAPIKeyMaskPrefix(v)
+		return nil
+	case teamapikey.FieldAPIKeyMaskSuffix:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetAPIKeyMaskSuffix(v)
 		return nil
 	case teamapikey.FieldCreatedAt:
 		v, ok := value.(time.Time)
@@ -5841,13 +7373,21 @@ func (m *TeamAPIKeyMutation) SetField(name string, value ent.Value) error {
 // AddedFields returns all numeric fields that were incremented/decremented during
 // this mutation.
 func (m *TeamAPIKeyMutation) AddedFields() []string {
-	return nil
+	var fields []string
+	if m.addapi_key_length != nil {
+		fields = append(fields, teamapikey.FieldAPIKeyLength)
+	}
+	return fields
 }
 
 // AddedField returns the numeric value that was incremented/decremented on a field
 // with the given name. The second boolean return value indicates that this field
 // was not set, or was not defined in the schema.
 func (m *TeamAPIKeyMutation) AddedField(name string) (ent.Value, bool) {
+	switch name {
+	case teamapikey.FieldAPIKeyLength:
+		return m.AddedAPIKeyLength()
+	}
 	return nil, false
 }
 
@@ -5856,6 +7396,13 @@ func (m *TeamAPIKeyMutation) AddedField(name string) (ent.Value, bool) {
 // type.
 func (m *TeamAPIKeyMutation) AddField(name string, value ent.Value) error {
 	switch name {
+	case teamapikey.FieldAPIKeyLength:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddAPIKeyLength(v)
+		return nil
 	}
 	return fmt.Errorf("unknown TeamAPIKey numeric field %s", name)
 }
@@ -5906,6 +7453,21 @@ func (m *TeamAPIKeyMutation) ResetField(name string) error {
 	switch name {
 	case teamapikey.FieldAPIKey:
 		m.ResetAPIKey()
+		return nil
+	case teamapikey.FieldAPIKeyHash:
+		m.ResetAPIKeyHash()
+		return nil
+	case teamapikey.FieldAPIKeyPrefix:
+		m.ResetAPIKeyPrefix()
+		return nil
+	case teamapikey.FieldAPIKeyLength:
+		m.ResetAPIKeyLength()
+		return nil
+	case teamapikey.FieldAPIKeyMaskPrefix:
+		m.ResetAPIKeyMaskPrefix()
+		return nil
+	case teamapikey.FieldAPIKeyMaskSuffix:
+		m.ResetAPIKeyMaskSuffix()
 		return nil
 	case teamapikey.FieldCreatedAt:
 		m.ResetCreatedAt()
@@ -6724,8 +8286,8 @@ type UserMutation struct {
 	created_envs            map[string]struct{}
 	removedcreated_envs     map[string]struct{}
 	clearedcreated_envs     bool
-	access_tokens           map[string]struct{}
-	removedaccess_tokens    map[string]struct{}
+	access_tokens           map[uuid.UUID]struct{}
+	removedaccess_tokens    map[uuid.UUID]struct{}
 	clearedaccess_tokens    bool
 	created_api_keys        map[uuid.UUID]struct{}
 	removedcreated_api_keys map[uuid.UUID]struct{}
@@ -6987,9 +8549,9 @@ func (m *UserMutation) ResetCreatedEnvs() {
 }
 
 // AddAccessTokenIDs adds the "access_tokens" edge to the AccessToken entity by ids.
-func (m *UserMutation) AddAccessTokenIDs(ids ...string) {
+func (m *UserMutation) AddAccessTokenIDs(ids ...uuid.UUID) {
 	if m.access_tokens == nil {
-		m.access_tokens = make(map[string]struct{})
+		m.access_tokens = make(map[uuid.UUID]struct{})
 	}
 	for i := range ids {
 		m.access_tokens[ids[i]] = struct{}{}
@@ -7007,9 +8569,9 @@ func (m *UserMutation) AccessTokensCleared() bool {
 }
 
 // RemoveAccessTokenIDs removes the "access_tokens" edge to the AccessToken entity by IDs.
-func (m *UserMutation) RemoveAccessTokenIDs(ids ...string) {
+func (m *UserMutation) RemoveAccessTokenIDs(ids ...uuid.UUID) {
 	if m.removedaccess_tokens == nil {
-		m.removedaccess_tokens = make(map[string]struct{})
+		m.removedaccess_tokens = make(map[uuid.UUID]struct{})
 	}
 	for i := range ids {
 		delete(m.access_tokens, ids[i])
@@ -7018,7 +8580,7 @@ func (m *UserMutation) RemoveAccessTokenIDs(ids ...string) {
 }
 
 // RemovedAccessTokens returns the removed IDs of the "access_tokens" edge to the AccessToken entity.
-func (m *UserMutation) RemovedAccessTokensIDs() (ids []string) {
+func (m *UserMutation) RemovedAccessTokensIDs() (ids []uuid.UUID) {
 	for id := range m.removedaccess_tokens {
 		ids = append(ids, id)
 	}
@@ -7026,7 +8588,7 @@ func (m *UserMutation) RemovedAccessTokensIDs() (ids []string) {
 }
 
 // AccessTokensIDs returns the "access_tokens" edge IDs in the mutation.
-func (m *UserMutation) AccessTokensIDs() (ids []string) {
+func (m *UserMutation) AccessTokensIDs() (ids []uuid.UUID) {
 	for id := range m.access_tokens {
 		ids = append(ids, id)
 	}

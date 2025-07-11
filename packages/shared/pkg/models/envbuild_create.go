@@ -123,6 +123,20 @@ func (ebc *EnvBuildCreate) SetNillableStartCmd(s *string) *EnvBuildCreate {
 	return ebc
 }
 
+// SetReadyCmd sets the "ready_cmd" field.
+func (ebc *EnvBuildCreate) SetReadyCmd(s string) *EnvBuildCreate {
+	ebc.mutation.SetReadyCmd(s)
+	return ebc
+}
+
+// SetNillableReadyCmd sets the "ready_cmd" field if the given value is not nil.
+func (ebc *EnvBuildCreate) SetNillableReadyCmd(s *string) *EnvBuildCreate {
+	if s != nil {
+		ebc.SetReadyCmd(*s)
+	}
+	return ebc
+}
+
 // SetVcpu sets the "vcpu" field.
 func (ebc *EnvBuildCreate) SetVcpu(i int64) *EnvBuildCreate {
 	ebc.mutation.SetVcpu(i)
@@ -193,6 +207,20 @@ func (ebc *EnvBuildCreate) SetEnvdVersion(s string) *EnvBuildCreate {
 func (ebc *EnvBuildCreate) SetNillableEnvdVersion(s *string) *EnvBuildCreate {
 	if s != nil {
 		ebc.SetEnvdVersion(*s)
+	}
+	return ebc
+}
+
+// SetClusterNodeID sets the "cluster_node_id" field.
+func (ebc *EnvBuildCreate) SetClusterNodeID(s string) *EnvBuildCreate {
+	ebc.mutation.SetClusterNodeID(s)
+	return ebc
+}
+
+// SetNillableClusterNodeID sets the "cluster_node_id" field if the given value is not nil.
+func (ebc *EnvBuildCreate) SetNillableClusterNodeID(s *string) *EnvBuildCreate {
+	if s != nil {
+		ebc.SetClusterNodeID(*s)
 	}
 	return ebc
 }
@@ -357,6 +385,10 @@ func (ebc *EnvBuildCreate) createSpec() (*EnvBuild, *sqlgraph.CreateSpec) {
 		_spec.SetField(envbuild.FieldStartCmd, field.TypeString, value)
 		_node.StartCmd = &value
 	}
+	if value, ok := ebc.mutation.ReadyCmd(); ok {
+		_spec.SetField(envbuild.FieldReadyCmd, field.TypeString, value)
+		_node.ReadyCmd = &value
+	}
 	if value, ok := ebc.mutation.Vcpu(); ok {
 		_spec.SetField(envbuild.FieldVcpu, field.TypeInt64, value)
 		_node.Vcpu = value
@@ -384,6 +416,10 @@ func (ebc *EnvBuildCreate) createSpec() (*EnvBuild, *sqlgraph.CreateSpec) {
 	if value, ok := ebc.mutation.EnvdVersion(); ok {
 		_spec.SetField(envbuild.FieldEnvdVersion, field.TypeString, value)
 		_node.EnvdVersion = &value
+	}
+	if value, ok := ebc.mutation.ClusterNodeID(); ok {
+		_spec.SetField(envbuild.FieldClusterNodeID, field.TypeString, value)
+		_node.ClusterNodeID = &value
 	}
 	if nodes := ebc.mutation.EnvIDs(); len(nodes) > 0 {
 		edge := &sqlgraph.EdgeSpec{
@@ -551,6 +587,24 @@ func (u *EnvBuildUpsert) ClearStartCmd() *EnvBuildUpsert {
 	return u
 }
 
+// SetReadyCmd sets the "ready_cmd" field.
+func (u *EnvBuildUpsert) SetReadyCmd(v string) *EnvBuildUpsert {
+	u.Set(envbuild.FieldReadyCmd, v)
+	return u
+}
+
+// UpdateReadyCmd sets the "ready_cmd" field to the value that was provided on create.
+func (u *EnvBuildUpsert) UpdateReadyCmd() *EnvBuildUpsert {
+	u.SetExcluded(envbuild.FieldReadyCmd)
+	return u
+}
+
+// ClearReadyCmd clears the value of the "ready_cmd" field.
+func (u *EnvBuildUpsert) ClearReadyCmd() *EnvBuildUpsert {
+	u.SetNull(envbuild.FieldReadyCmd)
+	return u
+}
+
 // SetVcpu sets the "vcpu" field.
 func (u *EnvBuildUpsert) SetVcpu(v int64) *EnvBuildUpsert {
 	u.Set(envbuild.FieldVcpu, v)
@@ -668,6 +722,24 @@ func (u *EnvBuildUpsert) UpdateEnvdVersion() *EnvBuildUpsert {
 // ClearEnvdVersion clears the value of the "envd_version" field.
 func (u *EnvBuildUpsert) ClearEnvdVersion() *EnvBuildUpsert {
 	u.SetNull(envbuild.FieldEnvdVersion)
+	return u
+}
+
+// SetClusterNodeID sets the "cluster_node_id" field.
+func (u *EnvBuildUpsert) SetClusterNodeID(v string) *EnvBuildUpsert {
+	u.Set(envbuild.FieldClusterNodeID, v)
+	return u
+}
+
+// UpdateClusterNodeID sets the "cluster_node_id" field to the value that was provided on create.
+func (u *EnvBuildUpsert) UpdateClusterNodeID() *EnvBuildUpsert {
+	u.SetExcluded(envbuild.FieldClusterNodeID)
+	return u
+}
+
+// ClearClusterNodeID clears the value of the "cluster_node_id" field.
+func (u *EnvBuildUpsert) ClearClusterNodeID() *EnvBuildUpsert {
+	u.SetNull(envbuild.FieldClusterNodeID)
 	return u
 }
 
@@ -834,6 +906,27 @@ func (u *EnvBuildUpsertOne) ClearStartCmd() *EnvBuildUpsertOne {
 	})
 }
 
+// SetReadyCmd sets the "ready_cmd" field.
+func (u *EnvBuildUpsertOne) SetReadyCmd(v string) *EnvBuildUpsertOne {
+	return u.Update(func(s *EnvBuildUpsert) {
+		s.SetReadyCmd(v)
+	})
+}
+
+// UpdateReadyCmd sets the "ready_cmd" field to the value that was provided on create.
+func (u *EnvBuildUpsertOne) UpdateReadyCmd() *EnvBuildUpsertOne {
+	return u.Update(func(s *EnvBuildUpsert) {
+		s.UpdateReadyCmd()
+	})
+}
+
+// ClearReadyCmd clears the value of the "ready_cmd" field.
+func (u *EnvBuildUpsertOne) ClearReadyCmd() *EnvBuildUpsertOne {
+	return u.Update(func(s *EnvBuildUpsert) {
+		s.ClearReadyCmd()
+	})
+}
+
 // SetVcpu sets the "vcpu" field.
 func (u *EnvBuildUpsertOne) SetVcpu(v int64) *EnvBuildUpsertOne {
 	return u.Update(func(s *EnvBuildUpsert) {
@@ -971,6 +1064,27 @@ func (u *EnvBuildUpsertOne) UpdateEnvdVersion() *EnvBuildUpsertOne {
 func (u *EnvBuildUpsertOne) ClearEnvdVersion() *EnvBuildUpsertOne {
 	return u.Update(func(s *EnvBuildUpsert) {
 		s.ClearEnvdVersion()
+	})
+}
+
+// SetClusterNodeID sets the "cluster_node_id" field.
+func (u *EnvBuildUpsertOne) SetClusterNodeID(v string) *EnvBuildUpsertOne {
+	return u.Update(func(s *EnvBuildUpsert) {
+		s.SetClusterNodeID(v)
+	})
+}
+
+// UpdateClusterNodeID sets the "cluster_node_id" field to the value that was provided on create.
+func (u *EnvBuildUpsertOne) UpdateClusterNodeID() *EnvBuildUpsertOne {
+	return u.Update(func(s *EnvBuildUpsert) {
+		s.UpdateClusterNodeID()
+	})
+}
+
+// ClearClusterNodeID clears the value of the "cluster_node_id" field.
+func (u *EnvBuildUpsertOne) ClearClusterNodeID() *EnvBuildUpsertOne {
+	return u.Update(func(s *EnvBuildUpsert) {
+		s.ClearClusterNodeID()
 	})
 }
 
@@ -1304,6 +1418,27 @@ func (u *EnvBuildUpsertBulk) ClearStartCmd() *EnvBuildUpsertBulk {
 	})
 }
 
+// SetReadyCmd sets the "ready_cmd" field.
+func (u *EnvBuildUpsertBulk) SetReadyCmd(v string) *EnvBuildUpsertBulk {
+	return u.Update(func(s *EnvBuildUpsert) {
+		s.SetReadyCmd(v)
+	})
+}
+
+// UpdateReadyCmd sets the "ready_cmd" field to the value that was provided on create.
+func (u *EnvBuildUpsertBulk) UpdateReadyCmd() *EnvBuildUpsertBulk {
+	return u.Update(func(s *EnvBuildUpsert) {
+		s.UpdateReadyCmd()
+	})
+}
+
+// ClearReadyCmd clears the value of the "ready_cmd" field.
+func (u *EnvBuildUpsertBulk) ClearReadyCmd() *EnvBuildUpsertBulk {
+	return u.Update(func(s *EnvBuildUpsert) {
+		s.ClearReadyCmd()
+	})
+}
+
 // SetVcpu sets the "vcpu" field.
 func (u *EnvBuildUpsertBulk) SetVcpu(v int64) *EnvBuildUpsertBulk {
 	return u.Update(func(s *EnvBuildUpsert) {
@@ -1441,6 +1576,27 @@ func (u *EnvBuildUpsertBulk) UpdateEnvdVersion() *EnvBuildUpsertBulk {
 func (u *EnvBuildUpsertBulk) ClearEnvdVersion() *EnvBuildUpsertBulk {
 	return u.Update(func(s *EnvBuildUpsert) {
 		s.ClearEnvdVersion()
+	})
+}
+
+// SetClusterNodeID sets the "cluster_node_id" field.
+func (u *EnvBuildUpsertBulk) SetClusterNodeID(v string) *EnvBuildUpsertBulk {
+	return u.Update(func(s *EnvBuildUpsert) {
+		s.SetClusterNodeID(v)
+	})
+}
+
+// UpdateClusterNodeID sets the "cluster_node_id" field to the value that was provided on create.
+func (u *EnvBuildUpsertBulk) UpdateClusterNodeID() *EnvBuildUpsertBulk {
+	return u.Update(func(s *EnvBuildUpsert) {
+		s.UpdateClusterNodeID()
+	})
+}
+
+// ClearClusterNodeID clears the value of the "cluster_node_id" field.
+func (u *EnvBuildUpsertBulk) ClearClusterNodeID() *EnvBuildUpsertBulk {
+	return u.Update(func(s *EnvBuildUpsert) {
+		s.ClearClusterNodeID()
 	})
 }
 

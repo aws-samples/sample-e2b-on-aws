@@ -2,13 +2,20 @@ package instance
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"time"
 
-	"google.golang.org/protobuf/types/known/timestamppb"
+	"go.uber.org/zap"
 
-	analyticscollector "github.com/e2b-dev/infra/packages/api/internal/analytics_collector"
+	"github.com/e2b-dev/infra/packages/api/internal/api"
 )
+
+// TODO: this should be removed once we have a better way to handle node sync
+// Don't remove instances that were started in the grace period on node sync
+// This is to prevent remove instances that are still being started
+const syncSandboxRemoveGracePeriod = 10 * time.Second
 
 func getMaxAllowedTTL(now time.Time, startTime time.Time, duration, maxInstanceLength time.Duration) time.Duration {
 	timeLeft := maxInstanceLength - now.Sub(startTime)
@@ -20,10 +27,10 @@ func getMaxAllowedTTL(now time.Time, startTime time.Time, duration, maxInstanceL
 }
 
 // KeepAliveFor the instance's expiration timer.
-func (c *InstanceCache) KeepAliveFor(instanceID string, duration time.Duration, allowShorter bool) (*InstanceInfo, error) {
+func (c *InstanceCache) KeepAliveFor(instanceID string, duration time.Duration, allowShorter bool) (*InstanceInfo, *api.APIError) {
 	instance, err := c.Get(instanceID)
 	if err != nil {
-		return nil, err
+		return nil, &api.APIError{Code: http.StatusNotFound, ClientMsg: fmt.Sprintf("Sandbox '%s' not found", instanceID), Err: err}
 	}
 
 	now := time.Now()
@@ -36,7 +43,8 @@ func (c *InstanceCache) KeepAliveFor(instanceID string, duration time.Duration, 
 	if (time.Since(instance.StartTime)) > instance.MaxInstanceLength {
 		c.cache.Remove(instanceID)
 
-		return nil, fmt.Errorf("instance \"%s\" reached maximal allowed uptime", instanceID)
+		msg := fmt.Sprintf("Sandbox '%s' reached maximal allowed uptime", instanceID)
+		return nil, &api.APIError{Code: http.StatusForbidden, ClientMsg: msg, Err: errors.New(msg)}
 	} else {
 		maxAllowedTTL := getMaxAllowedTTL(now, instance.StartTime, duration, instance.MaxInstanceLength)
 
@@ -47,10 +55,10 @@ func (c *InstanceCache) KeepAliveFor(instanceID string, duration time.Duration, 
 	return instance, nil
 }
 
-func (c *InstanceCache) Sync(instances []*InstanceInfo, nodeID string) {
+func (c *InstanceCache) Sync(ctx context.Context, instances []*InstanceInfo, nodeID string) {
 	instanceMap := make(map[string]*InstanceInfo)
 
-	// Use map for faster lookup
+	// Use a map for faster lookup
 	for _, instance := range instances {
 		instanceMap[instance.Instance.SandboxID] = instance
 	}
@@ -58,6 +66,9 @@ func (c *InstanceCache) Sync(instances []*InstanceInfo, nodeID string) {
 	// Delete instances that are not in Orchestrator anymore
 	for _, item := range c.cache.Items() {
 		if item.Instance.ClientID != nodeID {
+			continue
+		}
+		if time.Since(item.StartTime) <= syncSandboxRemoveGracePeriod {
 			continue
 		}
 		_, found := instanceMap[item.Instance.SandboxID]
@@ -68,24 +79,12 @@ func (c *InstanceCache) Sync(instances []*InstanceInfo, nodeID string) {
 
 	// Add instances that are not in the cache with the default TTL
 	for _, instance := range instances {
-		if !c.Exists(instance.Instance.SandboxID) {
-			err := c.Add(instance, false)
-			if err != nil {
-				fmt.Println(fmt.Errorf("error adding instance to cache: %w", err))
-			}
+		if c.Exists(instance.Instance.SandboxID) {
+			continue
 		}
-	}
-
-	// Send running instances event to analytics
-	instanceIds := make([]string, len(instances))
-	for i, instance := range instances {
-		instanceIds[i] = instance.Instance.SandboxID
-	}
-
-	go func() {
-		_, err := c.analytics.RunningInstances(context.Background(), &analyticscollector.RunningInstancesEvent{InstanceIds: instanceIds, Timestamp: timestamppb.Now()})
+		err := c.Add(ctx, instance, false)
 		if err != nil {
-			c.logger.Errorf("Error sending running instances event to analytics\n: %v", err)
+			zap.L().Error("error adding instance to cache", zap.Error(err))
 		}
-	}()
+	}
 }

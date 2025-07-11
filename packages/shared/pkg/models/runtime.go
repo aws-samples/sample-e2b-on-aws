@@ -5,6 +5,8 @@ package models
 import (
 	"time"
 
+	"github.com/e2b-dev/infra/packages/shared/pkg/models/accesstoken"
+	"github.com/e2b-dev/infra/packages/shared/pkg/models/cluster"
 	"github.com/e2b-dev/infra/packages/shared/pkg/models/env"
 	"github.com/e2b-dev/infra/packages/shared/pkg/models/envalias"
 	"github.com/e2b-dev/infra/packages/shared/pkg/models/envbuild"
@@ -20,6 +22,26 @@ import (
 // (default values, validators, hooks and policies) and stitches it
 // to their package variables.
 func init() {
+	accesstokenFields := schema.AccessToken{}.Fields()
+	_ = accesstokenFields
+	// accesstokenDescName is the schema descriptor for name field.
+	accesstokenDescName := accesstokenFields[7].Descriptor()
+	// accesstoken.DefaultName holds the default value on creation for the name field.
+	accesstoken.DefaultName = accesstokenDescName.Default.(string)
+	clusterFields := schema.Cluster{}.Fields()
+	_ = clusterFields
+	// clusterDescEndpoint is the schema descriptor for endpoint field.
+	clusterDescEndpoint := clusterFields[1].Descriptor()
+	// cluster.EndpointValidator is a validator for the "endpoint" field. It is called by the builders before save.
+	cluster.EndpointValidator = clusterDescEndpoint.Validators[0].(func(string) error)
+	// clusterDescEndpointTLS is the schema descriptor for endpoint_tls field.
+	clusterDescEndpointTLS := clusterFields[2].Descriptor()
+	// cluster.DefaultEndpointTLS holds the default value on creation for the endpoint_tls field.
+	cluster.DefaultEndpointTLS = clusterDescEndpointTLS.Default.(bool)
+	// clusterDescToken is the schema descriptor for token field.
+	clusterDescToken := clusterFields[3].Descriptor()
+	// cluster.TokenValidator is a validator for the "token" field. It is called by the builders before save.
+	cluster.TokenValidator = clusterDescToken.Validators[0].(func(string) error)
 	envFields := schema.Env{}.Fields()
 	_ = envFields
 	// envDescCreatedAt is the schema descriptor for created_at field.
@@ -55,11 +77,11 @@ func init() {
 	// envbuild.DefaultUpdatedAt holds the default value on creation for the updated_at field.
 	envbuild.DefaultUpdatedAt = envbuildDescUpdatedAt.Default.(func() time.Time)
 	// envbuildDescKernelVersion is the schema descriptor for kernel_version field.
-	envbuildDescKernelVersion := envbuildFields[12].Descriptor()
+	envbuildDescKernelVersion := envbuildFields[13].Descriptor()
 	// envbuild.DefaultKernelVersion holds the default value on creation for the kernel_version field.
 	envbuild.DefaultKernelVersion = envbuildDescKernelVersion.Default.(string)
 	// envbuildDescFirecrackerVersion is the schema descriptor for firecracker_version field.
-	envbuildDescFirecrackerVersion := envbuildFields[13].Descriptor()
+	envbuildDescFirecrackerVersion := envbuildFields[14].Descriptor()
 	// envbuild.DefaultFirecrackerVersion holds the default value on creation for the firecracker_version field.
 	envbuild.DefaultFirecrackerVersion = envbuildDescFirecrackerVersion.Default.(string)
 	snapshotFields := schema.Snapshot{}.Fields()
@@ -68,6 +90,10 @@ func init() {
 	snapshotDescCreatedAt := snapshotFields[1].Descriptor()
 	// snapshot.DefaultCreatedAt holds the default value on creation for the created_at field.
 	snapshot.DefaultCreatedAt = snapshotDescCreatedAt.Default.(func() time.Time)
+	// snapshotDescEnvSecure is the schema descriptor for env_secure field.
+	snapshotDescEnvSecure := snapshotFields[7].Descriptor()
+	// snapshot.DefaultEnvSecure holds the default value on creation for the env_secure field.
+	snapshot.DefaultEnvSecure = snapshotDescEnvSecure.Default.(bool)
 	teamFields := schema.Team{}.Fields()
 	_ = teamFields
 	// teamDescCreatedAt is the schema descriptor for created_at field.
@@ -81,11 +107,11 @@ func init() {
 	teamapikeyFields := schema.TeamAPIKey{}.Fields()
 	_ = teamapikeyFields
 	// teamapikeyDescCreatedAt is the schema descriptor for created_at field.
-	teamapikeyDescCreatedAt := teamapikeyFields[2].Descriptor()
+	teamapikeyDescCreatedAt := teamapikeyFields[7].Descriptor()
 	// teamapikey.DefaultCreatedAt holds the default value on creation for the created_at field.
 	teamapikey.DefaultCreatedAt = teamapikeyDescCreatedAt.Default.(func() time.Time)
 	// teamapikeyDescName is the schema descriptor for name field.
-	teamapikeyDescName := teamapikeyFields[5].Descriptor()
+	teamapikeyDescName := teamapikeyFields[10].Descriptor()
 	// teamapikey.DefaultName holds the default value on creation for the name field.
 	teamapikey.DefaultName = teamapikeyDescName.Default.(string)
 	userFields := schema.User{}.Fields()

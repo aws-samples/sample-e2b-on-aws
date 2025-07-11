@@ -3,6 +3,7 @@ package db
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"entgo.io/ent/dialect"
 	"entgo.io/ent/dialect/sql"
@@ -15,9 +16,9 @@ type DB struct {
 	Client *models.Client
 }
 
-var databaseURL = os.Getenv("CFNDBURL")
+var databaseURL = os.Getenv("POSTGRES_CONNECTION_STRING")
 
-func NewClient() (*DB, error) {
+func NewClient(maxConns, maxIdle int) (*DB, error) {
 	if databaseURL == "" {
 		return nil, fmt.Errorf("database URL is empty")
 	}
@@ -29,7 +30,9 @@ func NewClient() (*DB, error) {
 
 	// Get the underlying sql.DB object of the driver.
 	db := drv.DB()
-	db.SetMaxOpenConns(100)
+	db.SetMaxOpenConns(maxConns)
+	db.SetMaxIdleConns(maxIdle)
+	db.SetConnMaxLifetime(time.Minute * 30)
 
 	client := models.NewClient(models.Driver(drv))
 

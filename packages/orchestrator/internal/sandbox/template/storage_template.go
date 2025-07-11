@@ -3,30 +3,27 @@ package template
 import (
 	"context"
 	"fmt"
-	"os"
 	"sync"
 
+	"github.com/e2b-dev/infra/packages/orchestrator/internal/sandbox/block"
 	"github.com/e2b-dev/infra/packages/orchestrator/internal/sandbox/build"
 	"github.com/e2b-dev/infra/packages/shared/pkg/storage"
 	"github.com/e2b-dev/infra/packages/shared/pkg/storage/header"
-	"github.com/e2b-dev/infra/packages/shared/pkg/storage/s3"
 	"github.com/e2b-dev/infra/packages/shared/pkg/utils"
 )
 
 type storageTemplate struct {
 	files *storage.TemplateCacheFiles
 
-	memfile  *utils.SetOnce[*Storage]
-	rootfs   *utils.SetOnce[*Storage]
+	memfile  *utils.SetOnce[block.ReadonlyDevice]
+	rootfs   *utils.SetOnce[block.ReadonlyDevice]
 	snapfile *utils.SetOnce[File]
-
-	isSnapshot bool
 
 	memfileHeader *header.Header
 	rootfsHeader  *header.Header
-	localSnapfile *LocalFile
+	localSnapfile *LocalFileLink
 
-	bucket *s3.BucketHandle
+	persistence storage.StorageProvider
 }
 
 func newTemplateFromStorage(
@@ -34,19 +31,16 @@ func newTemplateFromStorage(
 	buildId,
 	kernelVersion,
 	firecrackerVersion string,
-	hugePages bool,
-	isSnapshot bool,
 	memfileHeader *header.Header,
 	rootfsHeader *header.Header,
-	bucket *s3.BucketHandle,
-	localSnapfile *LocalFile,
+	persistence storage.StorageProvider,
+	localSnapfile *LocalFileLink,
 ) (*storageTemplate, error) {
 	files, err := storage.NewTemplateFiles(
 		templateId,
 		buildId,
 		kernelVersion,
 		firecrackerVersion,
-		hugePages,
 	).NewTemplateCacheFiles()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create template cache files: %w", err)
@@ -55,28 +49,16 @@ func newTemplateFromStorage(
 	return &storageTemplate{
 		files:         files,
 		localSnapfile: localSnapfile,
-		isSnapshot:    isSnapshot,
 		memfileHeader: memfileHeader,
 		rootfsHeader:  rootfsHeader,
-		bucket:        bucket,
-		memfile:       utils.NewSetOnce[*Storage](),
-		rootfs:        utils.NewSetOnce[*Storage](),
+		persistence:   persistence,
+		memfile:       utils.NewSetOnce[block.ReadonlyDevice](),
+		rootfs:        utils.NewSetOnce[block.ReadonlyDevice](),
 		snapfile:      utils.NewSetOnce[File](),
 	}, nil
 }
 
 func (t *storageTemplate) Fetch(ctx context.Context, buildStore *build.DiffStore) {
-	err := os.MkdirAll(t.files.CacheDir(), os.ModePerm)
-	if err != nil {
-		errMsg := fmt.Errorf("failed to create directory %s: %w", t.files.CacheDir(), err)
-
-		t.memfile.SetError(errMsg)
-		t.rootfs.SetError(errMsg)
-		t.snapfile.SetError(errMsg)
-
-		return
-	}
-
 	var wg sync.WaitGroup
 
 	wg.Add(1)
@@ -88,7 +70,7 @@ func (t *storageTemplate) Fetch(ctx context.Context, buildStore *build.DiffStore
 
 		snapfile, snapfileErr := newStorageFile(
 			ctx,
-			t.bucket,
+			t.persistence,
 			t.files.StorageSnapfilePath(),
 			t.files.CacheSnapfilePath(),
 		)
@@ -110,11 +92,10 @@ func (t *storageTemplate) Fetch(ctx context.Context, buildStore *build.DiffStore
 			buildStore,
 			t.files.BuildId,
 			build.Memfile,
-			t.files.MemfilePageSize(),
-			t.isSnapshot,
 			t.memfileHeader,
-			t.bucket,
+			t.persistence,
 		)
+
 		if memfileErr != nil {
 			errMsg := fmt.Errorf("failed to create memfile storage: %w", memfileErr)
 
@@ -133,10 +114,8 @@ func (t *storageTemplate) Fetch(ctx context.Context, buildStore *build.DiffStore
 			buildStore,
 			t.files.BuildId,
 			build.Rootfs,
-			t.files.RootfsBlockSize(),
-			t.isSnapshot,
 			t.rootfsHeader,
-			t.bucket,
+			t.persistence,
 		)
 		if rootfsErr != nil {
 			errMsg := fmt.Errorf("failed to create rootfs storage: %w", rootfsErr)
@@ -158,11 +137,11 @@ func (t *storageTemplate) Files() *storage.TemplateCacheFiles {
 	return t.files
 }
 
-func (t *storageTemplate) Memfile() (*Storage, error) {
+func (t *storageTemplate) Memfile() (block.ReadonlyDevice, error) {
 	return t.memfile.Wait()
 }
 
-func (t *storageTemplate) Rootfs() (*Storage, error) {
+func (t *storageTemplate) Rootfs() (block.ReadonlyDevice, error) {
 	return t.rootfs.Wait()
 }
 

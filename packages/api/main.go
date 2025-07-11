@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -19,19 +20,25 @@ import (
 	"github.com/getkin/kin-openapi/openapi3filter"
 	"github.com/gin-contrib/cors"
 	limits "github.com/gin-contrib/size"
+	ginzap "github.com/gin-contrib/zap"
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	middleware "github.com/oapi-codegen/gin-middleware"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 
 	"github.com/e2b-dev/infra/packages/api/internal/api"
 	"github.com/e2b-dev/infra/packages/api/internal/auth"
+	authcache "github.com/e2b-dev/infra/packages/api/internal/cache/auth"
 	"github.com/e2b-dev/infra/packages/api/internal/handlers"
+	customMiddleware "github.com/e2b-dev/infra/packages/api/internal/middleware"
+	metricsMiddleware "github.com/e2b-dev/infra/packages/api/internal/middleware/otel/metrics"
+	tracingMiddleware "github.com/e2b-dev/infra/packages/api/internal/middleware/otel/tracing"
 	"github.com/e2b-dev/infra/packages/api/internal/utils"
 	"github.com/e2b-dev/infra/packages/shared/pkg/env"
+	l "github.com/e2b-dev/infra/packages/shared/pkg/logger"
+	sbxlogger "github.com/e2b-dev/infra/packages/shared/pkg/logger/sandbox"
 	"github.com/e2b-dev/infra/packages/shared/pkg/telemetry"
-
-	customMiddleware "github.com/e2b-dev/infra/packages/shared/pkg/gin_utils/middleware"
-	metricsMiddleware "github.com/e2b-dev/infra/packages/shared/pkg/gin_utils/middleware/otel/metrics"
-	tracingMiddleware "github.com/e2b-dev/infra/packages/shared/pkg/gin_utils/middleware/otel/tracing"
 )
 
 const (
@@ -39,16 +46,21 @@ const (
 	maxMultipartMemory = 1 << 27 // 128 MiB
 	maxUploadLimit     = 1 << 28 // 256 MiB
 
-	maxReadHeaderTimeout = 60 * time.Second
-	maxReadTimeout       = 75 * time.Second
-	maxWriteTimeout      = 75 * time.Second
+	maxReadTimeout  = 75 * time.Second
+	maxWriteTimeout = 75 * time.Second
+	// This timeout should be > 600 (GCP LB upstream idle timeout) to prevent race condition
+	// https://cloud.google.com/load-balancing/docs/https#timeouts_and_retries%23:~:text=The%20load%20balancer%27s%20backend%20keepalive,is%20greater%20than%20600%20seconds
+	idleTimeout = 620 * time.Second
 
 	defaultPort = 80
 )
 
-var commitSHA string
+var (
+	commitSHA                  string
+	expectedMigrationTimestamp string
+)
 
-func NewGinServer(ctx context.Context, apiStore *handlers.APIStore, swagger *openapi3.T, port int) *http.Server {
+func NewGinServer(ctx context.Context, tel *telemetry.Client, logger *zap.Logger, apiStore *handlers.APIStore, swagger *openapi3.T, port int) *http.Server {
 	// Clear out the servers array in the swagger spec, that skips validating
 	// that server names match. We don't know how this thing will be run.
 	swagger.Servers = nil
@@ -57,18 +69,19 @@ func NewGinServer(ctx context.Context, apiStore *handlers.APIStore, swagger *ope
 
 	r.Use(
 		// We use custom otel gin middleware because we want to log 4xx errors in the otel
-		customMiddleware.ExcludeRoutes(tracingMiddleware.Middleware(serviceName),
+		customMiddleware.ExcludeRoutes(
+			tracingMiddleware.Middleware(tel.TracerProvider, serviceName),
 			"/health",
 			"/sandboxes/:sandboxID/refreshes",
 			"/templates/:templateID/builds/:buildID/logs",
 			"/templates/:templateID/builds/:buildID/status",
 		),
-		customMiddleware.IncludeRoutes(metricsMiddleware.Middleware(serviceName), "/sandboxes"),
-		customMiddleware.ExcludeRoutes(gin.LoggerWithWriter(gin.DefaultWriter),
-			"/health",
-			"/sandboxes/:sandboxID/refreshes",
-			"/templates/:templateID/builds/:buildID/logs",
-			"/templates/:templateID/builds/:buildID/status",
+		customMiddleware.IncludeRoutes(
+			metricsMiddleware.Middleware(tel.MeterProvider, serviceName),
+			"/sandboxes",
+			"/sandboxes/:sandboxID",
+			"/sandboxes/:sandboxID/pause",
+			"/sandboxes/:sandboxID/resume",
 		),
 		gin.Recovery(),
 	)
@@ -84,6 +97,9 @@ func NewGinServer(ctx context.Context, apiStore *handlers.APIStore, swagger *ope
 		// API Key header
 		"Authorization",
 		"X-API-Key",
+		// Supabase headers
+		"X-Supabase-Token",
+		"X-Supabase-Team",
 		// Custom headers sent from SDK
 		"browser",
 		"lang",
@@ -104,6 +120,8 @@ func NewGinServer(ctx context.Context, apiStore *handlers.APIStore, swagger *ope
 		apiStore.Tracer,
 		apiStore.GetTeamFromAPIKey,
 		apiStore.GetUserFromAccessToken,
+		apiStore.GetUserIDFromSupabaseToken,
+		apiStore.GetTeamFromSupabaseToken,
 	)
 
 	// Use our validation middleware to check all requests against the
@@ -112,31 +130,66 @@ func NewGinServer(ctx context.Context, apiStore *handlers.APIStore, swagger *ope
 		limits.RequestSizeLimiter(maxUploadLimit),
 		middleware.OapiRequestValidatorWithOptions(swagger,
 			&middleware.Options{
-				ErrorHandler: utils.ErrorHandler,
+				ErrorHandler:      utils.ErrorHandler,
+				MultiErrorHandler: utils.MultiErrorHandler,
 				Options: openapi3filter.Options{
 					AuthenticationFunc: AuthenticationFunc,
+					// Handle multiple errors as MultiError type
+					MultiError: true,
 				},
 			}),
 	)
 
+	r.Use(
+		// Request logging must be executed after authorization (if required) is done,
+		// so that we can log team ID.
+		customMiddleware.ExcludeRoutes(
+			func(c *gin.Context) {
+				teamID := ""
+
+				// Get team from context, use TeamContextKey
+				teamInfo := c.Value(auth.TeamContextKey)
+				if teamInfo != nil {
+					teamID = teamInfo.(authcache.AuthTeamInfo).Team.ID.String()
+				}
+
+				reqLogger := logger
+				if teamID != "" {
+					reqLogger = logger.With(l.WithTeamID(teamID))
+				}
+
+				ginzap.Ginzap(reqLogger, time.RFC3339Nano, true)(c)
+			},
+			"/health",
+			"/sandboxes/:sandboxID/refreshes",
+			"/templates/:templateID/builds/:buildID/logs",
+			"/templates/:templateID/builds/:buildID/status",
+		),
+	)
+
 	// We now register our store above as the handler for the interface
-	api.RegisterHandlers(r, apiStore)
+	api.RegisterHandlersWithOptions(r, apiStore, api.GinServerOptions{
+		ErrorHandler: func(c *gin.Context, err error, statusCode int) {
+			utils.ErrorHandler(c, err.Error(), statusCode)
+		},
+	})
 
 	r.MaxMultipartMemory = maxMultipartMemory
 
 	s := &http.Server{
-		Handler:           r,
-		Addr:              fmt.Sprintf("0.0.0.0:%d", port),
-		ReadHeaderTimeout: maxReadHeaderTimeout,
-		ReadTimeout:       maxReadTimeout,
-		WriteTimeout:      maxWriteTimeout,
-		BaseContext:       func(net.Listener) context.Context { return ctx },
+		Handler: r,
+		Addr:    fmt.Sprintf("0.0.0.0:%d", port),
+		// Configure timeouts to be greater than the proxy timeouts.
+		ReadTimeout:  maxReadTimeout,
+		WriteTimeout: maxWriteTimeout,
+		IdleTimeout:  idleTimeout,
+		BaseContext:  func(net.Listener) context.Context { return ctx },
 	}
 
 	return s
 }
 
-func main() {
+func run() int {
 	ctx, cancel := context.WithCancel(context.Background()) // root context
 	defer cancel()
 
@@ -153,10 +206,75 @@ func main() {
 		debug string
 	)
 	flag.IntVar(&port, "port", defaultPort, "Port for test HTTP server")
-	flag.StringVar(&debug, "true", "false", "is debug")
+	flag.StringVar(&debug, "debug", "false", "is debug")
 	flag.Parse()
 
-	log.Println("Starting API service...", "commit_sha", commitSHA)
+	instanceID := uuid.New().String()
+	var tel *telemetry.Client
+	if env.IsLocal() {
+		tel = telemetry.NewNoopClient()
+	} else {
+		var err error
+		tel, err = telemetry.New(ctx, serviceName, commitSHA, instanceID)
+		if err != nil {
+			zap.L().Fatal("failed to create metrics exporter", zap.Error(err))
+		}
+	}
+	defer func() {
+		err := tel.Shutdown(ctx)
+		if err != nil {
+			log.Printf("telemetry shutdown:%v\n", err)
+		}
+	}()
+
+	logger := zap.Must(l.NewLogger(ctx, l.LoggerConfig{
+		ServiceName:   serviceName,
+		IsInternal:    true,
+		IsDebug:       env.IsDebug(),
+		Cores:         []zapcore.Core{l.GetOTELCore(tel.LogsProvider, serviceName)},
+		EnableConsole: true,
+	}))
+	defer logger.Sync()
+	zap.ReplaceGlobals(logger)
+
+	sbxLoggerExternal := sbxlogger.NewLogger(
+		ctx,
+		tel.LogsProvider,
+		sbxlogger.SandboxLoggerConfig{
+			ServiceName:      serviceName,
+			IsInternal:       false,
+			CollectorAddress: os.Getenv("LOGS_COLLECTOR_ADDRESS"),
+		},
+	)
+	defer sbxLoggerExternal.Sync()
+	sbxlogger.SetSandboxLoggerExternal(sbxLoggerExternal)
+
+	sbxLoggerInternal := sbxlogger.NewLogger(
+		ctx,
+		tel.LogsProvider,
+		sbxlogger.SandboxLoggerConfig{
+			ServiceName:      serviceName,
+			IsInternal:       true,
+			CollectorAddress: os.Getenv("LOGS_COLLECTOR_ADDRESS"),
+		},
+	)
+	defer sbxLoggerInternal.Sync()
+	sbxlogger.SetSandboxLoggerInternal(sbxLoggerInternal)
+
+	// Convert the string expectedMigrationTimestamp  to a int64
+	expectedMigration, err := strconv.ParseInt(expectedMigrationTimestamp, 10, 64)
+	if err != nil {
+		// If expectedMigrationTimestamp is not set, we set it to 0
+		logger.Warn("Failed to parse expected migration timestamp", zap.Error(err))
+		expectedMigration = 0
+	}
+
+	err = utils.CheckMigrationVersion(expectedMigration)
+	if err != nil {
+		logger.Fatal("failed to check migration version", zap.Error(err))
+	}
+
+	logger.Info("Starting API service...", zap.String("commit_sha", commitSHA), zap.String("instance_id", instanceID))
 	if debug != "true" {
 		gin.SetMode(gin.ReleaseMode)
 	}
@@ -165,7 +283,8 @@ func main() {
 	if err != nil {
 		// this will call os.Exit: defers won't run, but none
 		// need to yet. Change this if this is called later.
-		log.Fatalf("Error loading swagger spec:\n%v", err)
+		logger.Error("Error loading swagger spec", zap.Error(err))
+		return 1
 	}
 
 	var cleanupFns []func(context.Context) error
@@ -193,7 +312,7 @@ func main() {
 					defer cwg.Done()
 					if err := op(ctx); err != nil {
 						exitCode.Add(1)
-						log.Printf("cleanup operation %d, error: %v", idx, err)
+						logger.Error("Cleanup operation error", zap.Int("index", idx), zap.Error(err))
 					}
 				}(cleanup, idx)
 
@@ -201,29 +320,25 @@ func main() {
 			}
 		}
 		if count == 0 {
-			log.Println("no cleanup operations")
+			logger.Info("no cleanup operations")
 			return
 		}
-		log.Printf("running %d cleanup operations", count)
+		logger.Info("Running cleanup operations", zap.Int("count", count))
 		cwg.Wait() // this doesn't have a timeout
-		log.Printf("%d cleanup operations completed in %s", count, time.Since(start))
+		logger.Info("Cleanup operations completed", zap.Int("count", count), zap.Duration("duration", time.Since(start)))
 	}
 	cleanupOnce := &sync.Once{}
 	cleanup := func() { cleanupOnce.Do(cleanupOp) }
 	defer cleanup()
 
-	if !env.IsLocal() {
-		cleanupFns = append(cleanupFns, telemetry.InitOTLPExporter(ctx, serviceName, swagger.Info.Version))
-	}
-
 	// Create an instance of our handler which satisfies the generated interface
 	//  (use the outer context rather than the signal handling
 	//   context so it doesn't exit first.)
-	apiStore := handlers.NewAPIStore(ctx)
+	apiStore := handlers.NewAPIStore(ctx, tel)
 	cleanupFns = append(cleanupFns, apiStore.Close)
 
 	// pass the signal context so that handlers know when shutdown is happening.
-	s := NewGinServer(ctx, apiStore, swagger, port)
+	s := NewGinServer(ctx, tel, logger, apiStore, swagger, port)
 
 	// ////////////////////////
 	//
@@ -254,22 +369,21 @@ func main() {
 		// signaled.
 		defer cancel()
 
-		log.Printf("http service (%d) starting", port)
+		logger.Info("Http service starting", zap.Int("port", port))
 
 		// Serve HTTP until shutdown.
 		err := s.ListenAndServe()
 
 		switch {
 		case errors.Is(err, http.ErrServerClosed):
-			log.Printf("http service (%d) shutdown successfully", port)
+			logger.Info("Http service shutdown successfully", zap.Int("port", port))
 		case err != nil:
 			exitCode.Add(1)
-			log.Printf("http service (%d) encountered error: %v", port, err)
+			logger.Error("Http service encountered error", zap.Int("port", port), zap.Error(err))
 		default:
 			// this probably shouldn't happen...
-			log.Printf("http service (%d) exited without error", port)
+			logger.Info("Http service exited without error", zap.Int("port", port))
 		}
-
 	}()
 
 	wg.Add(1)
@@ -282,7 +396,11 @@ func main() {
 		// This is a bit of a hack, but this way we can properly propagate
 		// the health status to the load balancer.
 		apiStore.Healthy = false
-		time.Sleep(15 * time.Second)
+
+		// Skip the delay in local environment for instant shutdown
+		if !env.IsLocal() {
+			time.Sleep(15 * time.Second)
+		}
 
 		// if the parent context `ctx` is canceled the
 		// shutdown will return early. This should only happen
@@ -294,9 +412,8 @@ func main() {
 
 		if err := s.Shutdown(ctx); err != nil {
 			exitCode.Add(1)
-			log.Printf("http service (%d) shutdown error: %v", port, err)
+			logger.Error("Http service shutdown error", zap.Int("port", port), zap.Error(err))
 		}
-
 	}()
 
 	// wait for the HTTP service to complete shutting down first
@@ -317,5 +434,9 @@ func main() {
 	// coordinator running to manage and track that work.
 
 	// Exit, with appropriate code.
-	os.Exit(int(exitCode.Load()))
+	return int(exitCode.Load())
+}
+
+func main() {
+	os.Exit(run())
 }

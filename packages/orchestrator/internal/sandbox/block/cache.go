@@ -8,9 +8,11 @@ import (
 	"sort"
 	"sync"
 	"sync/atomic"
+	"syscall"
 
 	"github.com/bits-and-blooms/bitset"
 	"github.com/edsrzf/mmap-go"
+	"go.uber.org/zap"
 	"golang.org/x/sys/unix"
 
 	"github.com/e2b-dev/infra/packages/shared/pkg/storage/header"
@@ -74,7 +76,7 @@ func (m *Cache) isClosed() bool {
 	return m.closed.Load()
 }
 
-func (m *Cache) Export(out io.Writer) (*bitset.BitSet, error) {
+func (m *Cache) ExportToDiff(out io.Writer) (*header.DiffMetadata, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -87,22 +89,37 @@ func (m *Cache) Export(out io.Writer) (*bitset.BitSet, error) {
 		return nil, fmt.Errorf("error flushing mmap: %w", err)
 	}
 
-	tracked := bitset.New(uint(header.TotalBlocks(m.size, m.blockSize)))
+	dirty := bitset.New(uint(header.TotalBlocks(m.size, m.blockSize)))
+	empty := bitset.New(0)
 
 	for _, key := range m.dirtySortedKeys() {
-		block := header.BlockIdx(key, m.blockSize)
+		blockIdx := header.BlockIdx(key, m.blockSize)
 
-		tracked.Set(uint(block))
-
-		_, err := out.Write((*m.mmap)[key : key+m.blockSize])
+		block := (*m.mmap)[key : key+m.blockSize]
+		isEmpty, err := header.IsEmptyBlock(block, m.blockSize)
 		if err != nil {
-			fmt.Printf("error writing to out: %v\n", err)
+			return nil, fmt.Errorf("error checking empty block: %w", err)
+		}
+		if isEmpty {
+			empty.Set(uint(blockIdx))
+			continue
+		}
+
+		dirty.Set(uint(blockIdx))
+		_, err = out.Write(block)
+		if err != nil {
+			zap.L().Error("error writing to out", zap.Error(err))
 
 			return nil, err
 		}
 	}
 
-	return tracked, nil
+	return &header.DiffMetadata{
+		Dirty: dirty,
+		Empty: empty,
+
+		BlockSize: m.blockSize,
+	}, nil
 }
 
 func (m *Cache) ReadAt(b []byte, off int64) (int, error) {
@@ -132,7 +149,7 @@ func (m *Cache) WriteAt(b []byte, off int64) (int, error) {
 	return m.WriteAtWithoutLock(b, off)
 }
 
-func (m *Cache) Close() error {
+func (m *Cache) Close() (e error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -141,10 +158,15 @@ func (m *Cache) Close() error {
 		return NewErrCacheClosed(m.filePath)
 	}
 
-	return errors.Join(
-		m.mmap.Unmap(),
-		os.RemoveAll(m.filePath),
-	)
+	err := m.mmap.Unmap()
+	if err != nil {
+		e = errors.Join(e, fmt.Errorf("error unmapping mmap: %w", err))
+	}
+
+	// TODO: Move to to the scope of the caller
+	e = errors.Join(e, os.RemoveAll(m.filePath))
+
+	return e
 }
 
 func (m *Cache) Size() (int64, error) {
@@ -222,4 +244,26 @@ func (m *Cache) dirtySortedKeys() []int64 {
 	})
 
 	return keys
+}
+
+func (m *Cache) MarkAllAsDirty() {
+	m.setIsCached(0, m.size)
+}
+
+// FileSize returns the size of the cache on disk.
+// The size might differ from the dirty size, as it may not be fully on disk.
+func (m *Cache) FileSize() (int64, error) {
+	var stat syscall.Stat_t
+	err := syscall.Stat(m.filePath, &stat)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get file stats: %w", err)
+	}
+
+	var fsStat syscall.Statfs_t
+	err = syscall.Statfs(m.filePath, &fsStat)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get disk stats for path %s: %w", m.filePath, err)
+	}
+
+	return int64(stat.Blocks) * int64(fsStat.Bsize), nil
 }

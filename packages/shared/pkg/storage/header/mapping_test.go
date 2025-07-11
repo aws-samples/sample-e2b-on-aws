@@ -4,13 +4,14 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
-
 	"github.com/stretchr/testify/require"
 )
 
-var ignoreID = uuid.Nil
-var baseID = uuid.New()
-var diffID = uuid.New()
+var (
+	ignoreID = uuid.Nil
+	baseID   = uuid.New()
+	diffID   = uuid.New()
+)
 
 var blockSize = uint64(2 << 20)
 

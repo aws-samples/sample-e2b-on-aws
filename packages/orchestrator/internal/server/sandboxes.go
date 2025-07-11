@@ -4,31 +4,30 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
-	"os"
-	"sync"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/launchdarkly/go-sdk-common/v3/ldcontext"
 	"go.opentelemetry.io/otel/attribute"
-	"golang.org/x/sync/semaphore"
+	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"github.com/e2b-dev/infra/packages/orchestrator/internal/consul"
+	"github.com/e2b-dev/infra/packages/orchestrator/internal/config"
 	"github.com/e2b-dev/infra/packages/orchestrator/internal/sandbox"
 	"github.com/e2b-dev/infra/packages/orchestrator/internal/sandbox/build"
+	featureflags "github.com/e2b-dev/infra/packages/shared/pkg/feature-flags"
 	"github.com/e2b-dev/infra/packages/shared/pkg/grpc/orchestrator"
-	"github.com/e2b-dev/infra/packages/shared/pkg/logs"
+	"github.com/e2b-dev/infra/packages/shared/pkg/logger"
+	sbxlogger "github.com/e2b-dev/infra/packages/shared/pkg/logger/sandbox"
 	"github.com/e2b-dev/infra/packages/shared/pkg/storage"
 	"github.com/e2b-dev/infra/packages/shared/pkg/telemetry"
 )
 
 const (
 	requestTimeout = 60 * time.Second
-
-	maxParalellSnapshotting = 8
 )
 
 func (s *server) Create(ctxConn context.Context, req *orchestrator.SandboxCreateRequest) (*orchestrator.SandboxCreateResponse, error) {
@@ -39,66 +38,86 @@ func (s *server) Create(ctxConn context.Context, req *orchestrator.SandboxCreate
 	defer childSpan.End()
 
 	childSpan.SetAttributes(
-		attribute.String("template.id", req.Sandbox.TemplateId),
+		telemetry.WithTemplateID(req.Sandbox.TemplateId),
 		attribute.String("kernel.version", req.Sandbox.KernelVersion),
-		attribute.String("sandbox.id", req.Sandbox.SandboxId),
-		attribute.String("client.id", consul.ClientID),
+		telemetry.WithSandboxID(req.Sandbox.SandboxId),
+		attribute.String("client.id", s.info.ClientId),
 		attribute.String("envd.version", req.Sandbox.EnvdVersion),
 	)
 
-	logger := logs.NewSandboxLogger(
-		req.Sandbox.SandboxId,
-		req.Sandbox.TemplateId,
-		req.Sandbox.TeamId,
-		req.Sandbox.Vcpu,
-		req.Sandbox.RamMb,
-		false,
-	)
+	// TODO: Temporary workaround, remove API changes deployed
+	if req.Sandbox.GetExecutionId() == "" {
+		req.Sandbox.ExecutionId = uuid.New().String()
+	}
 
-	sbx, cleanup, err := sandbox.NewSandbox(
+	flagCtx := ldcontext.NewBuilder(featureflags.MetricsWriteFlagName).SetString("sandbox_id", req.Sandbox.SandboxId).Build()
+	metricsWriteFlag, flagErr := s.featureFlags.Ld.BoolVariation(featureflags.MetricsWriteFlagName, flagCtx, featureflags.MetricsWriteDefault)
+	if flagErr != nil {
+		zap.L().Error("soft failing during metrics write feature flag receive", zap.Error(flagErr))
+	}
+
+	sbx, cleanup, err := sandbox.ResumeSandbox(
 		childCtx,
 		s.tracer,
-		s.dns,
 		s.networkPool,
 		s.templateCache,
 		req.Sandbox,
 		childSpan.SpanContext().TraceID().String(),
 		req.StartTime.AsTime(),
 		req.EndTime.AsTime(),
-		logger,
-		req.Sandbox.Snapshot,
 		req.Sandbox.BaseTemplateId,
+		s.devicePool,
+		config.AllowSandboxInternet,
+		metricsWriteFlag,
 	)
 	if err != nil {
-		log.Printf("failed to create sandbox -> clean up: %v", err)
-		cleanupErr := cleanup.Run()
+		zap.L().Error("failed to create sandbox, cleaning up", zap.Error(err))
+		cleanupErr := cleanup.Run(ctx)
 
-		errMsg := fmt.Errorf("failed to create sandbox: %w", errors.Join(err, context.Cause(ctx), cleanupErr))
-		telemetry.ReportCriticalError(ctx, errMsg)
+		err := errors.Join(err, context.Cause(ctx), cleanupErr)
+		telemetry.ReportCriticalError(ctx, "failed to cleanup sandbox", err)
 
-		return nil, status.New(codes.Internal, errMsg.Error()).Err()
+		return nil, status.Errorf(codes.Internal, "failed to cleanup sandbox: %s", err)
 	}
 
 	s.sandboxes.Insert(req.Sandbox.SandboxId, sbx)
-
 	go func() {
-		waitErr := sbx.Wait()
+		ctx, childSpan := s.tracer.Start(context.Background(), "sandbox-create-stop")
+		defer childSpan.End()
+
+		waitErr := sbx.Wait(ctx)
 		if waitErr != nil {
-			fmt.Fprintf(os.Stderr, "failed to wait for Sandbox: %v\n", waitErr)
+			sbxlogger.I(sbx).Error("failed to wait for sandbox, cleaning up", zap.Error(waitErr))
 		}
 
-		cleanupErr := cleanup.Run()
+		cleanupErr := cleanup.Run(ctx)
 		if cleanupErr != nil {
-			fmt.Fprintf(os.Stderr, "failed to cleanup Sandbox: %v\n", cleanupErr)
+			sbxlogger.I(sbx).Error("failed to cleanup sandbox, will remove from cache", zap.Error(cleanupErr))
 		}
 
-		s.sandboxes.Remove(req.Sandbox.SandboxId)
+		// Remove the sandbox from cache only if the cleanup IDs match.
+		// This prevents us from accidentally removing started sandbox (via resume) from the cache if cleanup is taking longer than the request timeout.
+		// This could have caused the "invisible" sandboxes that are not in orchestrator or API, but are still on client.
+		s.sandboxes.RemoveCb(req.Sandbox.SandboxId, func(_ string, v *sandbox.Sandbox, exists bool) bool {
+			if !exists {
+				return false
+			}
 
-		logger.Infof("Sandbox killed")
+			if v == nil {
+				return false
+			}
+
+			return sbx.Config.ExecutionId == v.Config.ExecutionId
+		})
+
+		// Remove the proxies assigned to the sandbox from the pool to prevent them from being reused.
+		s.proxy.RemoveFromPool(sbx.Config.ExecutionId)
+
+		sbxlogger.E(sbx).Info("Sandbox killed")
 	}()
 
 	return &orchestrator.SandboxCreateResponse{
-		ClientId: consul.ClientID,
+		ClientId: s.info.ClientId,
 	}, nil
 }
 
@@ -107,16 +126,15 @@ func (s *server) Update(ctx context.Context, req *orchestrator.SandboxUpdateRequ
 	defer childSpan.End()
 
 	childSpan.SetAttributes(
-		attribute.String("sandbox.id", req.SandboxId),
-		attribute.String("client.id", consul.ClientID),
+		telemetry.WithSandboxID(req.SandboxId),
+		attribute.String("client.id", s.info.ClientId),
 	)
 
 	item, ok := s.sandboxes.Get(req.SandboxId)
 	if !ok {
-		errMsg := fmt.Errorf("sandbox not found")
-		telemetry.ReportCriticalError(ctx, errMsg)
+		telemetry.ReportCriticalError(ctx, "sandbox not found", nil)
 
-		return nil, status.New(codes.NotFound, errMsg.Error()).Err()
+		return nil, status.Error(codes.NotFound, "sandbox not found")
 	}
 
 	item.EndAt = req.EndTime.AsTime()
@@ -143,7 +161,7 @@ func (s *server) List(ctx context.Context, _ *emptypb.Empty) (*orchestrator.Sand
 
 		sandboxes = append(sandboxes, &orchestrator.RunningSandbox{
 			Config:    sbx.Config,
-			ClientId:  consul.ClientID,
+			ClientId:  s.info.ClientId,
 			StartTime: timestamppb.New(sbx.StartedAt),
 			EndTime:   timestamppb.New(sbx.EndAt),
 		})
@@ -162,60 +180,38 @@ func (s *server) Delete(ctxConn context.Context, in *orchestrator.SandboxDeleteR
 	defer childSpan.End()
 
 	childSpan.SetAttributes(
-		attribute.String("sandbox.id", in.SandboxId),
-		attribute.String("client.id", consul.ClientID),
+		telemetry.WithSandboxID(in.SandboxId),
+		attribute.String("client.id", s.info.ClientId),
 	)
 
 	sbx, ok := s.sandboxes.Get(in.SandboxId)
 	if !ok {
-		errMsg := fmt.Errorf("sandbox '%s' not found", in.SandboxId)
-		telemetry.ReportCriticalError(ctx, errMsg)
+		telemetry.ReportCriticalError(ctx, "sandbox not found", nil, telemetry.WithSandboxID(in.SandboxId))
 
-		return nil, status.New(codes.NotFound, errMsg.Error()).Err()
+		return nil, status.Errorf(codes.NotFound, "sandbox '%s' not found", in.SandboxId)
 	}
-
-	// Don't allow connecting to the sandbox anymore.
-	s.dns.Remove(in.SandboxId, sbx.Slot.HostIP())
 
 	// Remove the sandbox from the cache to prevent loading it again in API during the time the instance is stopping.
 	// Old comment:
 	// 	Ensure the sandbox is removed from cache.
 	// 	Ideally we would rely only on the goroutine defer.
+	// Don't allow connecting to the sandbox anymore.
 	s.sandboxes.Remove(in.SandboxId)
 
-	loggingCtx, cancelLogginCtx := context.WithTimeout(ctx, 2*time.Second)
-	defer cancelLogginCtx()
-
 	// Check health metrics before stopping the sandbox
-	sbx.Healthcheck(loggingCtx, true)
-	sbx.LogMetrics(loggingCtx)
+	sbx.Checks.Healthcheck(true)
 
-	err := sbx.Stop()
+	err := sbx.Stop(ctx)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error stopping sandbox '%s': %v\n", in.SandboxId, err)
+		sbxlogger.I(sbx).Error("error stopping sandbox", logger.WithSandboxID(in.SandboxId), zap.Error(err))
 	}
 
 	return &emptypb.Empty{}, nil
 }
 
-var pauseQueue = semaphore.NewWeighted(maxParalellSnapshotting)
-
 func (s *server) Pause(ctx context.Context, in *orchestrator.SandboxPauseRequest) (*emptypb.Empty, error) {
 	ctx, childSpan := s.tracer.Start(ctx, "sandbox-pause")
 	defer childSpan.End()
-
-	err := pauseQueue.Acquire(ctx, 1)
-	if err != nil {
-		telemetry.ReportCriticalError(ctx, err)
-
-		return nil, status.New(codes.ResourceExhausted, err.Error()).Err()
-	}
-
-	releaseOnce := sync.OnceFunc(func() {
-		pauseQueue.Release(1)
-	})
-
-	defer releaseOnce()
 
 	s.pauseMu.Lock()
 
@@ -223,13 +219,11 @@ func (s *server) Pause(ctx context.Context, in *orchestrator.SandboxPauseRequest
 	if !ok {
 		s.pauseMu.Unlock()
 
-		errMsg := fmt.Errorf("sandbox not found")
-		telemetry.ReportCriticalError(ctx, errMsg)
+		telemetry.ReportCriticalError(ctx, "sandbox not found", nil)
 
-		return nil, status.New(codes.NotFound, errMsg.Error()).Err()
+		return nil, status.Error(codes.NotFound, "sandbox not found")
 	}
 
-	s.dns.Remove(in.SandboxId, sbx.Slot.HostIP())
 	s.sandboxes.Remove(in.SandboxId)
 
 	s.pauseMu.Unlock()
@@ -239,40 +233,32 @@ func (s *server) Pause(ctx context.Context, in *orchestrator.SandboxPauseRequest
 		in.BuildId,
 		sbx.Config.KernelVersion,
 		sbx.Config.FirecrackerVersion,
-		sbx.Config.HugePages,
 	).NewTemplateCacheFiles()
 	if err != nil {
-		errMsg := fmt.Errorf("error creating template files: %w", err)
-		telemetry.ReportCriticalError(ctx, errMsg)
+		telemetry.ReportCriticalError(ctx, "error creating template files", err)
 
-		return nil, status.New(codes.Internal, errMsg.Error()).Err()
+		return nil, status.Errorf(codes.Internal, "error creating template files: %s", err)
 	}
 
 	defer func() {
 		// sbx.Stop sometimes blocks for several seconds,
-		// so we don't want to block the request and do the cleanup in a goroutine after we already removed sandbox from cache and DNS.
+		// so we don't want to block the request and do the cleanup in a goroutine after we already removed sandbox from cache and proxy.
 		go func() {
-			err := sbx.Stop()
+			ctx, childSpan := s.tracer.Start(context.Background(), "sandbox-pause-stop")
+			defer childSpan.End()
+
+			err := sbx.Stop(ctx)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "error stopping sandbox after snapshot '%s': %v\n", in.SandboxId, err)
+				sbxlogger.I(sbx).Error("error stopping sandbox after snapshot", logger.WithSandboxID(in.SandboxId), zap.Error(err))
 			}
 		}()
 	}()
 
-	err = os.MkdirAll(snapshotTemplateFiles.CacheDir(), 0o755)
+	snapshot, err := sbx.Pause(ctx, s.tracer, snapshotTemplateFiles)
 	if err != nil {
-		errMsg := fmt.Errorf("error creating sandbox cache dir '%s': %w", snapshotTemplateFiles.CacheDir(), err)
-		telemetry.ReportCriticalError(ctx, errMsg)
+		telemetry.ReportCriticalError(ctx, "error snapshotting sandbox", err, telemetry.WithSandboxID(in.SandboxId))
 
-		return nil, status.New(codes.Internal, errMsg.Error()).Err()
-	}
-
-	snapshot, err := sbx.Snapshot(ctx, s.tracer, snapshotTemplateFiles, releaseOnce)
-	if err != nil {
-		errMsg := fmt.Errorf("error snapshotting sandbox '%s': %w", in.SandboxId, err)
-		telemetry.ReportCriticalError(ctx, errMsg)
-
-		return nil, status.New(codes.Internal, errMsg.Error()).Err()
+		return nil, status.Errorf(codes.Internal, "error snapshotting sandbox '%s': %s", in.SandboxId, err)
 	}
 
 	err = s.templateCache.AddSnapshot(
@@ -280,7 +266,6 @@ func (s *server) Pause(ctx context.Context, in *orchestrator.SandboxPauseRequest
 		snapshotTemplateFiles.BuildId,
 		snapshotTemplateFiles.KernelVersion,
 		snapshotTemplateFiles.FirecrackerVersion,
-		snapshotTemplateFiles.Hugepages(),
 		snapshot.MemfileDiffHeader,
 		snapshot.RootfsDiffHeader,
 		snapshot.Snapfile,
@@ -288,10 +273,9 @@ func (s *server) Pause(ctx context.Context, in *orchestrator.SandboxPauseRequest
 		snapshot.RootfsDiff,
 	)
 	if err != nil {
-		errMsg := fmt.Errorf("error adding snapshot to template cache: %w", err)
-		telemetry.ReportCriticalError(ctx, errMsg)
+		telemetry.ReportCriticalError(ctx, "error adding snapshot to template cache", err)
 
-		return nil, status.New(codes.Internal, errMsg.Error()).Err()
+		return nil, status.Errorf(codes.Internal, "error adding snapshot to template cache: %s", err)
 	}
 
 	telemetry.ReportEvent(ctx, "added snapshot to template cache")
@@ -305,7 +289,7 @@ func (s *server) Pause(ctx context.Context, in *orchestrator.SandboxPauseRequest
 		default:
 			memfileLocalPath, err := r.CachePath()
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "error getting memfile diff path: %v\n", err)
+				sbxlogger.I(sbx).Error("error getting memfile diff path", zap.Error(err))
 
 				return
 			}
@@ -321,7 +305,7 @@ func (s *server) Pause(ctx context.Context, in *orchestrator.SandboxPauseRequest
 		default:
 			rootfsLocalPath, err := r.CachePath()
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "error getting rootfs diff path: %v\n", err)
+				sbxlogger.I(sbx).Error("error getting rootfs diff path", zap.Error(err))
 
 				return
 			}
@@ -332,17 +316,18 @@ func (s *server) Pause(ctx context.Context, in *orchestrator.SandboxPauseRequest
 		b := storage.NewTemplateBuild(
 			snapshot.MemfileDiffHeader,
 			snapshot.RootfsDiffHeader,
+			s.persistence,
 			snapshotTemplateFiles.TemplateFiles,
 		)
 
 		err = <-b.Upload(
 			context.Background(),
-			snapshotTemplateFiles.CacheSnapfilePath(),
+			snapshot.Snapfile.Path(),
 			memfilePath,
 			rootfsPath,
 		)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "error uploading sandbox snapshot '%s': %v\n", in.SandboxId, err)
+			sbxlogger.I(sbx).Error("error uploading sandbox snapshot", zap.Error(err))
 
 			return
 		}

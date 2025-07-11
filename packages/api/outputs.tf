@@ -1,23 +1,31 @@
-output "api_ecr_image_digest" {
-  value = length(data.aws_ecr_image.api_image) > 0 ? data.aws_ecr_image.api_image[0].image_digest : local.default_image_digest
+output "api_secret" {
+  value = random_password.api_secret.result
 }
 
-output "api_secret_arn" {
-  value = aws_secretsmanager_secret.api_secret.arn
+output "postgres_connection_string_secret_name" {
+  value = google_secret_manager_secret.postgres_connection_string.name
 }
 
-output "rds_connection_string_secret_name" {
-  value = aws_secretsmanager_secret.postgres_connection_string.name
+output "supabase_jwt_secrets_secret_name" {
+  value = google_secret_manager_secret.supabase_jwt_secrets.name
+}
+
+output "redis_url_secret_version" {
+  value = google_secret_manager_secret_version.redis_url
 }
 
 output "posthog_api_key_secret_name" {
-  value = aws_secretsmanager_secret.posthog_api_key.name
+  value = google_secret_manager_secret.posthog_api_key.name
 }
 
-output "custom_envs_ecr_repository_name" {
-  value = aws_ecr_repository.custom_environments_repository.name
+output "custom_envs_repository_name" {
+  value = google_artifact_registry_repository.custom_environments_repository.name
 }
 
-output "api_admin_token_arn" {
-  value = aws_secretsmanager_secret.api_admin_token.arn
+output "api_admin_token" {
+  value = random_password.api_admin_secret.result
+}
+
+output "sandbox_access_token_hash_seed" {
+  value = random_password.sandbox_access_token_hash_seed.result
 }
