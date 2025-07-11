@@ -10,9 +10,11 @@ import (
 )
 
 const (
-	AccessTokenAuthScopes = "AccessTokenAuth.Scopes"
-	AdminTokenAuthScopes  = "AdminTokenAuth.Scopes"
-	ApiKeyAuthScopes      = "ApiKeyAuth.Scopes"
+	AccessTokenAuthScopes    = "AccessTokenAuth.Scopes"
+	AdminTokenAuthScopes     = "AdminTokenAuth.Scopes"
+	ApiKeyAuthScopes         = "ApiKeyAuth.Scopes"
+	Supabase1TokenAuthScopes = "Supabase1TokenAuth.Scopes"
+	Supabase2TeamAuthScopes  = "Supabase2TeamAuth.Scopes"
 )
 
 // Defines values for NodeStatus.
@@ -20,6 +22,13 @@ const (
 	NodeStatusConnecting NodeStatus = "connecting"
 	NodeStatusDraining   NodeStatus = "draining"
 	NodeStatusReady      NodeStatus = "ready"
+	NodeStatusUnhealthy  NodeStatus = "unhealthy"
+)
+
+// Defines values for SandboxState.
+const (
+	Paused  SandboxState = "paused"
+	Running SandboxState = "running"
 )
 
 // Defines values for TemplateBuildStatus.
@@ -27,10 +36,47 @@ const (
 	TemplateBuildStatusBuilding TemplateBuildStatus = "building"
 	TemplateBuildStatusError    TemplateBuildStatus = "error"
 	TemplateBuildStatusReady    TemplateBuildStatus = "ready"
+	TemplateBuildStatusWaiting  TemplateBuildStatus = "waiting"
 )
 
 // CPUCount CPU cores for the sandbox
 type CPUCount = int32
+
+// CreatedAccessToken defines model for CreatedAccessToken.
+type CreatedAccessToken struct {
+	// CreatedAt Timestamp of access token creation
+	CreatedAt time.Time `json:"createdAt"`
+
+	// Id Identifier of the access token
+	Id   openapi_types.UUID       `json:"id"`
+	Mask IdentifierMaskingDetails `json:"mask"`
+
+	// Name Name of the access token
+	Name string `json:"name"`
+
+	// Token The fully created access token
+	Token string `json:"token"`
+}
+
+// CreatedTeamAPIKey defines model for CreatedTeamAPIKey.
+type CreatedTeamAPIKey struct {
+	// CreatedAt Timestamp of API key creation
+	CreatedAt time.Time `json:"createdAt"`
+	CreatedBy *TeamUser `json:"createdBy"`
+
+	// Id Identifier of the API key
+	Id openapi_types.UUID `json:"id"`
+
+	// Key Raw value of the API key
+	Key string `json:"key"`
+
+	// LastUsed Last time this API key was used
+	LastUsed *time.Time               `json:"lastUsed"`
+	Mask     IdentifierMaskingDetails `json:"mask"`
+
+	// Name Name of the API key
+	Name string `json:"name"`
+}
 
 // EnvVars defines model for EnvVars.
 type EnvVars map[string]string
@@ -44,85 +90,23 @@ type Error struct {
 	Message string `json:"message"`
 }
 
-// MemoryMB Memory for the sandbox in MB
-type MemoryMB = int32
+// IdentifierMaskingDetails defines model for IdentifierMaskingDetails.
+type IdentifierMaskingDetails struct {
+	// MaskedValuePrefix Prefix used in masked version of the token or key
+	MaskedValuePrefix string `json:"maskedValuePrefix"`
 
-// NewSandbox defines model for NewSandbox.
-type NewSandbox struct {
-	// AutoPause Automatically pauses the sandbox after the timeout
-	AutoPause *bool            `json:"autoPause,omitempty"`
-	EnvVars   *EnvVars         `json:"envVars,omitempty"`
-	Metadata  *SandboxMetadata `json:"metadata,omitempty"`
+	// MaskedValueSuffix Suffix used in masked version of the token or key
+	MaskedValueSuffix string `json:"maskedValueSuffix"`
 
-	// TemplateID Identifier of the required template
-	TemplateID string `json:"templateID"`
+	// Prefix Prefix that identifies the token or key type
+	Prefix string `json:"prefix"`
 
-	// Timeout Time to live for the sandbox in seconds.
-	Timeout *int32 `json:"timeout,omitempty"`
+	// ValueLength Length of the token or key
+	ValueLength int `json:"valueLength"`
 }
 
-// Node defines model for Node.
-type Node struct {
-	// AllocatedCPU Number of allocated CPU cores
-	AllocatedCPU int32 `json:"allocatedCPU"`
-
-	// AllocatedMemoryMiB Amount of allocated memory in MiB
-	AllocatedMemoryMiB int32 `json:"allocatedMemoryMiB"`
-
-	// CreateFails Number of sandbox create fails
-	CreateFails uint64 `json:"createFails"`
-
-	// NodeID Identifier of the node
-	NodeID string `json:"nodeID"`
-
-	// SandboxCount Number of sandboxes running on the node
-	SandboxCount int32 `json:"sandboxCount"`
-
-	// SandboxStartingCount Number of starting Sandboxes
-	SandboxStartingCount int `json:"sandboxStartingCount"`
-
-	// Status Status of the node
-	Status NodeStatus `json:"status"`
-}
-
-// NodeDetail defines model for NodeDetail.
-type NodeDetail struct {
-	// CachedBuilds List of cached builds id on the node
-	CachedBuilds []string `json:"cachedBuilds"`
-
-	// CreateFails Number of sandbox create fails
-	CreateFails uint64 `json:"createFails"`
-
-	// NodeID Identifier of the node
-	NodeID string `json:"nodeID"`
-
-	// Sandboxes List of sandboxes running on the node
-	Sandboxes []RunningSandbox `json:"sandboxes"`
-
-	// Status Status of the node
-	Status NodeStatus `json:"status"`
-}
-
-// NodeStatus Status of the node
-type NodeStatus string
-
-// NodeStatusChange defines model for NodeStatusChange.
-type NodeStatusChange struct {
-	// Status Status of the node
-	Status NodeStatus `json:"status"`
-}
-
-// ResumedSandbox defines model for ResumedSandbox.
-type ResumedSandbox struct {
-	// AutoPause Automatically pauses the sandbox after the timeout
-	AutoPause *bool `json:"autoPause,omitempty"`
-
-	// Timeout Time to live for the sandbox in seconds.
-	Timeout *int32 `json:"timeout,omitempty"`
-}
-
-// RunningSandbox defines model for RunningSandbox.
-type RunningSandbox struct {
+// ListedSandbox defines model for ListedSandbox.
+type ListedSandbox struct {
 	// Alias Alias of the template
 	Alias *string `json:"alias,omitempty"`
 
@@ -145,8 +129,115 @@ type RunningSandbox struct {
 	// StartedAt Time when the sandbox was started
 	StartedAt time.Time `json:"startedAt"`
 
+	// State State of the sandbox
+	State SandboxState `json:"state"`
+
 	// TemplateID Identifier of the template from which is the sandbox created
 	TemplateID string `json:"templateID"`
+}
+
+// MemoryMB Memory for the sandbox in MB
+type MemoryMB = int32
+
+// NewAccessToken defines model for NewAccessToken.
+type NewAccessToken struct {
+	// Name Name of the access token
+	Name string `json:"name"`
+}
+
+// NewSandbox defines model for NewSandbox.
+type NewSandbox struct {
+	// AutoPause Automatically pauses the sandbox after the timeout
+	AutoPause *bool            `json:"autoPause,omitempty"`
+	EnvVars   *EnvVars         `json:"envVars,omitempty"`
+	Metadata  *SandboxMetadata `json:"metadata,omitempty"`
+
+	// Secure Secure all system communication with sandbox
+	Secure *bool `json:"secure,omitempty"`
+
+	// TemplateID Identifier of the required template
+	TemplateID string `json:"templateID"`
+
+	// Timeout Time to live for the sandbox in seconds.
+	Timeout *int32 `json:"timeout,omitempty"`
+}
+
+// NewTeamAPIKey defines model for NewTeamAPIKey.
+type NewTeamAPIKey struct {
+	// Name Name of the API key
+	Name string `json:"name"`
+}
+
+// Node defines model for Node.
+type Node struct {
+	// AllocatedCPU Number of allocated CPU cores
+	AllocatedCPU int32 `json:"allocatedCPU"`
+
+	// AllocatedMemoryMiB Amount of allocated memory in MiB
+	AllocatedMemoryMiB int32 `json:"allocatedMemoryMiB"`
+
+	// Commit Commit of the orchestrator
+	Commit string `json:"commit"`
+
+	// CreateFails Number of sandbox create fails
+	CreateFails uint64 `json:"createFails"`
+
+	// NodeID Identifier of the node
+	NodeID string `json:"nodeID"`
+
+	// SandboxCount Number of sandboxes running on the node
+	SandboxCount int32 `json:"sandboxCount"`
+
+	// SandboxStartingCount Number of starting Sandboxes
+	SandboxStartingCount int `json:"sandboxStartingCount"`
+
+	// Status Status of the node
+	Status NodeStatus `json:"status"`
+
+	// Version Version of the orchestrator
+	Version string `json:"version"`
+}
+
+// NodeDetail defines model for NodeDetail.
+type NodeDetail struct {
+	// CachedBuilds List of cached builds id on the node
+	CachedBuilds []string `json:"cachedBuilds"`
+
+	// Commit Commit of the orchestrator
+	Commit string `json:"commit"`
+
+	// CreateFails Number of sandbox create fails
+	CreateFails uint64 `json:"createFails"`
+
+	// NodeID Identifier of the node
+	NodeID string `json:"nodeID"`
+
+	// Sandboxes List of sandboxes running on the node
+	Sandboxes []ListedSandbox `json:"sandboxes"`
+
+	// Status Status of the node
+	Status NodeStatus `json:"status"`
+
+	// Version Version of the orchestrator
+	Version string `json:"version"`
+}
+
+// NodeStatus Status of the node
+type NodeStatus string
+
+// NodeStatusChange defines model for NodeStatusChange.
+type NodeStatusChange struct {
+	// Status Status of the node
+	Status NodeStatus `json:"status"`
+}
+
+// ResumedSandbox defines model for ResumedSandbox.
+type ResumedSandbox struct {
+	// AutoPause Automatically pauses the sandbox after the timeout
+	AutoPause *bool `json:"autoPause,omitempty"`
+
+	// Timeout Time to live for the sandbox in seconds.
+	Timeout *int32 `json:"timeout,omitempty"`
 }
 
 // RunningSandboxWithMetrics defines model for RunningSandboxWithMetrics.
@@ -186,11 +277,51 @@ type Sandbox struct {
 	// ClientID Identifier of the client
 	ClientID string `json:"clientID"`
 
+	// EnvdAccessToken Access token used for envd communication
+	EnvdAccessToken *string `json:"envdAccessToken,omitempty"`
+
 	// EnvdVersion Version of the envd running in the sandbox
 	EnvdVersion string `json:"envdVersion"`
 
 	// SandboxID Identifier of the sandbox
 	SandboxID string `json:"sandboxID"`
+
+	// TemplateID Identifier of the template from which is the sandbox created
+	TemplateID string `json:"templateID"`
+}
+
+// SandboxDetail defines model for SandboxDetail.
+type SandboxDetail struct {
+	// Alias Alias of the template
+	Alias *string `json:"alias,omitempty"`
+
+	// ClientID Identifier of the client
+	ClientID string `json:"clientID"`
+
+	// CpuCount CPU cores for the sandbox
+	CpuCount CPUCount `json:"cpuCount"`
+
+	// EndAt Time when the sandbox will expire
+	EndAt time.Time `json:"endAt"`
+
+	// EnvdAccessToken Access token used for envd communication
+	EnvdAccessToken *string `json:"envdAccessToken,omitempty"`
+
+	// EnvdVersion Version of the envd running in the sandbox
+	EnvdVersion *string `json:"envdVersion,omitempty"`
+
+	// MemoryMB Memory for the sandbox in MB
+	MemoryMB MemoryMB         `json:"memoryMB"`
+	Metadata *SandboxMetadata `json:"metadata,omitempty"`
+
+	// SandboxID Identifier of the sandbox
+	SandboxID string `json:"sandboxID"`
+
+	// StartedAt Time when the sandbox was started
+	StartedAt time.Time `json:"startedAt"`
+
+	// State State of the sandbox
+	State SandboxState `json:"state"`
 
 	// TemplateID Identifier of the template from which is the sandbox created
 	TemplateID string `json:"templateID"`
@@ -232,6 +363,9 @@ type SandboxMetric struct {
 	Timestamp time.Time `json:"timestamp"`
 }
 
+// SandboxState State of the sandbox
+type SandboxState string
+
 // Team defines model for Team.
 type Team struct {
 	// ApiKey API key for the team
@@ -245,6 +379,23 @@ type Team struct {
 
 	// TeamID Identifier of the team
 	TeamID string `json:"teamID"`
+}
+
+// TeamAPIKey defines model for TeamAPIKey.
+type TeamAPIKey struct {
+	// CreatedAt Timestamp of API key creation
+	CreatedAt time.Time `json:"createdAt"`
+	CreatedBy *TeamUser `json:"createdBy"`
+
+	// Id Identifier of the API key
+	Id openapi_types.UUID `json:"id"`
+
+	// LastUsed Last time this API key was used
+	LastUsed *time.Time               `json:"lastUsed"`
+	Mask     IdentifierMaskingDetails `json:"mask"`
+
+	// Name Name of the API key
+	Name string `json:"name"`
 }
 
 // TeamUser defines model for TeamUser.
@@ -325,6 +476,9 @@ type TemplateBuildRequest struct {
 	// MemoryMB Memory for the sandbox in MB
 	MemoryMB *MemoryMB `json:"memoryMB,omitempty"`
 
+	// ReadyCmd Ready check command to execute in the template after the build
+	ReadyCmd *string `json:"readyCmd,omitempty"`
+
 	// StartCmd Start command to execute in the template after the build
 	StartCmd *string `json:"startCmd,omitempty"`
 
@@ -337,6 +491,18 @@ type TemplateUpdateRequest struct {
 	// Public Whether the template is public or only accessible by the team
 	Public *bool `json:"public,omitempty"`
 }
+
+// UpdateTeamAPIKey defines model for UpdateTeamAPIKey.
+type UpdateTeamAPIKey struct {
+	// Name New name for the API key
+	Name string `json:"name"`
+}
+
+// AccessTokenID defines model for accessTokenID.
+type AccessTokenID = string
+
+// ApiKeyID defines model for apiKeyID.
+type ApiKeyID = string
 
 // BuildID defines model for buildID.
 type BuildID = string
@@ -367,14 +533,14 @@ type N500 = Error
 
 // GetSandboxesParams defines parameters for GetSandboxes.
 type GetSandboxesParams struct {
-	// Query A query used to filter the sandboxes (e.g. "user=abc&app=prod"). Query and each key and values must be URL encoded.
-	Query *string `form:"query,omitempty" json:"query,omitempty"`
+	// Metadata Metadata query used to filter the sandboxes (e.g. "user=abc&app=prod"). Each key and values must be URL encoded.
+	Metadata *string `form:"metadata,omitempty" json:"metadata,omitempty"`
 }
 
 // GetSandboxesMetricsParams defines parameters for GetSandboxesMetrics.
 type GetSandboxesMetricsParams struct {
-	// Query A query used to filter the sandboxes (e.g. "user=abc&app=prod"). Query and each key and values must be URL encoded.
-	Query *string `form:"query,omitempty" json:"query,omitempty"`
+	// Metadata Metadata query used to filter the sandboxes (e.g. "user=abc&app=prod"). Each key and values must be URL encoded.
+	Metadata *string `form:"metadata,omitempty" json:"metadata,omitempty"`
 }
 
 // GetSandboxesSandboxIDLogsParams defines parameters for GetSandboxesSandboxIDLogs.
@@ -408,6 +574,30 @@ type GetTemplatesTemplateIDBuildsBuildIDStatusParams struct {
 	// LogsOffset Index of the starting build log that should be returned with the template
 	LogsOffset *int32 `form:"logsOffset,omitempty" json:"logsOffset,omitempty"`
 }
+
+// GetV2SandboxesParams defines parameters for GetV2Sandboxes.
+type GetV2SandboxesParams struct {
+	// Metadata Metadata query used to filter the sandboxes (e.g. "user=abc&app=prod"). Each key and values must be URL encoded.
+	Metadata *string `form:"metadata,omitempty" json:"metadata,omitempty"`
+
+	// State Filter sandboxes by one or more states
+	State *[]SandboxState `form:"state,omitempty" json:"state,omitempty"`
+
+	// NextToken Cursor to start the list from
+	NextToken *string `form:"nextToken,omitempty" json:"nextToken,omitempty"`
+
+	// Limit Maximum number of items to return per page
+	Limit *int32 `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// PostAccessTokensJSONRequestBody defines body for PostAccessTokens for application/json ContentType.
+type PostAccessTokensJSONRequestBody = NewAccessToken
+
+// PostApiKeysJSONRequestBody defines body for PostApiKeys for application/json ContentType.
+type PostApiKeysJSONRequestBody = NewTeamAPIKey
+
+// PatchApiKeysApiKeyIDJSONRequestBody defines body for PatchApiKeysApiKeyID for application/json ContentType.
+type PatchApiKeysApiKeyIDJSONRequestBody = UpdateTeamAPIKey
 
 // PostNodesNodeIDJSONRequestBody defines body for PostNodesNodeID for application/json ContentType.
 type PostNodesNodeIDJSONRequestBody = NodeStatusChange

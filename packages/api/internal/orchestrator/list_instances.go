@@ -13,7 +13,6 @@ import (
 	"github.com/e2b-dev/infra/packages/api/internal/cache/instance"
 	nNode "github.com/e2b-dev/infra/packages/api/internal/node"
 	"github.com/e2b-dev/infra/packages/api/internal/utils"
-	"github.com/e2b-dev/infra/packages/shared/pkg/logs"
 )
 
 func (o *Orchestrator) getSandboxes(ctx context.Context, node *nNode.NodeInfo) ([]*instance.InstanceInfo, error) {
@@ -58,16 +57,21 @@ func (o *Orchestrator) getSandboxes(ctx context.Context, node *nNode.NodeInfo) (
 			autoPause = *config.AutoPause
 		}
 
+		// TODO: Temporary workaround, until all orchestrators report this
+		if config.ExecutionId == "" {
+			config.ExecutionId = uuid.New().String()
+		}
+
 		sandboxesInfo = append(
 			sandboxesInfo,
 			instance.NewInstanceInfo(
-				logs.NewSandboxLogger(config.SandboxId, config.TemplateId, teamID.String(), config.Vcpu, config.RamMb, false),
 				&api.Sandbox{
 					SandboxID:  config.SandboxId,
 					TemplateID: config.TemplateId,
 					Alias:      config.Alias,
-					ClientID:   sbx.ClientId,
+					ClientID:   node.ID, // to prevent mismatch use the node ID which we use for the request
 				},
+				config.ExecutionId,
 				&teamID,
 				&buildID,
 				config.Metadata,
@@ -82,6 +86,8 @@ func (o *Orchestrator) getSandboxes(ctx context.Context, node *nNode.NodeInfo) (
 				config.EnvdVersion,
 				node,
 				autoPause,
+				config.EnvdAccessToken,
+				config.BaseTemplateId,
 			),
 		)
 	}
@@ -97,6 +103,6 @@ func (o *Orchestrator) GetSandboxes(ctx context.Context, teamID *uuid.UUID) []*i
 	return o.instanceCache.GetInstances(teamID)
 }
 
-func (o *Orchestrator) GetInstance(ctx context.Context, id string) (*instance.InstanceInfo, error) {
+func (o *Orchestrator) GetInstance(_ context.Context, id string) (*instance.InstanceInfo, error) {
 	return o.instanceCache.Get(id)
 }

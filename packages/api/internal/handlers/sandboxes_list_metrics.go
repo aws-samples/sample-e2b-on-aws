@@ -18,6 +18,8 @@ import (
 	"github.com/e2b-dev/infra/packages/api/internal/api"
 	"github.com/e2b-dev/infra/packages/api/internal/auth"
 	authcache "github.com/e2b-dev/infra/packages/api/internal/cache/auth"
+	"github.com/e2b-dev/infra/packages/api/internal/utils"
+	"github.com/e2b-dev/infra/packages/shared/pkg/logger"
 	"github.com/e2b-dev/infra/packages/shared/pkg/telemetry"
 )
 
@@ -29,12 +31,12 @@ const (
 func (a *APIStore) getSandboxesMetrics(
 	ctx context.Context,
 	teamID uuid.UUID,
-	sandboxes []api.RunningSandbox,
+	sandboxes []utils.PaginatedSandbox,
 ) ([]api.RunningSandboxWithMetrics, error) {
 	// Add operation telemetry
 	telemetry.ReportEvent(ctx, "fetch metrics for sandboxes")
 	telemetry.SetAttributes(ctx,
-		attribute.String("team.id", teamID.String()),
+		telemetry.WithTeamID(teamID.String()),
 		attribute.Int("sandboxes.count", len(sandboxes)),
 	)
 
@@ -48,7 +50,7 @@ func (a *APIStore) getSandboxesMetrics(
 	}()
 
 	type metricsResult struct {
-		sandbox api.RunningSandbox
+		sandbox utils.PaginatedSandbox
 		metrics []api.SandboxMetric
 		err     error
 	}
@@ -66,14 +68,14 @@ func (a *APIStore) getSandboxesMetrics(
 	// Fetch metrics for each sandbox concurrently with rate limiting
 	for _, sandbox := range sandboxes {
 		wg.Add(1)
-		go func(s api.RunningSandbox) {
+		go func(s utils.PaginatedSandbox) {
 			defer wg.Done()
 
 			err := sem.Acquire(ctx, 1)
 			if err != nil {
 				timeoutCount.Add(1)
 				err := fmt.Errorf("context cancelled while waiting for rate limiter: %w", ctx.Err())
-				telemetry.ReportError(ctx, err)
+				telemetry.ReportError(ctx, "context cancelled while waiting for rate limiter", err)
 				results <- metricsResult{
 					sandbox: s,
 					err:     err,
@@ -84,7 +86,7 @@ func (a *APIStore) getSandboxesMetrics(
 			defer sem.Release(1)
 
 			// Get metrics for this sandbox
-			metrics, err := a.getSandboxesSandboxIDMetrics(
+			metrics, err := a.LegacyGetSandboxIDMetrics(
 				ctx,
 				s.SandboxID,
 				teamID.String(),
@@ -94,7 +96,7 @@ func (a *APIStore) getSandboxesMetrics(
 
 			if err != nil {
 				errorCount.Add(1)
-				telemetry.ReportError(ctx, fmt.Errorf("failed to fetch metrics for sandbox %s: %w", s.SandboxID, err))
+				telemetry.ReportError(ctx, "failed to fetch metrics for sandbox", err, telemetry.WithSandboxID(s.SandboxID))
 			} else {
 				successCount.Add(1)
 			}
@@ -148,8 +150,8 @@ func (a *APIStore) getSandboxesMetrics(
 
 	// Log operation summary
 	if len(metricsErrors) == 0 {
-		a.logger.Info("Completed fetching sandbox metrics without errors",
-			zap.String("team_id", teamID.String()),
+		zap.L().Info("Completed fetching sandbox metrics without errors",
+			logger.WithTeamID(teamID.String()),
 			zap.Int32("total_sandboxes", int32(len(sandboxes))),
 			zap.Int32("successful_fetches", successCount.Load()),
 			zap.Int32("timeouts", timeoutCount.Load()),
@@ -163,8 +165,8 @@ func (a *APIStore) getSandboxesMetrics(
 
 		err := errors.Join(metricsErrors...)
 
-		a.logger.Error("Received errors while fetching metrics for some sandboxes",
-			zap.String("team_id", teamID.String()),
+		zap.L().Error("Received errors while fetching metrics for some sandboxes",
+			logger.WithTeamID(teamID.String()),
 			zap.Int32("total_sandboxes", int32(len(sandboxes))),
 			zap.Int32("successful_fetches", successCount.Load()),
 			zap.Int32("failed_fetches", errorCount.Load()),
@@ -191,19 +193,20 @@ func (a *APIStore) GetSandboxesMetrics(c *gin.Context, params api.GetSandboxesMe
 	properties := a.posthog.GetPackageToPosthogProperties(&c.Request.Header)
 	a.posthog.CreateAnalyticsTeamEvent(team.ID.String(), "listed running instances with metrics", properties)
 
-	sandboxes, err := a.getSandboxes(ctx, team.ID, params.Query)
+	metadataFilter, err := utils.ParseMetadata(params.Metadata)
 	if err != nil {
-		a.logger.Error("Error fetching sandboxes", zap.Error(err))
-		telemetry.ReportCriticalError(ctx, err)
-		a.sendAPIStoreError(c, http.StatusBadRequest, fmt.Sprintf("Error returning sandboxes for team '%s'", team.ID))
+		zap.L().Error("Error parsing metadata", zap.Error(err))
+		a.sendAPIStoreError(c, http.StatusBadRequest, fmt.Sprintf("Error parsing metadata: %s", err))
 
 		return
 	}
 
+	// Get relevant running sandboxes
+	sandboxes := getRunningSandboxes(ctx, a.orchestrator, team.ID, metadataFilter)
+
 	sandboxesWithMetrics, err := a.getSandboxesMetrics(ctx, team.ID, sandboxes)
 	if err != nil {
-		a.logger.Error("Error fetching metrics for sandboxes", zap.Error(err))
-		telemetry.ReportCriticalError(ctx, err)
+		telemetry.ReportCriticalError(ctx, "error fetching metrics for sandboxes", err)
 		a.sendAPIStoreError(c, http.StatusInternalServerError, fmt.Sprintf("Error returning metrics for sandboxes for team '%s'", team.ID))
 
 		return
