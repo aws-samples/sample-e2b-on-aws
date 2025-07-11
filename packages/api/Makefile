@@ -70,8 +70,9 @@ build-and-upload-aws:
 	$(eval AWS_ACCOUNT_ID := $(shell grep "^account_id=" /opt/config.properties | cut -d= -f2))
 	$(eval AWS_REGION := $(shell grep "^AWSREGION=" /opt/config.properties | cut -d= -f2))
 	
-	@rm -rf .shared/
+	@rm -rf .shared/ .db/
 	@cp -r ../shared .shared/
+	@cp -r ../db .db/
 	@sudo docker buildx install || true # sets up the buildx as default docker builder
 	# Create ECR repository if it doesn't exist
 	@aws ecr describe-repositories --repository-names $(IMAGE) || aws ecr create-repository --repository-name $(IMAGE)
