@@ -5,25 +5,30 @@ import (
 	"io"
 
 	"github.com/google/uuid"
+	"go.uber.org/zap"
 
+	"github.com/e2b-dev/infra/packages/shared/pkg/storage"
 	"github.com/e2b-dev/infra/packages/shared/pkg/storage/header"
 )
 
 type File struct {
-	header   *header.Header
-	store    *DiffStore
-	fileType DiffType
+	header      *header.Header
+	store       *DiffStore
+	fileType    DiffType
+	persistence storage.StorageProvider
 }
 
 func NewFile(
 	header *header.Header,
 	store *DiffStore,
 	fileType DiffType,
+	persistence storage.StorageProvider,
 ) *File {
 	return &File{
-		header:   header,
-		store:    store,
-		fileType: fileType,
+		header:      header,
+		store:       store,
+		fileType:    fileType,
+		persistence: persistence,
 	}
 }
 
@@ -47,8 +52,8 @@ func (b *File) ReadAt(p []byte, off int64) (n int, err error) {
 		readLength := min(mappedLength, remainingReadLength)
 
 		if readLength <= 0 {
-			fmt.Printf(
-				"(%d bytes left to read, off %d) reading %d bytes from %+v/%+v: [%d:] -> [%d:%d] <> %d (mapped length: %d, remaining read length: %d)\n",
+			zap.L().Error(fmt.Sprintf(
+				"(%d bytes left to read, off %d) reading %d bytes from %+v/%+v: [%d:] -> [%d:%d] <> %d (mapped length: %d, remaining read length: %d)\n>>> EOF\n",
 				len(p)-n,
 				off,
 				readLength,
@@ -60,9 +65,7 @@ func (b *File) ReadAt(p []byte, off int64) (n int, err error) {
 				n,
 				mappedLength,
 				remainingReadLength,
-			)
-
-			fmt.Printf(">>> EOF\n")
+			))
 
 			return n, io.EOF
 		}
@@ -102,6 +105,7 @@ func (b *File) Slice(off, length int64) ([]byte, error) {
 		return nil, fmt.Errorf("failed to get mapping: %w", err)
 	}
 
+	// Pass empty huge page when the build id is nil.
 	if *buildID == uuid.Nil {
 		return header.EmptyHugePage, nil
 	}
@@ -115,11 +119,15 @@ func (b *File) Slice(off, length int64) ([]byte, error) {
 }
 
 func (b *File) getBuild(buildID *uuid.UUID) (Diff, error) {
-	source, err := b.store.Get(
+	storageDiff := newStorageDiff(
+		b.store.cachePath,
 		buildID.String(),
 		b.fileType,
 		int64(b.header.Metadata.BlockSize),
+		b.persistence,
 	)
+
+	source, err := b.store.Get(storageDiff)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get build from store: %w", err)
 	}

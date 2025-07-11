@@ -42,8 +42,3 @@ func NewClient(maxConns, maxIdle int) (*DB, error) {
 func (db *DB) Close() error {
 	return db.Client.Close()
 }
-
-// DB returns the underlying sql.DB object
-func (db *DB) DB() *sql.DB {
-	return db.Client.DB()
-}

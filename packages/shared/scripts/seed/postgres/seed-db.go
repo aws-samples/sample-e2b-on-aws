@@ -3,7 +3,10 @@ package main
 import (
 	"context"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/google/uuid"
@@ -18,14 +21,12 @@ func main() {
 	ctx := context.Background()
 	hasher := keys.NewSHA256Hashing()
 
-	// Connect to database
 	database, err := db.NewClient(1, 1)
 	if err != nil {
 		panic(err)
 	}
 	defer database.Close()
 
-	// Check if database already has data
 	count, err := database.Client.Team.Query().Count(ctx)
 	if err != nil {
 		panic(err)
@@ -35,51 +36,56 @@ func main() {
 		panic("Database contains some non-trivial data.")
 	}
 
-	// Define hardcoded values
-	email := "user@example.com"
-	teamUUID := uuid.MustParse("11111111-1111-1111-1111-111111111111")
-	userUUID := uuid.MustParse("22222222-2222-2222-2222-222222222222")
-	accessToken := "at_0123456789abcdef0123456789abcdef"
-	teamAPIKey := "sk_fedcba9876543210fedcba9876543210"
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Println("Error getting home directory:", err)
+		return
+	}
 
-	// First delete any existing data to avoid conflicts
+	configPath := filepath.Join(homeDir, ".e2b", "config.json")
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		panic(err)
+	}
+
+	config := map[string]interface{}{}
+	err = json.Unmarshal(data, &config)
+	if err != nil {
+		panic(err)
+	}
+
+	email := config["email"].(string)
+	teamID := config["teamId"].(string)
+	accessToken := config["accessToken"].(string)
+	teamAPIKey := config["teamApiKey"].(string)
+	teamUUID := uuid.MustParse(teamID)
+
+	// Open .e2b/config.json
+	user, err := database.Client.User.Create().SetEmail(email).SetID(uuid.New()).Save(ctx)
+	if err != nil {
+		panic(err)
+	}
+
+	// Delete team
 	_, err = database.Client.Team.Delete().Where(team.Email(email)).Exec(ctx)
 	if err != nil {
-		fmt.Println("Warning: Could not delete team:", err)
+		panic(err)
 	}
 
-	// Delete any existing access tokens for this user ID if it exists
-	_, err = database.Client.AccessToken.Delete().Where(accesstoken.UserIDEQ(userUUID)).Exec(ctx)
-	if err != nil {
-		fmt.Println("Warning: Could not delete access tokens:", err)
-	}
-
-	// Create user
-	user, err := database.Client.User.Create().
-		SetEmail(email).
-		SetID(userUUID).
-		Save(ctx)
+	// Remove old access token
+	_, err = database.Client.AccessToken.Delete().Where(accesstoken.UserID(user.ID)).Exec(ctx)
 	if err != nil {
 		panic(err)
 	}
 
 	// Create team
-	t, err := database.Client.Team.Create().
-		SetEmail(email).
-		SetName("E2B").
-		SetID(teamUUID).
-		SetTier("base_v1").
-		Save(ctx)
+	t, err := database.Client.Team.Create().SetEmail(email).SetName("E2B").SetID(teamUUID).SetTier("base_v1").Save(ctx)
 	if err != nil {
 		panic(err)
 	}
 
-	// Create user team relationship
-	_, err = database.Client.UsersTeams.Create().
-		SetUserID(user.ID).
-		SetTeamID(t.ID).
-		SetIsDefault(true).
-		Save(ctx)
+	// Create user team
+	_, err = database.Client.UsersTeams.Create().SetUserID(user.ID).SetTeamID(t.ID).SetIsDefault(true).Save(ctx)
 	if err != nil {
 		panic(err)
 	}
@@ -109,13 +115,13 @@ func main() {
 		panic(err)
 	}
 
-	// Create team API key
+	// Create team api key
 	keyWithoutPrefix := strings.TrimPrefix(teamAPIKey, keys.ApiKeyPrefix)
-	teamApiKeyBytes, err := hex.DecodeString(keyWithoutPrefix)
+	apiKeyBytes, err := hex.DecodeString(keyWithoutPrefix)
 	if err != nil {
 		panic(err)
 	}
-	apiKeyHash := hasher.Hash(teamApiKeyBytes)
+	apiKeyHash := hasher.Hash(apiKeyBytes)
 	apiKeyMask, err := keys.MaskKey(keys.ApiKeyPrefix, keyWithoutPrefix)
 	if err != nil {
 		panic(err)
@@ -135,14 +141,11 @@ func main() {
 	}
 
 	// Create template
-	_, err = database.Client.Env.Create().
-		SetTeam(t).
-		SetID("rki5dems9wqfm4r03t7g").
-		SetPublic(true).
-		Save(ctx)
+	_, err = database.Client.Env.Create().SetTeam(t).SetID("rki5dems9wqfm4r03t7g").SetPublic(true).Save(ctx)
 	if err != nil {
 		panic(err)
 	}
+	// Run from make file and build base env
 
-	fmt.Printf("Database seeded successfully.\n")
+	fmt.Printf("Database seeded.\n")
 }
