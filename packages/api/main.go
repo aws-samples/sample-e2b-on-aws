@@ -10,7 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strconv"
+	// "strconv"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -57,7 +57,7 @@ const (
 
 var (
 	commitSHA                  string
-	expectedMigrationTimestamp string
+	// expectedMigrationTimestamp string
 )
 
 func NewGinServer(ctx context.Context, tel *telemetry.Client, logger *zap.Logger, apiStore *handlers.APIStore, swagger *openapi3.T, port int) *http.Server {
@@ -262,17 +262,17 @@ func run() int {
 	sbxlogger.SetSandboxLoggerInternal(sbxLoggerInternal)
 
 	// Convert the string expectedMigrationTimestamp  to a int64
-	expectedMigration, err := strconv.ParseInt(expectedMigrationTimestamp, 10, 64)
-	if err != nil {
-		// If expectedMigrationTimestamp is not set, we set it to 0
-		logger.Warn("Failed to parse expected migration timestamp", zap.Error(err))
-		expectedMigration = 0
-	}
+	// expectedMigration, err := strconv.ParseInt(expectedMigrationTimestamp, 10, 64)
+	// if err != nil {
+	// 	// If expectedMigrationTimestamp is not set, we set it to 0
+	// 	logger.Warn("Failed to parse expected migration timestamp", zap.Error(err))
+	// 	expectedMigration = 0
+	// }
 
-	err = utils.CheckMigrationVersion(expectedMigration)
-	if err != nil {
-		logger.Fatal("failed to check migration version", zap.Error(err))
-	}
+	// err = utils.CheckMigrationVersion(expectedMigration)
+	// if err != nil {
+	// 	logger.Fatal("failed to check migration version", zap.Error(err))
+	// }
 
 	logger.Info("Starting API service...", zap.String("commit_sha", commitSHA), zap.String("instance_id", instanceID))
 	if debug != "true" {
