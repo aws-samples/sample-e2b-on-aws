@@ -31,3 +31,20 @@ generate:
 .PHONY: test
 test:
 	go test -v ./...
+
+
+.PHONY: build-and-upload-aws
+build-and-upload-aws:
+	$(eval AWS_ACCOUNT_ID := $(shell grep "^account_id=" /opt/config.properties | cut -d= -f2))
+	$(eval AWS_REGION := $(shell grep "^AWSREGION=" /opt/config.properties | cut -d= -f2))
+	@rm -rf .shared/
+	@cp -r ../shared .shared/
+	@docker buildx install || true # sets up the buildx as default docker builder
+	# Create ECR repository if it doesn't exist
+	@aws ecr describe-repositories --repository-names $(IMAGE) || aws ecr create-repository --repository-name $(IMAGE)
+	# Login to ECR
+	@aws ecr get-login-password --region $(AWS_REGION) | docker login --username AWS --password-stdin $(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com
+	# Build and push the image
+	@docker build --platform linux/amd64 --tag "$(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/$(IMAGE):latest" .
+	@docker push "$(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/$(IMAGE):latest"
+	@rm -rf .shared/
