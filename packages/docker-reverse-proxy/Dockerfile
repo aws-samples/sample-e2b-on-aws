@@ -9,20 +9,21 @@ RUN go mod download
 
 COPY .shared/pkg pkg
 
-WORKDIR /build/proxy
+WORKDIR /build/docker-reverse-proxy
 
 COPY go.mod go.sum Makefile ./
 RUN go mod download
 
-COPY internal/ ./internal/
 COPY main.go main.go
+COPY internal internal
 
 ARG COMMIT_SHA
 RUN --mount=type=cache,target=/root/.cache/go-build make build COMMIT_SHA=${COMMIT_SHA}
-RUN chmod +x /build/proxy/bin/client-proxy
+
+RUN chmod +x /build/docker-reverse-proxy/bin/docker-reverse-proxy
 
 FROM alpine:3.17
 
-COPY --from=builder /build/proxy/bin/client-proxy .
+COPY --from=builder /build/docker-reverse-proxy/bin/docker-reverse-proxy .
 
-ENTRYPOINT [ "./client-proxy"]
+ENTRYPOINT [ "./docker-reverse-proxy" ]
