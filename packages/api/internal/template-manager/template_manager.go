@@ -130,15 +130,21 @@ func (tm *TemplateManager) getBuilderClient(clusterID *uuid.UUID, nodeID *string
 		tm.localClientMutex.RLock()
 		defer tm.localClientMutex.RUnlock()
 
+		zap.L().Info("使用本地template manager", 
+			zap.Bool("placement", placement), 
+			zap.String("localClientStatus", tm.GetLocalClientStatus().String()),
+			zap.String("templateManagerHost", templateManagerHost))
+
 		// build placement requires healthy template builder
 		if placement && tm.GetLocalClientStatus() != infogrpc.ServiceInfoStatus_OrchestratorHealthy {
-			zap.L().Error("Local template manager is not fully healthy, cannot use it for placement new builds")
+			zap.L().Error("本地template manager不健康，无法用于放置新构建", 
+				zap.String("status", tm.GetLocalClientStatus().String()))
 			return nil, nil, nil, ErrLocalTemplateManagerNotAvailable
 		}
 
 		// for getting build information only not valid state is getting already unhealthy builder
 		if tm.GetLocalClientStatus() == infogrpc.ServiceInfoStatus_OrchestratorUnhealthy {
-			zap.L().Error("Local template manager is unhealthy")
+			zap.L().Error("本地template manager不健康")
 			return nil, nil, nil, ErrLocalTemplateManagerNotAvailable
 		}
 
@@ -147,13 +153,21 @@ func (tm *TemplateManager) getBuilderClient(clusterID *uuid.UUID, nodeID *string
 		return tm.grpc, meta, logs, nil
 	}
 
+	zap.L().Info("使用集群template manager", 
+		zap.String("clusterID", clusterID.String()), 
+		zap.String("nodeID", *nodeID))
+
 	cluster, ok := tm.edgePool.GetClusterById(*clusterID)
 	if !ok {
+		zap.L().Error("找不到集群", zap.String("clusterID", clusterID.String()))
 		return nil, nil, nil, errors.New("cluster not found")
 	}
 
 	node, err := cluster.GetTemplateBuilderByID(*nodeID)
 	if err != nil {
+		zap.L().Error("无法通过ID获取构建器", 
+			zap.String("nodeID", *nodeID), 
+			zap.Error(err))
 		return nil, nil, nil, fmt.Errorf("failed to get builder by id '%s': %w", *nodeID, err)
 	}
 
@@ -211,15 +225,37 @@ func (tm *TemplateManager) CreateTemplate(t trace.Tracer, ctx context.Context, t
 	)
 	defer span.End()
 
+	zap.L().Info("开始创建模板 - template-manager", 
+		zap.String("templateID", templateID), 
+		zap.String("buildID", buildID.String()),
+		zap.String("templateManagerHost", templateManagerHost))
+
 	features, err := sandbox.NewVersionInfo(firecrackerVersion)
 	if err != nil {
+		zap.L().Error("获取Firecracker版本特性失败", 
+			zap.String("firecrackerVersion", firecrackerVersion), 
+			zap.Error(err))
 		return fmt.Errorf("failed to get features for firecracker version '%s': %w", firecrackerVersion, err)
 	}
 
+	zap.L().Info("获取builder客户端", 
+		zap.String("templateID", templateID), 
+		zap.String("buildID", buildID.String()),
+		zap.Bool("hasClusterID", clusterID != nil),
+		zap.Bool("hasClusterNodeID", clusterNodeID != nil))
+
 	client, clientMd, _, err := tm.getBuilderClient(clusterID, clusterNodeID, true)
 	if err != nil {
+		zap.L().Error("获取builder客户端失败", 
+			zap.String("templateID", templateID), 
+			zap.String("buildID", buildID.String()), 
+			zap.Error(err))
 		return fmt.Errorf("failed to get builder edgeHttpClient: %w", err)
 	}
+
+	zap.L().Info("准备发送模板创建请求", 
+		zap.String("templateID", templateID), 
+		zap.String("buildID", buildID.String()))
 
 	reqCtx := metadata.NewOutgoingContext(ctx, clientMd)
 	_, err = client.Template.TemplateCreate(
@@ -239,10 +275,18 @@ func (tm *TemplateManager) CreateTemplate(t trace.Tracer, ctx context.Context, t
 		},
 	)
 
-	err = utils.UnwrapGRPCError(err)
 	if err != nil {
+		zap.L().Error("发送模板创建请求失败", 
+			zap.String("templateID", templateID), 
+			zap.String("buildID", buildID.String()), 
+			zap.Error(err))
+		err = utils.UnwrapGRPCError(err)
 		return fmt.Errorf("failed to create template '%s': %w", templateID, err)
 	}
+
+	zap.L().Info("模板创建请求发送成功", 
+		zap.String("templateID", templateID), 
+		zap.String("buildID", buildID.String()))
 
 	telemetry.ReportEvent(ctx, "Template build started")
 	return nil
