@@ -82,6 +82,7 @@ build-and-upload:
 	$(eval E2B_EXECUTE_FILE_BUCKET := $(shell grep CFNSOFTWAREBUCKET /opt/config.properties | cut -d'=' -f2))
 	@echo "Using bucket: $(E2B_EXECUTE_FILE_BUCKET)"
 	aws s3 cp bin/orchestrator s3://$(E2B_EXECUTE_FILE_BUCKET)/orchestrator
+	aws s3 cp bin/orchestrator s3://$(E2B_EXECUTE_FILE_BUCKET)/template-manager
 
 .PHONY: mock
 mock:

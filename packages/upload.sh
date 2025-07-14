@@ -72,8 +72,8 @@ mkdir -p "${TEMP_DIR}/firecrackers"
 
 # Download files from Google Cloud Storage
 echo "Downloading files from Google Cloud Storage..."
-gsutil cp -r gs://e2b-prod-public-builds/envd-v0.0.1 "${TEMP_DIR}/envd-v0.0.1"
-gsutil cp -r gs://e2b-prod-public-builds/envd "${TEMP_DIR}/envd"
+# gsutil cp -r gs://e2b-prod-public-builds/envd-v0.0.1 "${TEMP_DIR}/envd-v0.0.1"
+# gsutil cp -r gs://e2b-prod-public-builds/envd "${TEMP_DIR}/envd"
 gsutil cp -r gs://e2b-prod-public-builds/kernels/* "${TEMP_DIR}/kernels/"
 gsutil cp -r gs://e2b-prod-public-builds/firecrackers/* "${TEMP_DIR}/firecrackers/"
 echo "File download completed"
@@ -81,9 +81,9 @@ echo "File download completed"
 # Upload to S3
 echo "Starting file upload to S3..."
 # Copy envd binary to S3 bucket
-aws s3 cp "${TEMP_DIR}/envd-v0.0.1" "s3://${BUCKET_FC_ENV_PIPELINE}/envd-v0.0.1"
-# aws s3 cp ./envd/bin/envd "s3://${BUCKET_FC_ENV_PIPELINE}/envd"
-aws s3 cp "${TEMP_DIR}/envd" "s3://${BUCKET_FC_ENV_PIPELINE}/envd"
+# aws s3 cp "${TEMP_DIR}/envd-v0.0.1" "s3://${BUCKET_FC_ENV_PIPELINE}/envd-v0.0.1"
+# # aws s3 cp ./envd/bin/envd "s3://${BUCKET_FC_ENV_PIPELINE}/envd"
+# aws s3 cp "${TEMP_DIR}/envd" "s3://${BUCKET_FC_ENV_PIPELINE}/envd"
 aws s3 cp --recursive "${TEMP_DIR}/kernels/" "s3://${BUCKET_FC_KERNELS}/"
 aws s3 cp --recursive "${TEMP_DIR}/firecrackers/" "s3://${BUCKET_FC_VERSIONS}/"
 echo "File upload to S3 completed"

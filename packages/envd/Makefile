@@ -32,7 +32,9 @@ start-docker:
 
 build-and-upload:
 	make build
-	make upload
+	$(eval BUCKET_FC_ENV_PIPELINE := $(shell grep BUCKET_FC_ENV_PIPELINE /opt/config.properties | cut -d'=' -f2))
+	@echo "Using bucket: $(BUCKET_FC_ENV_PIPELINE)"
+	aws s3 cp bin/envd s3://$(BUCKET_FC_ENV_PIPELINE)/envd
 
 .PHONY: generate
 generate:
