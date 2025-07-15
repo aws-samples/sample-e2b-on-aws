@@ -48,7 +48,7 @@ job "orchestrator" {
 
       config {
         command = "/bin/bash"
-        args    = ["-c", " chmod +x local/orchestrator && local/orchestrator --port 5008"]
+        args    = ["-c", " chmod +x local/orchestrator && local/orchestrator --port 5008 --proxy-port 5007"]
       }
 
       artifact {
