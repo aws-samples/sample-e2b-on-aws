@@ -32,14 +32,20 @@ job "template-manager" {
       }
 
       env {
+        NODE_ID                      = "$${node.unique.name}"
         AWS_ACCOUNT_ID               = "${account_id}"
+        STORAGE_PROVIDER             = "AWSBucket"
+        ARTIFACTS_REGISTRY_PROVIDER  = "AWS_ECR"
+        AWS_DOCKER_REPOSITORY_NAME   = "e2bdev/base"
         AWS_REGION                   = "${AWSREGION}"
+        CONSUL_TOKEN                 = "${consul_http_token}"
         AWS_ECR_REPOSITORY           = "e2bdev/base"
         OTEL_TRACING_PRINT           = false
         ENVIRONMENT                  = "dev"
         TEMPLATE_AWS_BUCKET_NAME     = "${BUCKET_FC_TEMPLATE}"
         TEMPLATE_BUCKET_NAME         = "${BUCKET_FC_TEMPLATE}"
         OTEL_COLLECTOR_GRPC_ENDPOINT = "localhost:4317"
+        ORCHESTRATOR_SERVICES        = "template-manager"
       }
 
       config {

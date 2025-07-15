@@ -8,9 +8,6 @@ job "api" {
       port "api" {
         static = "50001"
       }
-      port "dns" {
-        static = "5353"
-      }
     }
 
     constraint {
@@ -20,7 +17,7 @@ job "api" {
 
     service {
       name = "api"
-      port = "api"
+      port = "50001"
       task = "start"
 
       check {
@@ -29,7 +26,7 @@ job "api" {
         path     = "/health"
         interval = "3s"
         timeout  = "3s"
-        port     = "api"
+        port     = "50001"
       }
     }
 
@@ -74,6 +71,7 @@ job "api" {
         ADMIN_TOKEN                   = "${admin_token}"
         REDIS_URL                     = "${REDIS_ENDPOINT}:6379"
         DNS_PORT                      = 5353
+        SANDBOX_ACCESS_TOKEN_HASH_SEED = "${admin_token}"
         # This is here just because it is required in some part of our code which is transitively imported
         TEMPLATE_BUCKET_NAME          = "skip"
       }
@@ -81,7 +79,7 @@ job "api" {
       config {
         network_mode = "host"
         image        = "${account_id}.dkr.ecr.${AWSREGION}.amazonaws.com/e2b-orchestration/api:latest"
-        ports        = ["api", "dns"]
+        ports        = ["api"]
         args         = [
           "--port", "50001",
         ]

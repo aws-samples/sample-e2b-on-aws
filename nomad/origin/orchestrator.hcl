@@ -33,7 +33,7 @@ job "orchestrator" {
         CONSUL_TOKEN                 = "${consul_http_token}"
         OTEL_TRACING_PRINT           = false
         LOGS_COLLECTOR_ADDRESS       = "http://localhost:30006"
-        LOGS_COLLECTOR_PUBLIC_IP     = "http://127.0.0.1:8080"
+        LOGS_COLLECTOR_PUBLIC_IP     = "http://127.0.0.1"
         ENVIRONMENT                  = "${environment}"
         TEMPLATE_BUCKET_NAME         = "${BUCKET_FC_TEMPLATE}"
         OTEL_COLLECTOR_GRPC_ENDPOINT = "localhost:4317"
@@ -41,6 +41,9 @@ job "orchestrator" {
         TEMPLATE_AWS_BUCKET_NAME     = "${BUCKET_FC_TEMPLATE}"
         AWS_REGION                   = "${AWSREGION}"
         USE_FIRECRACKER_NATIVE_DIFF  = true
+        STORAGE_PROVIDER             = "AWSBucket"
+        ARTIFACTS_REGISTRY_PROVIDER  = "AWS_ECR"
+        ORCHESTRATOR_SERVICES        = "orchestrator"
       }
 
       config {
