@@ -50,7 +50,7 @@ job "template-manager" {
 
       config {
         command = "/bin/bash"
-        args    = ["-c", " chmod +x local/template-manager && local/template-manager --port 5009"]
+        args    = ["-c", " chmod +x local/template-manager && local/template-manager --port 5009  --proxy-port 15007"]
       }
 
       artifact {

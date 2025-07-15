@@ -118,7 +118,9 @@ bash infra-iac/db/init-db.sh
 
 **Custom Image Building**
    - **Build Custom Images**: Execute `bash packages/build.sh` to build custom E2B images and push them to your private ECR registry
-
+```bash
+bash packages/build.sh
+```
 #### Deploy Nomad Applications
 
 ```bash
