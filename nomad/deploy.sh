@@ -8,8 +8,7 @@ declare -A jobs_minimal=(
     # ["redis"]="deploy/redis-deploy.hcl"
     ["api"]="deploy/api-deploy.hcl"
     ["orchestrator"]="deploy/orchestrator-deploy.hcl"
-    ["client-proxy"]="deploy/client-proxy-deploy.hcl"
-    ["session-proxy"]="deploy/session-proxy-deploy.hcl"
+    ["client-proxy"]="deploy/edge.hcl"
     ["template-manager"]="deploy/template-manager-deploy.hcl"
     # ["docker-reverse-proxy"]="deploy/docker-reverse-proxy-deploy.hcl"
 )
