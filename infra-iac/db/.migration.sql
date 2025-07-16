@@ -284,7 +284,7 @@ SET DEFAULT 'vmlinux-5.10.186';
 ALTER TABLE "public"."tiers"
 ADD COLUMN "max_length_hours" bigint NULL;
 UPDATE "public"."tiers"
-SET "max_length_hours" = 1;
+SET "max_length_hours" = 24;
 ALTER TABLE "public"."tiers"
 ALTER COLUMN "max_length_hours"
 SET NOT NULL;
