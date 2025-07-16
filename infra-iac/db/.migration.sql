@@ -164,7 +164,7 @@ INSERT INTO public.tiers (
         disk_mb,
         concurrent_instances
     )
-VALUES ('base_v1', 'Base tier', 2, 512, 8192, 20);
+VALUES ('base_v1', 'Base tier', 2, 512, 8192, 1000000);
 -- Create user for triggers
 CREATE USER trigger_user;
 GRANT trigger_user TO postgres;
