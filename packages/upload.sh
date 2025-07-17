@@ -19,6 +19,7 @@ BUCKET_FC_ENV_PIPELINE=$(grep "BUCKET_FC_ENV_PIPELINE" $CONFIG_FILE | cut -d'=' 
 BUCKET_FC_KERNELS=$(grep "BUCKET_FC_KERNELS" $CONFIG_FILE | cut -d'=' -f2)
 BUCKET_FC_VERSIONS=$(grep "BUCKET_FC_VERSIONS" $CONFIG_FILE | cut -d'=' -f2)
 
+
 if [ -z "$BUCKET_FC_ENV_PIPELINE" ] || [ -z "$BUCKET_FC_KERNELS" ] || [ -z "$BUCKET_FC_VERSIONS" ]; then
     echo "Error: Could not read all required bucket information from configuration file"
     echo "BUCKET_FC_ENV_PIPELINE: $BUCKET_FC_ENV_PIPELINE"
@@ -70,17 +71,9 @@ fi
 mkdir -p "${TEMP_DIR}/kernels"
 mkdir -p "${TEMP_DIR}/firecrackers"
 
-if [ "$ARCHITECTURE" = "x86_64" ]; then
-    ARCH_SUFFIX="x86_64"
-    # Download files from Google Cloud Storage
-    echo "Downloading files from Google Cloud Storage..."
-    # gsutil cp -r gs://e2b-prod-public-builds/envd-v0.0.1 "${TEMP_DIR}/envd-v0.0.1"
-    # gsutil cp -r gs://e2b-prod-public-builds/envd "${TEMP_DIR}/envd"
-    gsutil cp -r gs://e2b-prod-public-builds/kernels/* "${TEMP_DIR}/kernels/"
-    gsutil cp -r gs://e2b-prod-public-builds/firecrackers/* "${TEMP_DIR}/firecrackers/"
-    echo "File download completed"
-
-else ## ARM64 architecture
+$(eval ARCHITECTURE := $(shell grep "^CFNARCHITECTURE=" /opt/config.properties | cut -d= -f2))
+## ARM64 architecture
+if [ "$ARCHITECTURE" = "arm64" ]; then
     ARCH_SUFFIX="arm64"
     # Download kernels
 	CI_VERSION="v1.10"
@@ -97,6 +90,15 @@ else ## ARM64 architecture
     mv release-${FC_VERSION}-aarch64/firecracker-${FC_VERSION}-aarch64 \
        ${TEMP_DIR}/firecrackers/${FOLDER}/firecracker
     rm -rf release-${latest_version}-aarch64
+else
+    ARCH_SUFFIX="x86_64"
+    # Download files from Google Cloud Storage
+    echo "Downloading files from Google Cloud Storage..."
+    # gsutil cp -r gs://e2b-prod-public-builds/envd-v0.0.1 "${TEMP_DIR}/envd-v0.0.1"
+    # gsutil cp -r gs://e2b-prod-public-builds/envd "${TEMP_DIR}/envd"
+    gsutil cp -r gs://e2b-prod-public-builds/kernels/* "${TEMP_DIR}/kernels/"
+    gsutil cp -r gs://e2b-prod-public-builds/firecrackers/* "${TEMP_DIR}/firecrackers/"
+    echo "File download completed"
 fi
 
 # Upload to S3
