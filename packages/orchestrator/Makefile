@@ -17,21 +17,24 @@ generate:
 .PHONY: build
 build:
 	$(eval COMMIT_SHA := $(shell git rev-parse --short HEAD))
+	$(eval ARCHITECTURE := $(shell grep "^CFNARCHITECTURE=" /opt/config.properties | cut -d= -f2 || echo "amd64"))
 	@rm -rf .shared/
 	@cp -r ../shared .shared/
-	@echo "Building with Docker workspace module approach"
-	@sudo docker build --platform linux/amd64 --output=bin --build-arg COMMIT_SHA="$(COMMIT_SHA)" .
+	@echo "Building with Docker workspace module approach for architecture: $(ARCHITECTURE)"
+
+	@docker build --platform linux/$(ARCHITECTURE) --output=bin --build-arg COMMIT_SHA="$(COMMIT_SHA)" .
 	@rm -rf .shared/
 
 .PHONY: build-local
 build-local:
 	# Allow for passing commit sha directly for docker builds
 	$(eval COMMIT_SHA ?= $(shell git rev-parse --short HEAD))
-	CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -o bin/orchestrator -ldflags "-X=main.commitSHA=$(COMMIT_SHA)" .
+	
+	CGO_ENABLED=1 GOOS=linux go build -o bin/orchestrator -ldflags "-X=main.commitSHA=$(COMMIT_SHA)" .
 
 .PHONY: build-debug
 build-debug:
-	CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -race -gcflags=all="-N -l" -o bin/orchestrator .
+	CGO_ENABLED=1 GOOS=linux go build -race -gcflags=all="-N -l" -o bin/orchestrator .
 
 .PHONY: run-debug
 run-debug:

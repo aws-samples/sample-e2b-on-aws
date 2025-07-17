@@ -10,15 +10,16 @@ packer {
 
 source "amazon-ebs" "orch" {
   ami_name      = "e2b-ubuntu-ami-${formatdate("YYYY-MM-DD-hh-mm-ss", timestamp())}"
-  instance_type = var.aws_instance_type
+  instance_type = var.architecture == "x86_64" ? "t3.xlarge" : "t4g.xlarge"
   region        = var.aws_region
 
   source_ami_filter {
      filters = {
-       name = "ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*"
+       name = var.architecture == "x86_64" ? "ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*" : "ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-arm64-server-*"
        root-device-type    = "ebs"
        virtualization-type = "hvm"
-       state  = "available"
+       state               = "available"
+       architecture        = var.architecture
      }
     owners = ["amazon"] // 或实际拥有此 AMI 的 AWS 账户 ID
     most_recent = true
@@ -48,7 +49,7 @@ build {
       "sudo apt-get clean",
       "sudo apt-get update -y",
       "sudo apt-get upgrade -y",
-      "sudo apt-get install -y ca-certificates curl"
+      "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl"
     ]
   }
   
@@ -85,7 +86,7 @@ build {
   provisioner "shell" {
     inline = [
       "sudo apt-get update",
-      "sudo apt-get install -y unzip jq net-tools qemu-utils make build-essential openssh-client openssh-server", # TODO: openssh-server is updated to prevent security vulnerabilities
+      "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y unzip jq net-tools qemu-utils make build-essential openssh-client openssh-server", # TODO: openssh-server is updated to prevent security vulnerabilities
     ]
   }
   
@@ -93,17 +94,22 @@ build {
     only = ["amazon-ebs.orch"]
     inline = [
       "sudo apt-get update && sudo apt-get upgrade -y",
-      "sudo curl 'https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip' -o 'awscliv2.zip'",
+      "if [ \"${var.architecture}\" = \"x86_64\" ]; then",
+      "  sudo curl 'https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip' -o 'awscliv2.zip'",
+      "else",
+      "  sudo curl 'https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip' -o 'awscliv2.zip'",
+      "fi",
       "sudo apt-get install -y zip",
       "sudo unzip awscliv2.zip",
       "sudo ./aws/install",
-      "sudo apt-get install -y s3fs-fuse || echo 'Failed to install s3fs-fuse, will install from source'"
+      "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y s3fs-fuse || echo 'Failed to install s3fs-fuse'",
+      "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y s3fs || echo 'Failed to install s3fs'"
     ]
   }
 
   provisioner "shell" {
     inline = [
-      "sudo snap install go --classic"
+      "sudo DEBIAN_FRONTEND=noninteractive snap install go --classic"
     ]
   }
 
@@ -142,8 +148,12 @@ build {
     only = ["amazon-ebs.orch"]
     inline = [
       "sudo mkdir -p /opt/aws/amazon-cloudwatch-agent/bin/",
-      "sudo wget https://amazoncloudwatch-agent.s3.amazonaws.com/ubuntu/amd64/latest/amazon-cloudwatch-agent.deb -O /tmp/amazon-cloudwatch-agent.deb",
-      "sudo dpkg -i /tmp/amazon-cloudwatch-agent.deb || sudo apt-get install -f -y",
+      "if [ \"${var.architecture}\" = \"x86_64\" ]; then",
+      "  sudo wget https://amazoncloudwatch-agent.s3.amazonaws.com/ubuntu/amd64/latest/amazon-cloudwatch-agent.deb -O /tmp/amazon-cloudwatch-agent.deb",
+      "else",
+      "  sudo wget https://amazoncloudwatch-agent.s3.amazonaws.com/ubuntu/arm64/latest/amazon-cloudwatch-agent.deb -O /tmp/amazon-cloudwatch-agent.deb",
+      "fi",
+      "sudo dpkg -i /tmp/amazon-cloudwatch-agent.deb || sudo DEBIAN_FRONTEND=noninteractive apt-get install -f -y",
       "sudo systemctl enable amazon-cloudwatch-agent"
     ]
   }

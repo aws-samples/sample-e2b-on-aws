@@ -6,6 +6,7 @@ package fc
 import (
 	"context"
 	"fmt"
+	"runtime"
 
 	"github.com/firecracker-microvm/firecracker-go-sdk"
 	"github.com/go-openapi/strfmt"
@@ -225,7 +226,7 @@ func (c *apiClient) setMachineConfig(
 	memoryMB int64,
 	hugePages bool,
 ) error {
-	smt := true
+	smt := runtime.GOARCH != "arm64"
 	trackDirtyPages := false
 	machineConfig := &models.MachineConfiguration{
 		VcpuCount:       &vCPUCount,

@@ -106,9 +106,24 @@ function create_consul_install_paths {
 function fetch_binary {
   local -r version="$1"
   local download_url="$2"
+  local arch=$(arch)
+  log_info "Auto-detected architecture: $arch"
+
+  local consul_arch="amd64"
+  # Map architecture to Consul's naming convention
+  if [[ "$arch" == "aarch64" || "$arch" == "arm64" ]]; then
+    consul_arch="arm64"
+  elif [[ "$arch" == "x86_64" ]]; then
+    consul_arch="amd64"
+  else
+    log_error "Unsupported architecture: $arch"
+    exit 1
+  fi
+
+  log_info "Using Consul architecture: $consul_arch"
 
   if [[ -z "$download_url" && -n "$version" ]];  then
-    download_url="https://releases.hashicorp.com/consul/${version}/consul_${version}_linux_amd64.zip"
+    download_url="https://releases.hashicorp.com/consul/${version}/consul_${version}_linux_${consul_arch}.zip"
   fi
 
   retry \

@@ -58,9 +58,16 @@ setup_environment() {
 
   echo "AWSREGION=$REGION" >> /opt/config.properties
 
+  export ARCHITECTURE=amd64
+  ARCH=$(arch)
+  if [ "$ARCH" = "aarch64" ]; then
+    echo "CFNARCHITECTURE=arm64" >> /opt/config.properties
+    export ARCHITECTURE=$ARCH
+  fi
+
   # Verification output
   echo "=== Exported Variables ==="
-  printenv | grep -E '^CFN'
+  cat /opt/config.properties
 }
 
 # ==================================================

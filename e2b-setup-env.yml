@@ -10,6 +10,14 @@ Metadata:
   AWS::CloudFormation::Interface:
     ParameterGroups:
       - Label:
+          default: E2B Environment
+        Parameters:
+          - Environment    
+      - Label:
+          default: Architecture Configuration
+        Parameters:
+          - Architecture
+      - Label:
           default: Domain Configuration
         Parameters:
           - BaseDomain
@@ -35,12 +43,29 @@ Metadata:
           - DBInstanceIdentifier
           - DBName
           - DBPassword
-          - DBUsername           
+          - DBUsername
 
 # ===================================================================================================
 # Parameters - Input values required for the E2B infrastructure deployment
 # ===================================================================================================
 Parameters:
+  # Architecture Configuration - Choose CPU architecture
+  Environment:
+    Description: "E2B Environment"
+    Type: String
+    AllowedValues:
+      - prod
+      - dev      
+    Default: prod
+
+  # Architecture Configuration - Choose CPU architecture
+  Architecture:
+    Description: "Choose CPU architecture"
+    Type: String
+    AllowedValues:
+      - x64
+      - Graviton
+
   # Domain Configuration - Settings for SSL certificate and DNS
   BaseDomain:
     Type: String
@@ -49,7 +74,6 @@ Parameters:
       Wildcard certificate will be issued for *.{BaseDomain}
     AllowedPattern: '^([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}$'
     ConstraintDescription: Must be a valid domain (e.g. sub.domain.com)
-    Default: domain.com
   
   # VPC Configuration - Network address space for the entire infrastructure
   VpcBlock:
@@ -106,14 +130,17 @@ Parameters:
     Type: String
     NoEcho: true
     Description: Master password for PostgreSQL database (must be 8-30 characters with letters and numbers)
-    AllowedPattern: ^(?=.*[a-zA-Z])(?=.*\d)(?!.*\s).{8,30}$
+    AllowedPattern: ^(?=.*[a-zA-Z])(?=.*\d)[a-zA-Z0-9]{8,30}$
     ConstraintDescription: Password must be 8-30 characters and contain at least one letter and one number
 
 
 # ===================================================================================================
 # Conditions - Conditional logic for resource creation (none used in this template)
 # ===================================================================================================
-Conditions: {}
+Conditions:
+  IsX64: !Equals [!Ref Architecture, x64]
+  IsGraviton: !Equals [!Ref Architecture, Graviton]
+  IsProd: !Equals [!Ref Environment, prod]
 
 # ===================================================================================================
 # Resources - AWS resources to be provisioned for the E2B infrastructure
@@ -469,7 +496,7 @@ Resources:
       PubliclyAccessible: false
       MultiAZ: true
       StorageEncrypted: true
-      DeletionProtection: true
+      DeletionProtection: !If [IsProd, true, false]
       VPCSecurityGroups:
         - !GetAtt DBSecurityGroup.GroupId
       Tags:
@@ -490,7 +517,7 @@ Resources:
         - Key: Name
           Value: !Sub "${AWS::StackName}-redis-subnet-group"
           
-  RedisServerlessCache:
+  RedisServerless:
     Type: AWS::ElastiCache::ServerlessCache
     Properties:
       Engine: redis
@@ -512,18 +539,24 @@ Resources:
     Metadata:
       Comment: 'Terraform Bastion Host for deploying and managing E2B infrastructure components'
     Properties:
-      InstanceType: m5.2xlarge
+      InstanceType: !If
+        - IsX64
+        - c7i.xlarge
+        - c7g.xlarge
       KeyName: !Ref KeyName
       IamInstanceProfile: !Ref EC2InstanceProfile
       SubnetId: !Ref PublicSubnet1
       SourceDestCheck: 'false'
       EbsOptimized: true
       Monitoring: true
-      ImageId: "{{resolve:ssm:/aws/service/canonical/ubuntu/server/22.04/stable/current/amd64/hvm/ebs-gp2/ami-id}}"
+      ImageId: !If
+        - IsX64
+        - "{{resolve:ssm:/aws/service/canonical/ubuntu/server/22.04/stable/current/amd64/hvm/ebs-gp2/ami-id}}"
+        - "{{resolve:ssm:/aws/service/canonical/ubuntu/server/22.04/stable/current/arm64/hvm/ebs-gp2/ami-id}}"
       BlockDeviceMappings:
         - DeviceName: /dev/sda1  
           Ebs:
-            VolumeSize: 100
+            VolumeSize: 40
             VolumeType: gp3
             Encrypted: true
       SecurityGroupIds:
@@ -550,43 +583,40 @@ Resources:
               apt install postgresql-client -y           
             - |
               # Setup Docker buildx for multi-architecture container builds
-              mkdir -p /root/.docker/cli-plugins 
+              mkdir -p /root/.docker/cli-plugins
+            - !If
+              - IsX64
+              - |
+                wget -O /root/.docker/cli-plugins/docker-buildx https://github.com/docker/buildx/releases/download/v0.21.1/buildx-v0.21.1.linux-amd64
+                wget -O /opt/awscli.zip https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip
+                wget -O /opt/packer.zip https://releases.hashicorp.com/packer/1.12.0/packer_1.12.0_linux_amd64.zip
+                wget -O /opt/terraform.zip https://releases.hashicorp.com/terraform/1.5.7/terraform_1.5.7_linux_amd64.zip
+                wget -O /opt/nomad.zip https://releases.hashicorp.com/nomad/1.6.2/nomad_1.6.2_linux_amd64.zip
+              - |
+                wget -O /root/.docker/cli-plugins/docker-buildx https://github.com/docker/buildx/releases/download/v0.21.1/buildx-v0.21.1.linux-arm64
+                wget -O /opt/awscli.zip https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip
+                wget -O /opt/packer.zip https://releases.hashicorp.com/packer/1.12.0/packer_1.12.0_linux_arm64.zip
+                wget -O /opt/terraform.zip https://releases.hashicorp.com/terraform/1.5.7/terraform_1.5.7_linux_arm64.zip
+                wget -O /opt/nomad.zip https://releases.hashicorp.com/nomad/1.6.2/nomad_1.6.2_linux_arm64.zip
             - |
-              wget -O /root/.docker/cli-plugins/docker-buildx https://github.com/docker/buildx/releases/download/v0.21.1/buildx-v0.21.1.linux-amd64 
-            - |              
-              chmod +x /root/.docker/cli-plugins/docker-buildx                               
-            - |              
-              cd /opt 
-            - |  
+              chmod +x /root/.docker/cli-plugins/docker-buildx
+            - |
+              cd /opt
+            - |
               # Install AWS CLI for infrastructure management
-              wget https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip    
-            - |
-              unzip awscli-exe-linux-x86_64.zip
-            - |
-              rm awscli-exe-linux-x86_64.zip
-            - |
-              ./aws/install
+              unzip awscli.zip && ./aws/install && rm awscli.zip
             - |
               # Configure AWS CLI default region
               !Sub "aws configure set region ${AWS::Region}"
             - |
-              # Install HashiCorp Packer for creating machine images
-              wget https://releases.hashicorp.com/packer/1.12.0/packer_1.12.0_linux_amd64.zip
-              unzip packer_1.12.0_linux_amd64.zip
-              mv packer /usr/local/bin/packer
-              rm packer_1.12.0_linux_amd64.zip
+              # Install HashiCorp Packer for creating machine images                
+              unzip packer.zip && mv packer /usr/local/bin/packer && rm packer.zip
             - |
               # Install HashiCorp Terraform for infrastructure as code
-              wget https://releases.hashicorp.com/terraform/1.5.7/terraform_1.5.7_linux_amd64.zip
-              unzip terraform_1.5.7_linux_amd64.zip
-              mv terraform /usr/local/bin/terraform
-              rm terraform_1.5.7_linux_amd64.zip
+              unzip terraform.zip && mv terraform /usr/local/bin/terraform && rm terraform.zip
             - |
               # Install HashiCorp Nomad for workload orchestration
-              wget https://releases.hashicorp.com/nomad/1.6.2/nomad_1.6.2_linux_amd64.zip
-              unzip nomad_1.6.2_linux_amd64.zip
-              mv nomad /usr/local/bin/
-              rm nomad_1.6.2_linux_amd64.zip         
+              unzip nomad.zip && mv nomad /usr/local/bin/ && rm nomad.zip
             - |
               # Create directory for E2B infrastructure code
               mkdir -p /opt/infra/ && cd /opt/infra/
@@ -708,24 +738,29 @@ Outputs:
       Name: CFNCERTARN
       
   # Redis outputs
-  RedisName:
+  REDISNAME:
     Description: Redis cache name
     Value: !Sub "${AWS::StackName}-redis"
     Export:
       Name: CFNREDISNAME
-      
-      
-  RedisConnectionString:
+
+  REDISENDPOINT:
     Description: Complete Redis connection string for application configuration
-    Value: !Sub "${AWS::StackName}-redis.serverless.${AWS::Region}.cache.amazonaws.com:6379"
+    Value: !GetAtt RedisServerless.Endpoint.Address
     Export:
       Name: CFNREDISURL
 
+  ENVIRONMENT:
+    Description: E2B Environment
+    Value: ${Environment}
+    Export:
+      Name: CFNENVIRONMENT
+
   # Bastion Host information
-  BastionPublicDNS:
+  BASTIONPUBLICDNS:
     Description: Public DNS name of the Bastion Host for SSH access
     Value: !GetAtt BastionInstance.PublicDnsName
 
-  BastionPublicIP:
+  BASTIONPUBLICIP:
     Description: Public IP address of the Bastion Host for SSH access
     Value: !GetAtt BastionInstance.PublicIp

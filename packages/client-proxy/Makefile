@@ -7,7 +7,7 @@ IMAGE := e2b-orchestration/client-proxy
 build:
 	# Allow for passing commit sha directly for docker builds
 	$(eval COMMIT_SHA ?= $(shell git rev-parse --short HEAD))
-	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/client-proxy -ldflags "-X=main.commitSHA=$(COMMIT_SHA)" .
+	CGO_ENABLED=0 GOOS=linux go build -o bin/client-proxy -ldflags "-X=main.commitSHA=$(COMMIT_SHA)" .
 
 .PHONY: build-and-upload
 build-and-upload:
@@ -37,6 +37,8 @@ test:
 build-and-upload-aws:
 	$(eval AWS_ACCOUNT_ID := $(shell grep "^account_id=" /opt/config.properties | cut -d= -f2))
 	$(eval AWS_REGION := $(shell grep "^AWSREGION=" /opt/config.properties | cut -d= -f2))
+	$(eval ARCHITECTURE := $(shell grep "^CFNARCHITECTURE=" /opt/config.properties | cut -d= -f2 || echo "amd64"))
+
 	@rm -rf .shared/
 	@cp -r ../shared .shared/
 	@docker buildx install || true # sets up the buildx as default docker builder
@@ -45,6 +47,7 @@ build-and-upload-aws:
 	# Login to ECR
 	@aws ecr get-login-password --region $(AWS_REGION) | docker login --username AWS --password-stdin $(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com
 	# Build and push the image
-	@docker build --platform linux/amd64 --tag "$(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/$(IMAGE):latest" .
+	@echo "Building for architecture: $(ARCHITECTURE)"
+	@docker build --platform linux/arm64 --tag "$(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/$(IMAGE):latest" .
 	@docker push "$(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/$(IMAGE):latest"
 	@rm -rf .shared/

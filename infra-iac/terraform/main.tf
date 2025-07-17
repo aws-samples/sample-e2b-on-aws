@@ -41,9 +41,9 @@ locals {
 
   # Define common resource tags to be applied to all resources
   common_tags = {
-    Environment = "Production"
+    Environment = var.environment
     Project     = "E2B"
-    Owner       = "DevOps"
+    Owner       = "AWS"
     ManagedBy   = "Terraform"
   }
   
@@ -51,28 +51,32 @@ locals {
   clusters = {
     # Server nodes run Consul and Nomad servers
     server = {
-      instance_type    = "t3.xlarge"
+      instance_type_x86    = "t3.xlarge"
+      instance_type_arm    = "t4g.xlarge"
       desired_capacity = 3
       max_size         = 3
       min_size         = 3
     }
     # Client nodes run workloads and containers
     client = {
-      instance_type    = "c6i.metal"
+      instance_type_x86    = "c6i.metal"
+      instance_type_arm    = "c7g.metal"
       desired_capacity = 1
       max_size         = 5
       min_size         = 0
     }
     # API nodes run the API service
     api = {
-      instance_type    = "t3.xlarge"
+      instance_type_x86    = "t3.xlarge"
+      instance_type_arm    = "t4g.xlarge"
       desired_capacity = 2
       max_size         = 5
       min_size         = 2
     }
     # Build nodes for environment building (currently not active)
     build = {
-      instance_type    = "t3.xlarge"
+      instance_type_x86    = "t3.xlarge"
+      instance_type_arm    = "t4g.xlarge"
       desired_capacity = 0
       max_size         = 0
       min_size         = 0
@@ -400,7 +404,7 @@ resource "aws_launch_template" "server" {
   name_prefix            = "${var.prefix}-server-"
   update_default_version = true
   image_id               = data.aws_ami.e2b.id
-  instance_type          = local.clusters.server.instance_type
+  instance_type          = var.architecture == "x86_64" ? local.clusters.server.instance_type_x86 : local.clusters.server.instance_type_arm
   key_name               = null
 
   iam_instance_profile {
@@ -533,7 +537,7 @@ resource "aws_launch_template" "client" {
   name_prefix            = "${var.prefix}-client-"
   update_default_version = true
   image_id      = data.aws_ami.e2b.id
-  instance_type = local.clusters.client.instance_type
+  instance_type = var.architecture == "x86_64" ? local.clusters.client.instance_type_x86 : local.clusters.client.instance_type_arm
   iam_instance_profile {
     name = aws_iam_instance_profile.ec2_instance_profile.name
   }
@@ -715,7 +719,7 @@ resource "aws_lb" "publicalb" {
   load_balancer_type = "application"
   security_groups    = [aws_security_group.public_alb_sg.id]
   subnets            = var.VPC.public_subnets
-  enable_deletion_protection = true
+  enable_deletion_protection = var.environment == "prod" ? true : false
   
   tags = merge(
     local.common_tags,
@@ -971,7 +975,7 @@ resource "aws_launch_template" "api" {
   name_prefix            = "${var.prefix}-api-"
   update_default_version = true
   image_id               = data.aws_ami.e2b.id
-  instance_type          = local.clusters.api.instance_type
+  instance_type          = var.architecture == "x86_64" ? local.clusters.api.instance_type_x86 : local.clusters.api.instance_type_arm
   key_name               =  null
 
   iam_instance_profile {
@@ -1122,7 +1126,7 @@ resource "aws_launch_template" "build" {
   name_prefix            = "${var.prefix}-build-"
   update_default_version = true
   image_id               = data.aws_ami.e2b.id
-  instance_type          = local.clusters.build.instance_type
+  instance_type          = var.architecture == "x86_64" ? local.clusters.build.instance_type_x86 : local.clusters.build.instance_type_arm
   key_name               = null
 
   iam_instance_profile {

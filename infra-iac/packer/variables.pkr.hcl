@@ -17,12 +17,18 @@ variable "aws_region" {
 variable "gcp_instance_type" {
   type = string
   default = ""
-
 }
 
 variable "aws_instance_type" {
   type    = string
-  default = "t3.xlarge"
+  default = ""  # Empty default, will be determined dynamically in main.pkr.hcl
+  description = "AWS instance type to use for building the AMI"
+}
+
+variable "architecture" {
+  type        = string
+  default     = "x86_64"
+  description = "CPU architecture (x86_64 or arm64)"
 }
 
 variable "image_family" {

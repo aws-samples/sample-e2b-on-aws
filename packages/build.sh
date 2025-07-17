@@ -37,12 +37,12 @@ echo "Current directory: $(pwd)"
 make build-and-upload
 echo "orchestrator module build and upload completed successfully"
 
-# Build and upload template-manager module
+# Build and upload envd module
 echo "=== Building envd module ==="
 cd "$PROJECT_ROOT/envd" || { echo "envd directory not found"; exit 1; }
 echo "Current directory: $(pwd)"
 make build-and-upload
-echo "envd module build-and-upload  completed successfully"
+echo "envd module build-and-upload completed successfully"
 
 # Upload other required files
 echo "=== Uploading required files ==="
