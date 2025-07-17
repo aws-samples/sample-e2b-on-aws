@@ -71,7 +71,7 @@ fi
 mkdir -p "${TEMP_DIR}/kernels"
 mkdir -p "${TEMP_DIR}/firecrackers"
 
-$(eval ARCHITECTURE := $(shell grep "^CFNARCHITECTURE=" /opt/config.properties | cut -d= -f2))
+ARCHITECTURE=$(grep "^CFNARCHITECTURE=" "$CONFIG_FILE" | cut -d'=' -f2)
 ## ARM64 architecture
 if [ "$ARCHITECTURE" = "arm64" ]; then
     ARCH_SUFFIX="arm64"
