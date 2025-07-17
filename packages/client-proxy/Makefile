@@ -48,6 +48,14 @@ build-and-upload-aws:
 	@aws ecr get-login-password --region $(AWS_REGION) | docker login --username AWS --password-stdin $(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com
 	# Build and push the image
 	@echo "Building for architecture: $(ARCHITECTURE)"
-	@docker build --platform linux/arm64 --tag "$(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/$(IMAGE):latest" .
+
+	@if [ "$(ARCHITECTURE)" = "arm64" ]; then \
+		echo "Building for ARM64 architecture"; \
+		docker build --platform linux/arm64 --tag "$(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/$(IMAGE):latest" .; \
+	else \
+		echo "Building for x86_64 architecture"; \
+		docker build --platform linux/amd64 --tag "$(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/$(IMAGE):latest" .; \
+	fi
+
 	@docker push "$(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/$(IMAGE):latest"
 	@rm -rf .shared/
