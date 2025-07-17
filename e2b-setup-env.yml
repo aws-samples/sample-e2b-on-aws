@@ -752,7 +752,7 @@ Outputs:
 
   ENVIRONMENT:
     Description: E2B Environment
-    Value: ${Environment}
+    Value: !Ref Environment
     Export:
       Name: CFNENVIRONMENT
 
