@@ -405,7 +405,7 @@ resource "aws_launch_template" "server" {
   update_default_version = true
   image_id               = data.aws_ami.e2b.id
   instance_type          = var.architecture == "x86_64" ? local.clusters.server.instance_type_x86 : local.clusters.server.instance_type_arm
-  key_name               = null
+  key_name               = var.sshkey
 
   iam_instance_profile {
     name = aws_iam_instance_profile.ec2_instance_profile.name
@@ -538,6 +538,7 @@ resource "aws_launch_template" "client" {
   update_default_version = true
   image_id      = data.aws_ami.e2b.id
   instance_type = var.architecture == "x86_64" ? local.clusters.client.instance_type_x86 : local.clusters.client.instance_type_arm
+  key_name               = var.sshkey
   iam_instance_profile {
     name = aws_iam_instance_profile.ec2_instance_profile.name
   }
@@ -976,7 +977,7 @@ resource "aws_launch_template" "api" {
   update_default_version = true
   image_id               = data.aws_ami.e2b.id
   instance_type          = var.architecture == "x86_64" ? local.clusters.api.instance_type_x86 : local.clusters.api.instance_type_arm
-  key_name               =  null
+  key_name               = var.sshkey
 
   iam_instance_profile {
     name = aws_iam_instance_profile.ec2_instance_profile.name
@@ -1127,7 +1128,7 @@ resource "aws_launch_template" "build" {
   update_default_version = true
   image_id               = data.aws_ami.e2b.id
   instance_type          = var.architecture == "x86_64" ? local.clusters.build.instance_type_x86 : local.clusters.build.instance_type_arm
-  key_name               = null
+  key_name               = var.sshkey
 
   iam_instance_profile {
     name = aws_iam_instance_profile.ec2_instance_profile.name
@@ -1214,8 +1215,6 @@ resource "aws_autoscaling_group" "build" {
     }
   }
 }
-
-
 
 # Create CloudWatch logs group for cluster
 resource "aws_cloudwatch_log_group" "cluster_logs" {

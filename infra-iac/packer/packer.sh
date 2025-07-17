@@ -33,7 +33,7 @@ echo "Building for architecture: ${ARCHITECTURE}"
 if ! command -v packer &> /dev/null; then
     echo "Packer not found. Installing Packer 1.12.0..."
     # Choose the right architecture for Packer
-    if [ "$(uname -m)" = "aarch64" ] || [ "$(uname -m)" = "arm64" ]; then
+    if [ "${ARCHITECTURE}" = "arm64" ]; then
         PACKER_URL="https://releases.hashicorp.com/packer/1.12.0/packer_1.12.0_linux_arm64.zip"
     else
         PACKER_URL="https://releases.hashicorp.com/packer/1.12.0/packer_1.12.0_linux_amd64.zip"
@@ -49,4 +49,8 @@ packer init -upgrade .
 sleep 10
 
 echo "Starting Packer build with architecture: ${ARCHITECTURE}"
-packer build -only=amazon-ebs.orch -var "aws_region=${AWS_REGION}" -var "architecture=${ARCHITECTURE}" .
+if [ "${ARCHITECTURE}" = "arm64" ]; then
+    packer build -only=amazon-ebs.orch -var "aws_region=${AWS_REGION}" -var "architecture=${ARCHITECTURE}" .
+else
+    packer build -only=amazon-ebs.orch -var "aws_region=${AWS_REGION}" .
+fi

@@ -12,10 +12,24 @@ upload:
 	./upload.sh $(GCP_PROJECT_ID)
 
 build:
-	CGO_ENABLED=0 GOOS=linux go build -a -o bin/envd ${LDFLAGS}
+	$(eval ARCHITECTURE := $(shell grep "^CFNARCHITECTURE=" /opt/config.properties | cut -d= -f2 || echo "amd64"))
+	@if [ "$(ARCHITECTURE)" = "arm64" ]; then \
+		echo "Building for arm64 architecture"; \
+		CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -a -o bin/envd ${LDFLAGS}; \
+	else \
+		echo "Building for x86_64 architecture"; \
+	    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -a -o bin/envd ${LDFLAGS}; \
+	fi
 
 build-debug:
-	CGO_ENABLED=1 go build -race -gcflags=all="-N -l" -o bin/debug/envd ${LDFLAGS}
+	$(eval ARCHITECTURE := $(shell grep "^CFNARCHITECTURE=" /opt/config.properties | cut -d= -f2 || echo "amd64"))
+	@if [ "$(ARCHITECTURE)" = "arm64" ]; then \
+		echo "Building for arm64 architecture"; \
+		CGO_ENABLED=1 GOARCH=arm64 go build -race -gcflags=all="-N -l" -o bin/debug/envd ${LDFLAGS}; \
+	else \
+		echo "Building for x86_64 architecture"; \
+		CGO_ENABLED=1 GOARCH=amd64 go build -race -gcflags=all="-N -l" -o bin/debug/envd ${LDFLAGS}; \
+	fi
 
 start-docker:
 	DOCKER_BUILDKIT=1 docker build -t envd-debug . -f debug.Dockerfile
