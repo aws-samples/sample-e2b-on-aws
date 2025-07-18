@@ -180,6 +180,12 @@ bash packages/create_template.sh
 # Create a template from a Dockerfile
 bash packages/create_template.sh --docker-file <Docker_File_Path>
 
+# Example for create a template of Desktop
+bash packages/create_template.sh --docker-file test_use_case/Docckerfile/e2b.Dockerfile.Desktop
+
+# Example for create a template of BrowserUse
+bash packages/create_template.sh --docker-file test_use_case/Docckerfile/e2b.Dockerfile.BrowserUse
+
 # Create a template from an ECR image that in your own account
 bash packages/create_template.sh --ecr-image <ECR_IMAGE_URI>
 ```
