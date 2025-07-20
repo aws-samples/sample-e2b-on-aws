@@ -59,7 +59,7 @@ locals {
     }
     # Client nodes run workloads and containers
     client = {
-      instance_type_x86    = "c6i.metal"
+      instance_type_x86    = "c5.metal"
       instance_type_arm    = "c7g.metal"
       desired_capacity = 1
       max_size         = 5
@@ -69,9 +69,9 @@ locals {
     api = {
       instance_type_x86    = "t3.xlarge"
       instance_type_arm    = "t4g.xlarge"
-      desired_capacity = 2
-      max_size         = 5
-      min_size         = 2
+      desired_capacity = 1
+      max_size         = 1
+      min_size         = 1
     }
     # Build nodes for environment building (currently not active)
     build = {
@@ -108,30 +108,35 @@ data "aws_ami" "e2b" {
 # Bucket for Loki log storage
 resource "aws_s3_bucket" "loki_storage_bucket" {
   bucket = "${var.prefix}-loki-storage-${local.account_id}"
+  force_destroy = var.environment == "prod" ? false : true
   tags = local.common_tags
 }
 
 # Bucket for Docker contexts used by environments
 resource "aws_s3_bucket" "envs_docker_context" {
   bucket = "${var.prefix}-envs-docker-context-${local.account_id}"
+  force_destroy = var.environment == "prod" ? false : true
   tags = local.common_tags
 }
 
 # Bucket for cluster setup scripts and configuration
 resource "aws_s3_bucket" "setup_bucket" {
   bucket = "${var.prefix}-cluster-setup-${local.account_id}"
+  force_destroy = var.environment == "prod" ? false : true
   tags = local.common_tags
 }
 
 # Bucket for Firecracker kernels
 resource "aws_s3_bucket" "fc_kernels_bucket" {
   bucket = "${var.prefix}-fc-kernels-${local.account_id}"
+  force_destroy = var.environment == "prod" ? false : true
   tags = local.common_tags
 }
 
 # Bucket for Firecracker versions
 resource "aws_s3_bucket" "fc_versions_bucket" {
   bucket = "${var.prefix}-fc-versions-${local.account_id}"
+  force_destroy = var.environment == "prod" ? false : true
   tags = local.common_tags
 }
 
@@ -415,7 +420,7 @@ resource "aws_launch_template" "server" {
     device_name = "/dev/sda1"
 
     ebs {
-      volume_size           = 200
+      volume_size           = 100
       volume_type           = "gp3"
       encrypted             = true
       delete_on_termination = true
@@ -438,9 +443,6 @@ resource "aws_launch_template" "server" {
     CONSUL_GOSSIP_ENCRYPTION_KEY = aws_secretsmanager_secret_version.consul_gossip_encryption_key.secret_string
     AWS_REGION                   = local.aws_region
     AWS_ACCOUNT_ID               = local.account_id
-    # Legacy GCP variables provided as dummy values for compatibility during AWS migration
-    GCP_REGION                 = local.aws_region
-    GOOGLE_SERVICE_ACCOUNT_KEY = "dummy-aws-migration"
   }))
 
   tag_specifications {
@@ -592,9 +594,6 @@ resource "aws_launch_template" "client" {
     RUN_NOMAD_FILE_HASH          = local.file_hash["scripts/run-nomad.sh"]
     CONSUL_GOSSIP_ENCRYPTION_KEY = aws_secretsmanager_secret_version.consul_gossip_encryption_key.secret_string
     CONSUL_DNS_REQUEST_TOKEN     = aws_secretsmanager_secret_version.consul_dns_request_token.secret_string
-    # Legacy GCP variables provided as dummy values for compatibility during AWS migration
-    GCP_REGION                 = local.aws_region
-    GOOGLE_SERVICE_ACCOUNT_KEY = "dummy-aws-migration"
   }))
 
   tag_specifications {
@@ -987,7 +986,7 @@ resource "aws_launch_template" "api" {
     device_name = "/dev/sda1"
 
     ebs {
-      volume_size           = 200
+      volume_size           = 100
       volume_type           = "gp3"
       encrypted             = true
       delete_on_termination = true
@@ -1014,9 +1013,6 @@ resource "aws_launch_template" "api" {
     RUN_NOMAD_FILE_HASH          = local.file_hash["scripts/run-api-nomad.sh"]
     CONSUL_GOSSIP_ENCRYPTION_KEY = aws_secretsmanager_secret_version.consul_gossip_encryption_key.secret_string
     CONSUL_DNS_REQUEST_TOKEN     = aws_secretsmanager_secret_version.consul_dns_request_token.secret_string
-    # Legacy GCP variables provided as dummy values for compatibility during AWS migration
-    GCP_REGION                 = local.aws_region
-    GOOGLE_SERVICE_ACCOUNT_KEY = "dummy-aws-migration"
   }))
 
   tag_specifications {
@@ -1138,7 +1134,7 @@ resource "aws_launch_template" "build" {
     device_name = "/dev/sda1"
 
     ebs {
-      volume_size           = 200
+      volume_size           = 100
       volume_type           = "gp3"
       encrypted             = true
       delete_on_termination = true
@@ -1165,9 +1161,6 @@ resource "aws_launch_template" "build" {
     RUN_NOMAD_FILE_HASH          = local.file_hash["scripts/run-build-cluster-nomad.sh"]
     CONSUL_GOSSIP_ENCRYPTION_KEY = aws_secretsmanager_secret_version.consul_gossip_encryption_key.secret_string
     CONSUL_DNS_REQUEST_TOKEN     = aws_secretsmanager_secret_version.consul_dns_request_token.secret_string
-    # Legacy GCP variables provided as dummy values for compatibility during AWS migration
-    GCP_REGION                 = local.aws_region
-    GOOGLE_SERVICE_ACCOUNT_KEY = "dummy-aws-migration"
   }))
 
   tag_specifications {
