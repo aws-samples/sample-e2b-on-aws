@@ -42,8 +42,8 @@ Metadata:
         Parameters:
           - DBInstanceIdentifier
           - DBName
-          - DBPassword
           - DBUsername
+          - DBPassword
 
 # ===================================================================================================
 # Parameters - Input values required for the E2B infrastructure deployment
@@ -483,7 +483,7 @@ Resources:
       MasterUserPassword: !Ref DBPassword
       ServerlessV2ScalingConfiguration:
         MinCapacity: 0.5
-        MaxCapacity: 2
+        MaxCapacity: 4
       StorageEncrypted: true
       DeletionProtection: !If [IsProd, true, false]
       VpcSecurityGroupIds:
