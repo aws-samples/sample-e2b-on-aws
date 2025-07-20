@@ -9,6 +9,7 @@ import (
 	"net/url"
 
 	"github.com/e2b-dev/infra/packages/docker-reverse-proxy/internal/cache"
+	"github.com/e2b-dev/infra/packages/docker-reverse-proxy/internal/constants"
 	"github.com/e2b-dev/infra/packages/shared/pkg/consts"
 	"github.com/e2b-dev/infra/packages/shared/pkg/db"
 )
@@ -26,9 +27,27 @@ func NewStore() *APIStore {
 		log.Fatal(err)
 	}
 
-	targetUrl := &url.URL{
-		Scheme: "https",
-		Host:   fmt.Sprintf("%s-docker.pkg.dev", consts.GCPRegion),
+	var targetUrl *url.URL
+
+	// Set the target URL based on the cloud provider
+	if constants.CurrentCloudProvider == constants.GCP {
+		targetUrl = &url.URL{
+			Scheme: "https",
+			Host:   fmt.Sprintf("%s-docker.pkg.dev", consts.GCPRegion),
+		}
+	} else if constants.CurrentCloudProvider == constants.AWS {
+		// Get AWS registry host
+		registryHost, err := consts.GetAWSRegistryHost()
+		if err != nil {
+			log.Fatalf("Failed to get AWS registry host: %v", err)
+		}
+		
+		targetUrl = &url.URL{
+			Scheme: "https",
+			Host:   registryHost,
+		}
+	} else {
+		log.Fatal("Unsupported cloud provider")
 	}
 
 	proxy := httputil.NewSingleHostReverseProxy(targetUrl)

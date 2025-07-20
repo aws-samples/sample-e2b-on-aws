@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/e2b-dev/infra/packages/docker-reverse-proxy/internal/auth"
+	"github.com/e2b-dev/infra/packages/docker-reverse-proxy/internal/constants"
 	"github.com/e2b-dev/infra/packages/shared/pkg/consts"
 )
 
@@ -90,11 +92,18 @@ func (a *APIStore) GetToken(w http.ResponseWriter, r *http.Request) error {
 		return fmt.Errorf("access denied for env: %s", templateID)
 	}
 
-	// Get docker token from the actual registry
-	dockerToken, err := getToken(templateID)
+	// Get docker token from the actual registry based on cloud provider
+	var dockerToken *DockerToken
+	if constants.CurrentCloudProvider == constants.GCP {
+		dockerToken, err = getGCPToken(templateID)
+	} else if constants.CurrentCloudProvider == constants.AWS {
+		dockerToken, err = getAWSToken(templateID)
+	} else {
+		err = fmt.Errorf("unsupported cloud provider")
+	}
+
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
-
 		return fmt.Errorf("error while getting docker token: %s", err)
 	}
 
@@ -106,8 +115,8 @@ func (a *APIStore) GetToken(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-// getToken gets a new token from the actual registry for the required scope
-func getToken(templateID string) (*DockerToken, error) {
+// getGCPToken gets a new token from the GCP Artifact Registry for the required scope
+func getGCPToken(templateID string) (*DockerToken, error) {
 	scope := fmt.Sprintf(
 		"?service=%s-docker.pkg.dev&scope=repository:%s/%s/%s:push,pull",
 		consts.GCPRegion,
@@ -158,4 +167,31 @@ func getToken(templateID string) (*DockerToken, error) {
 	}
 
 	return parsedBody, nil
+}
+
+// getAWSToken gets a new token from AWS ECR for the required scope
+func getAWSToken(templateID string) (*DockerToken, error) {
+	// For AWS ECR, we use the AWS SDK to get the authorization token
+	authResponse, err := auth.GetAWSECRAuthToken()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get AWS ECR auth token: %w", err)
+	}
+
+	// The token from AWS ECR is base64 encoded and in the format "AWS:password"
+	// We need to extract the actual token (password part)
+	decodedToken, err := base64.StdEncoding.DecodeString(authResponse.Token)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode AWS ECR auth token: %w", err)
+	}
+
+	tokenParts := strings.SplitN(string(decodedToken), ":", 2)
+	if len(tokenParts) != 2 {
+		return nil, fmt.Errorf("invalid AWS ECR auth token format")
+	}
+
+	// Return the token in the format expected by the Docker client
+	return &DockerToken{
+		Token:     tokenParts[1], // The actual token is the second part
+		ExpiresIn: int(time.Until(authResponse.ExpiresAt).Seconds()),
+	}, nil
 }
