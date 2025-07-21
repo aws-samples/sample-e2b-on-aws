@@ -633,13 +633,31 @@ Resources:
             - !Sub |
               # Initialize Configuration
               touch /tmp/cf.log
-              echo "StackName: ${AWS::StackName}" >> /tmp/cf.log
+              echo "StackName=${AWS::StackName}" >> /tmp/cf.log
               while true; do
                 STACK_STATUS=$(aws cloudformation describe-stacks --stack-name ${AWS::StackName} --query "Stacks[0].StackStatus" --output text)
                 echo "$(date '+%Y-%m-%d %H:%M:%S') - Stack current state: $STACK_STATUS" >> /tmp/cf.log
                 case $STACK_STATUS in
                   CREATE_COMPLETE)
-                    bash /opt/infra/sample-e2b-on-aws/infra-iac/init.sh
+                    echo "Start to execute init.sh" >> /tmp/cf.log
+                    cd sample-e2b-on-aws
+                    bash /infra-iac/init.sh
+                    echo "Start to execute packer.sh" >> /tmp/cf.log
+                    bash infra-iac/packer/packer.sh
+                    echo "Start to execute terraform" >> /tmp/cf.log
+                    bash infra-iac/terraform/start.sh
+                    echo "Start to execute init-db.sh" >> /tmp/cf.log
+                    bash infra-iac/db/init-db.sh
+                    echo "Start to execute build.sh" >> /tmp/cf.log
+                    bash packages/build.sh
+                    echo "Start to execute nomad.sh" >> /tmp/cf.log
+                    source nomad/nomad.sh
+                    echo "Start to execute prepare.sh" >> /tmp/cf.log
+                    bash nomad/prepare.sh
+                    echo "Start to execute deploy.sh" >> /tmp/cf.log
+                    bash nomad/deploy.sh
+                    echo "Start to execute create_template.sh" >> /tmp/cf.log
+                    bash packages/create_template.sh
                     break
                     ;;
                   CREATE_FAILED|ROLLBACK_COMPLETE|ROLLBACK_FAILED|UPDATE_ROLLBACK_COMPLETE|UPDATE_ROLLBACK_FAILED|DELETE_FAILED)
