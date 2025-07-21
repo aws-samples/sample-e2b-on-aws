@@ -1,38 +1,10 @@
 #!/bin/bash
 # ==================================================
-# AWS Metadata Operations
-# ==================================================
-get_metadata_token() {
-  curl -sS -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600"
-}
-
-get_instance_metadata() {
-  local metadata_path=$1
-  curl -sS -H "X-aws-ec2-metadata-token: $TOKEN" "http://169.254.169.254/latest/meta-data/${metadata_path}"
-}
-
-# ==================================================
 # Environment Configuration Section
 # ==================================================
 setup_environment() {
-  # Get basic metadata
-  export TOKEN=$(get_metadata_token)
-  export REGION=$(curl -sS -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/dynamic/instance-identity/document | jq -r .region)
-  export INSTANCE_ID=$(get_instance_metadata "instance-id")
-  echo 
-
-  # Configure AWS region
-  aws configure set region "$REGION"
-
   # Get CloudFormation stack ID
-  export STACK_ID=$(aws ec2 describe-tags \
-    --filters "Name=resource-id,Values=$INSTANCE_ID" \
-    "Name=key,Values=aws:cloudformation:stack-id" \
-    --query "Tags[0].Value" \
-    --output text)
-
-  # Validate stack existence
-  [[ -z "$STACK_ID" ]] && { echo "Error: Failed to get CloudFormation Stack ID"; exit 1; }
+  STACK_ID=$(grep "^AWSSTACKNAME=" /tmp/cf.log | cut -d'=' -f2)
 
   # Dynamic export of CFN outputs
   declare -A CFN_OUTPUTS
@@ -55,13 +27,6 @@ setup_environment() {
     # Also append to the config file
     echo "$key=${CFN_OUTPUTS[$key]}" >> /opt/config.properties
   done
-
-  echo "AWSREGION=$REGION" >> /opt/config.properties
-
-  ARCH=$(arch)
-  if [ "$ARCH" = "aarch64" ]; then
-    echo "CFNARCHITECTURE=arm64" >> /opt/config.properties
-  fi
 
   # Verification output
   echo "=== Exported Variables ==="

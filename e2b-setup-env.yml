@@ -63,7 +63,7 @@ Parameters:
     Description: "Choose CPU architecture"
     Type: String
     AllowedValues:
-      - x64
+      - x86_64
       - Graviton
 
   # Domain Configuration - Settings for SSL certificate and DNS
@@ -137,7 +137,7 @@ Parameters:
 # Conditions - Conditional logic for resource creation (none used in this template)
 # ===================================================================================================
 Conditions:
-  IsX64: !Equals [!Ref Architecture, x64]
+  IsX64: !Equals [!Ref Architecture, x86_64]
   IsGraviton: !Equals [!Ref Architecture, Graviton]
   IsProd: !Equals [!Ref Environment, prod]
 
@@ -500,7 +500,11 @@ Resources:
     Type: AWS::RDS::DBInstance
     Properties:
       Engine: aurora-postgresql
-      DBInstanceIdentifier: !Sub "${DBInstanceIdentifier}-instance"
+      DBInstanceIdentifier:
+        Fn::Join:
+          - "-"
+          - - Ref: "AWS::StackName"
+            - Ref: "DBInstanceIdentifier"
       DBClusterIdentifier: !Ref AuroraCluster
       DBInstanceClass: db.serverless
       PubliclyAccessible: false
@@ -629,6 +633,7 @@ Resources:
             - !Sub |
               # Initialize Configuration
               touch /tmp/cf.log
+              echo "StackName: ${AWS::StackName}" >> /tmp/cf.log
               while true; do
                 STACK_STATUS=$(aws cloudformation describe-stacks --stack-name ${AWS::StackName} --query "Stacks[0].StackStatus" --output text)
                 echo "$(date '+%Y-%m-%d %H:%M:%S') - Stack current state: $STACK_STATUS" >> /tmp/cf.log
@@ -783,6 +788,24 @@ Outputs:
     Value: !Ref Environment
     Export:
       Name: CFNENVIRONMENT
+
+  ARCHITECTURE:
+    Description: E2B Cluster CPU Architecture
+    Value: !Ref Architecture
+    Export:
+      Name: CFNARCHITECTURE
+
+  REGION:
+    Description: E2B Cluster Deployment Region
+    Value: !Ref AWS::Region
+    Export:
+      Name: AWSREGION
+
+  STACKNAME:
+    Description: CloudFormation Stack Name
+    Value: !Ref AWS::StackName
+    Export:
+      Name: AWSSTACKNAME
 
   # Bastion Host information
   BASTIONPUBLICDNS:
