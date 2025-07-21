@@ -28,6 +28,9 @@ setup_environment() {
     echo "$key=${CFN_OUTPUTS[$key]}" >> /opt/config.properties
   done
 
+  export REGION=$(aws configure get region)
+  echo "AWSREGION=$REGION" >> /opt/config.properties
+
   # Verification output
   echo "=== Exported Variables ==="
   cat /opt/config.properties
