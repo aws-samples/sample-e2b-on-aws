@@ -4,7 +4,7 @@
 # ==================================================
 setup_environment() {
   # Get CloudFormation stack ID
-  STACK_ID=$(grep "^StackName=" /tmp/cf.log | cut -d'=' -f2)
+  STACK_ID=$(grep "^StackName=" /tmp/e2b.log | cut -d'=' -f2)
 
   # Dynamic export of CFN outputs
   declare -A CFN_OUTPUTS
