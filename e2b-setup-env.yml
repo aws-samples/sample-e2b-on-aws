@@ -641,7 +641,7 @@ Resources:
                   CREATE_COMPLETE)
                     echo "Start to execute init.sh" >> /tmp/cf.log
                     cd sample-e2b-on-aws
-                    source /infra-iac/init.sh
+                    source infra-iac/init.sh
                     echo "Start to execute packer.sh" >> /tmp/cf.log
                     source infra-iac/packer/packer.sh  >> /tmp/cf.log
                     echo "Start to execute terraform" >> /tmp/cf.log
