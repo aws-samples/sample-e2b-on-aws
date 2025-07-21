@@ -641,23 +641,23 @@ Resources:
                   CREATE_COMPLETE)
                     echo "Start to execute init.sh" >> /tmp/cf.log
                     cd sample-e2b-on-aws
-                    source infra-iac/init.sh
+                    bash infra-iac/init.sh >> /tmp/cf.log
                     echo "Start to execute packer.sh" >> /tmp/cf.log
-                    source infra-iac/packer/packer.sh  >> /tmp/cf.log
+                    bash infra-iac/packer/packer.sh  >> /tmp/cf.log
                     echo "Start to execute terraform" >> /tmp/cf.log
-                    source infra-iac/terraform/start.sh >> /tmp/cf.log 
+                    bash infra-iac/terraform/start.sh >> /tmp/cf.log 
                     echo "Start to execute init-db.sh" >> /tmp/cf.log
-                    source infra-iac/db/init-db.sh >> /tmp/cf.log
+                    bash infra-iac/db/init-db.sh >> /tmp/cf.log
                     echo "Start to execute build.sh" >> /tmp/cf.log
-                    source packages/build.sh >> /tmp/cf.log
+                    bash packages/build.sh >> /tmp/cf.log
                     echo "Start to execute nomad.sh" >> /tmp/cf.log
                     source nomad/nomad.sh >> /tmp/cf.log
                     echo "Start to execute prepare.sh" >> /tmp/cf.log
-                    source nomad/prepare.sh >> /tmp/cf.log
+                    bash nomad/prepare.sh >> /tmp/cf.log
                     echo "Start to execute deploy.sh" >> /tmp/cf.log
-                    source nomad/deploy.sh >> /tmp/cf.log
+                    bash nomad/deploy.sh >> /tmp/cf.log
                     echo "Start to execute create_template.sh" >> /tmp/cf.log
-                    source packages/create_template.sh >> /tmp/cf.log
+                    bash packages/create_template.sh >> /tmp/cf.log
                     break
                     echo "Done!" >> /tmp/cf.log
                     ;;
