@@ -475,7 +475,11 @@ Resources:
       Engine: aurora-postgresql
       EngineVersion: 16.8
       Port: 5432
-      DBClusterIdentifier: !Ref DBInstanceIdentifier
+      DBClusterIdentifier:
+        Fn::Join:
+          - "-"
+          - - Ref: "AWS::StackName"
+            - Ref: "DBInstanceIdentifier"
       DBClusterParameterGroupName: default.aurora-postgresql16
       DBSubnetGroupName: !Ref DBSubnetGroup
       DatabaseName: !Ref DBName
@@ -630,7 +634,7 @@ Resources:
                 echo "$(date '+%Y-%m-%d %H:%M:%S') - Stack current state: $STACK_STATUS" >> /tmp/cf.log
                 case $STACK_STATUS in
                   CREATE_COMPLETE)
-                    bash infra-iac/init.sh
+                    bash /opt/infra/sample-e2b-on-aws/infra-iac/init.sh
                     break
                     ;;
                   CREATE_FAILED|ROLLBACK_COMPLETE|ROLLBACK_FAILED|UPDATE_ROLLBACK_COMPLETE|UPDATE_ROLLBACK_FAILED|DELETE_FAILED)

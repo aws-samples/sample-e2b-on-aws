@@ -3,12 +3,12 @@
 # AWS Metadata Operations
 # ==================================================
 get_metadata_token() {
-  curl -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600"
+  curl -sS -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600"
 }
 
 get_instance_metadata() {
   local metadata_path=$1
-  curl -H "X-aws-ec2-metadata-token: $TOKEN" -s "http://169.254.169.254/latest/meta-data/${metadata_path}"
+  curl -sS -H "X-aws-ec2-metadata-token: $TOKEN" "http://169.254.169.254/latest/meta-data/${metadata_path}"
 }
 
 # ==================================================
@@ -17,7 +17,7 @@ get_instance_metadata() {
 setup_environment() {
   # Get basic metadata
   export TOKEN=$(get_metadata_token)
-  export REGION=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/dynamic/instance-identity/document | jq -r .region)
+  export REGION=$(curl -sS -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/dynamic/instance-identity/document | jq -r .region)
   export INSTANCE_ID=$(get_instance_metadata "instance-id")
   echo 
 
@@ -58,11 +58,9 @@ setup_environment() {
 
   echo "AWSREGION=$REGION" >> /opt/config.properties
 
-  export ARCHITECTURE=amd64
   ARCH=$(arch)
   if [ "$ARCH" = "aarch64" ]; then
     echo "CFNARCHITECTURE=arm64" >> /opt/config.properties
-    export ARCHITECTURE=$ARCH
   fi
 
   # Verification output
