@@ -1,7 +1,7 @@
 ENV := $(shell cat ../../.last_used_env || echo "not-set")
 -include ../../.env.${ENV}
 
-IMAGE := e2b-orchestration/docker-reverse-proxy
+IMAGE := docker-reverse-proxy
 
 .PHONY: build
 build:
@@ -24,3 +24,23 @@ build-and-upload:
 .PHONY: test
 test:
 	go test -v ./...
+
+
+.PHONY: build-and-upload-aws
+build-and-upload-aws:
+	$(eval AWS_ACCOUNT_ID := $(shell grep "^account_id=" /opt/config.properties | cut -d= -f2))
+	$(eval AWS_REGION := $(shell grep "^AWSREGION=" /opt/config.properties | cut -d= -f2))
+	$(eval ARCHITECTURE := $(shell grep "^CFNARCHITECTURE=" /opt/config.properties | cut -d= -f2 || echo "amd64"))
+	$(eval COMMIT_SHA := $(shell git rev-parse --short HEAD))
+	# Create ECR repository if it doesn't exist
+	@aws ecr describe-repositories --repository-names $(IMAGE) || aws ecr create-repository --repository-name $(IMAGE)
+	# Login to ECR
+	@aws ecr get-login-password --region $(AWS_REGION) | docker login --username AWS --password-stdin $(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com
+	@cp -r ../shared .shared/
+	@docker buildx install # sets up the buildx as default docker builder (otherwise the command below won't work)
+	@docker build --platform linux/amd64 --tag "$(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/$(IMAGE):latest" --push --build-arg COMMIT_SHA="$(COMMIT_SHA)" .
+	# Build and push the image
+	@echo "Building for architecture: $(ARCHITECTURE)"
+	@docker build --platform linux/amd64 --tag "$(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/$(IMAGE):latest" .
+	@docker push "$(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/$(IMAGE):latest"
+	@rm -rf .shared/
