@@ -51,7 +51,7 @@ job "docker-reverse-proxy" {
 
       config {
         network_mode = "host"
-        image        = "${account_id}.dkr.ecr.${AWSREGION}.amazonaws.com/e2b-orchestration/docker-reverse-proxy:latest"
+        image        = "${account_id}.dkr.ecr.${AWSREGION}.amazonaws.com/docker-reverse-proxy:latest"
         ports        = ["docker-reverse-proxy"]
         args         = ["--port", "5000"]
         force_pull   = true
