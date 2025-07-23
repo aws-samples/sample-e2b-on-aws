@@ -48,9 +48,7 @@ echo "envd module build-and-upload completed successfully"
 echo "=== Uploading required files ==="
 cd "$PROJECT_ROOT" || { echo "Cannot return to project root"; exit 1; }
 echo "Current directory: $(pwd)"
-chmod u+x upload.sh
-./upload.sh
+bash ./upload.sh
 echo "envd upload completed successfully"
-
 
 echo "=== All builds and uploads completed successfully ==="

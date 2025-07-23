@@ -50,4 +50,4 @@ sleep 10
 
 echo "Starting Packer build with architecture: ${ARCHITECTURE}"
 
-packer build -force -only=amazon-ebs.orch -var "aws_region=${AWS_REGION}" -var "architecture=${ARCHITECTURE}" .
+packer build -only=amazon-ebs.orch -var "aws_region=${AWS_REGION}" -var "architecture=${ARCHITECTURE}" .
