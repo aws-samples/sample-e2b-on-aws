@@ -11,7 +11,6 @@ import (
 	"github.com/e2b-dev/infra/packages/docker-reverse-proxy/internal/constants"
 	"github.com/e2b-dev/infra/packages/docker-reverse-proxy/internal/handlers"
 	"github.com/e2b-dev/infra/packages/docker-reverse-proxy/internal/utils"
-	"github.com/e2b-dev/infra/packages/shared/pkg/consts"
 )
 
 var commitSHA string
@@ -46,17 +45,21 @@ func main() {
 				store.ServeHTTP(w, req)
 				return
 			} else if constants.CurrentCloudProvider == constants.AWS {
-				// Get AWS upload prefix
-				uploadPrefix, err := consts.GetAWSUploadPrefix()
-				if err != nil {
-					log.Printf("Failed to get AWS upload prefix: %v", err)
-					w.WriteHeader(http.StatusInternalServerError)
-					return
-				}
-				
-				if strings.HasPrefix(path, uploadPrefix) {
-					store.ServeHTTP(w, req)
-					return
+				// For AWS, we need to extract the template ID from the path to get the correct upload prefix
+				// Path format: /v2/e2b/custom-envs/{templateID}/blobs/uploads/...
+				repoPrefix := "/v2/e2b/custom-envs/"
+				if strings.HasPrefix(path, repoPrefix) {
+					pathParts := strings.Split(strings.TrimPrefix(path, repoPrefix), "/")
+					if len(pathParts) >= 3 && pathParts[1] == "blobs" && pathParts[2] == "uploads" {
+						templateID := pathParts[0]
+						log.Printf("[DEBUG] Main - Extracted template ID from path: %s", templateID)
+						
+						if strings.HasPrefix(path, fmt.Sprintf("%s%s/blobs/uploads/", repoPrefix, templateID)) {
+							log.Printf("[DEBUG] Main - Path matches template upload prefix, proxying directly")
+							store.ServeHTTP(w, req)
+							return
+						}
+					}
 				}
 			}
 		}

@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -171,27 +170,23 @@ func getGCPToken(templateID string) (*DockerToken, error) {
 
 // getAWSToken gets a new token from AWS ECR for the required scope
 func getAWSToken(templateID string) (*DockerToken, error) {
+	// First, ensure the ECR repository exists for this template
+	err := auth.EnsureECRRepositoryExists(templateID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to ensure ECR repository exists: %w", err)
+	}
+	
 	// For AWS ECR, we use the AWS SDK to get the authorization token
 	authResponse, err := auth.GetAWSECRAuthToken()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get AWS ECR auth token: %w", err)
 	}
 
-	// The token from AWS ECR is base64 encoded and in the format "AWS:password"
-	// We need to extract the actual token (password part)
-	decodedToken, err := base64.StdEncoding.DecodeString(authResponse.Token)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decode AWS ECR auth token: %w", err)
-	}
-
-	tokenParts := strings.SplitN(string(decodedToken), ":", 2)
-	if len(tokenParts) != 2 {
-		return nil, fmt.Errorf("invalid AWS ECR auth token format")
-	}
-
-	// Return the token in the format expected by the Docker client
+	// 直接返回完整的 base64 编码令牌
+	log.Printf("[DEBUG] ECR Token - Got token expiring at: %s", authResponse.ExpiresAt.Format(time.RFC3339))
+	
 	return &DockerToken{
-		Token:     tokenParts[1], // The actual token is the second part
+		Token:     authResponse.Token, // 返回完整的 base64 编码令牌
 		ExpiresIn: int(time.Until(authResponse.ExpiresAt).Seconds()),
 	}, nil
 }

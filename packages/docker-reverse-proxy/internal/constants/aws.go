@@ -1,9 +1,13 @@
-package consts
+package constants
 
 import (
 	"fmt"
+	"io"
+	"log"
+	"net/http"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/credentials"
@@ -30,26 +34,68 @@ var (
 	awsSession    *session.Session
 )
 
+// 尝试从 EC2 实例元数据服务获取区域信息
+func getRegionFromEC2Metadata() (string, error) {
+	client := &http.Client{
+		Timeout: 2 * time.Second, // 设置较短的超时时间
+	}
+	
+	resp, err := client.Get("http://169.254.169.254/latest/meta-data/placement/region")
+	if err != nil {
+		return "", fmt.Errorf("failed to get region from EC2 metadata: %v", err)
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("EC2 metadata service returned non-OK status: %d", resp.StatusCode)
+	}
+	
+	regionBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read region from EC2 metadata: %v", err)
+	}
+	
+	region := string(regionBytes)
+	if region == "" {
+		return "", fmt.Errorf("empty region from EC2 metadata")
+	}
+	
+	return region, nil
+}
+
 // InitAWSConfig 初始化 AWS 配置信息
 func InitAWSConfig() error {
 	awsConfigOnce.Do(func() {
 		// 创建 AWS 会话
 		config := &aws.Config{}
 
-		// 只有在提供了区域时才设置
+		// 处理区域配置
 		if AWSRegion != "" {
+			// 如果环境变量中提供了区域，直接使用
 			config.Region = aws.String(AWSRegion)
+			log.Printf("Using region from environment variable: %s", AWSRegion)
+		} else {
+			// 尝试从 EC2 元数据获取区域
+			metadataRegion, err := getRegionFromEC2Metadata()
+			if err == nil && metadataRegion != "" {
+				config.Region = aws.String(metadataRegion)
+				log.Printf("Using region from EC2 metadata: %s", metadataRegion)
+			} else {
+				log.Printf("Could not get region from EC2 metadata: %v", err)
+			}
 		}
 
-		// 只有在提供了访问密钥和秘密密钥时才设置
+		// 处理凭证配置
 		if AWSAccessKeyID != "" && AWSSecretAccessKey != "" {
 			config.Credentials = credentials.NewStaticCredentials(
 				AWSAccessKeyID,
 				AWSSecretAccessKey,
 				"",
 			)
+			log.Printf("Using AWS credentials from environment variables")
 		}
 
+		// 创建 AWS 会话
 		var err error
 		awsSession, err = session.NewSession(config)
 		if err != nil {
@@ -71,18 +117,20 @@ func InitAWSConfig() error {
 			awsAccountID = *result.Account
 		}
 
-		// 设置区域
+		// 确定最终使用的区域
 		if AWSRegion != "" {
 			awsRegion = AWSRegion
 		} else if awsSession.Config.Region != nil && *awsSession.Config.Region != "" {
 			awsRegion = *awsSession.Config.Region
+			log.Printf("Using region from AWS session: %s", awsRegion)
 		} else {
+			// 如果仍然无法获取区域，使用默认区域
 			awsRegion = "us-east-1" // 默认区域
+			log.Printf("No region found, using default: %s", awsRegion)
 		}
 
-		// 设置注册表主机和上传前缀
+		// 设置注册表主机
 		awsRegistryHost = fmt.Sprintf("%s.dkr.ecr.%s.amazonaws.com", awsAccountID, awsRegion)
-		awsUploadPrefix = fmt.Sprintf("/v2/%s/%s/blobs/uploads/", awsAccountID, AWSECRRepository)
 	})
 
 	return awsConfigErr
@@ -121,9 +169,15 @@ func GetAWSRegistryHost() (string, error) {
 }
 
 // GetAWSUploadPrefix 返回 AWS ECR 上传前缀
-func GetAWSUploadPrefix() (string, error) {
+// 使用 base_repo_name/template_id 格式的仓库名称
+func GetAWSUploadPrefix(templateID string) (string, error) {
 	if err := InitAWSConfig(); err != nil {
 		return "", err
 	}
-	return awsUploadPrefix, nil
+	
+	// 使用 base_repo_name/template_id 格式的仓库名称
+	templateRepo := fmt.Sprintf("%s/%s", AWSECRRepository, templateID)
+	
+	// 返回上传前缀
+	return fmt.Sprintf("/v2/%s/blobs/uploads/", templateRepo), nil
 }

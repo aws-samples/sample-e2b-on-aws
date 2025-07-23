@@ -56,12 +56,12 @@ func CheckRequired() error {
 
 	// Check AWS specific variables if AWS is the provider
 	if CurrentCloudProvider == AWS {
-		if consts.AWSECRRepository == "" {
+		if AWSECRRepository == "" {
 			missing = append(missing, "AWS_ECR_REPOSITORY_NAME")
 		}
 
 		// Initialize AWS config to check if we can get the required information
-		if err := consts.InitAWSConfig(); err != nil {
+		if err := InitAWSConfig(); err != nil {
 			return fmt.Errorf("failed to initialize AWS config: %v", err)
 		}
 	}
