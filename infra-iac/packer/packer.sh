@@ -49,8 +49,5 @@ packer init -upgrade .
 sleep 10
 
 echo "Starting Packer build with architecture: ${ARCHITECTURE}"
-if [ "${ARCHITECTURE}" = "arm64" ]; then
-    packer build -only=amazon-ebs.orch -var "aws_region=${AWS_REGION}" -var "architecture=${ARCHITECTURE}" .
-else
-    packer build -only=amazon-ebs.orch -var "aws_region=${AWS_REGION}" .
-fi
+
+packer build -force -only=amazon-ebs.orch -var "aws_region=${AWS_REGION}" -var "architecture=${ARCHITECTURE}" .
