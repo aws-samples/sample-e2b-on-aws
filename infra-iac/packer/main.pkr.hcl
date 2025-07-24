@@ -49,7 +49,7 @@ build {
       "sudo apt-get clean",
       "sudo apt-get update -y",
       "sudo apt-get upgrade -y",
-      "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl"
+      "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl git"
     ]
   }
   

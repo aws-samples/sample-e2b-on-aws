@@ -587,7 +587,7 @@ Resources:
               snap install go --classic
             - |
               # Install essential development and deployment tools
-              apt install unzip docker.io make jq postgresql-client-common -y
+              apt install unzip docker.io make jq postgresql-client-common git -y
             - |
               # Install PostgreSQL client for database management
               apt install postgresql-client -y
