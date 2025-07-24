@@ -1,7 +1,7 @@
 ENV := $(shell cat ../../.last_used_env || echo "not-set")
 -include ../../.env.${ENV}
 
-BUILD := $(shell git rev-parse --short HEAD)
+BUILD := $(shell /usr/bin/git rev-parse --short HEAD)
 LDFLAGS=-ldflags "-X=main.commitSHA=$(BUILD)"
 
 .PHONY: init
