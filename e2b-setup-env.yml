@@ -578,6 +578,7 @@ Resources:
           - ""
           - - |
               #!/bin/bash -v
+              set -e
             - |
               # Update system packages to latest versions
               apt update -y
