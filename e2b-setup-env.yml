@@ -631,6 +631,7 @@ Resources:
               # Create directory for E2B infrastructure code
               mkdir -p /opt/infra/ && cd /opt/infra/
               git clone https://github.com/aws-samples/sample-e2b-on-aws.git
+              cd sample-e2b-on-aws && git checkout commit-0701
             - !Sub |
               # Initialize Configuration
               touch /tmp/e2b.log
@@ -640,25 +641,24 @@ Resources:
                 echo "$(date '+%Y-%m-%d %H:%M:%S') - Stack current state: $STACK_STATUS" >> /tmp/e2b.log
                 case $STACK_STATUS in
                   CREATE_COMPLETE)
-                    cd sample-e2b-on-aws
                     echo "Start to execute init.sh" >> /tmp/e2b.log
-                    bash infra-iac/init.sh >> /tmp/e2b.log
+                    bash infra-iac/init.sh >> /tmp/e2b.log 2>&1
                     echo "Start to execute packer.sh" >> /tmp/e2b.log
-                    bash infra-iac/packer/packer.sh  >> /tmp/e2b.log
+                    HOME=/root bash -l infra-iac/packer/packer.sh >> /tmp/e2b.log 2>&1
                     echo "Start to execute terraform" >> /tmp/e2b.log
-                    bash infra-iac/terraform/start.sh >> /tmp/e2b.log 
+                    bash infra-iac/terraform/start.sh >> /tmp/e2b.log 2>&1
                     echo "Start to execute init-db.sh" >> /tmp/e2b.log
-                    bash infra-iac/db/init-db.sh >> /tmp/e2b.log
+                    bash infra-iac/db/init-db.sh >> /tmp/e2b.log 2>&1
                     echo "Start to execute build.sh" >> /tmp/e2b.log
-                    bash packages/build.sh >> /tmp/e2b.log
+                    bash packages/build.sh >> /tmp/e2b.log 2>&1
                     echo "Start to execute nomad.sh" >> /tmp/e2b.log
-                    source nomad/nomad.sh >> /tmp/e2b.log
+                    source nomad/nomad.sh >> /tmp/e2b.log 2>&1
                     echo "Start to execute prepare.sh" >> /tmp/e2b.log
-                    bash nomad/prepare.sh >> /tmp/e2b.log
+                    bash nomad/prepare.sh >> /tmp/e2b.log 2>&1
                     echo "Start to execute deploy.sh" >> /tmp/e2b.log
-                    bash nomad/deploy.sh >> /tmp/e2b.log
+                    bash nomad/deploy.sh >> /tmp/e2b.log 2>&1
                     echo "Start to execute create_template.sh" >> /tmp/e2b.log
-                    bash packages/create_template.sh >> /tmp/e2b.log
+                    bash packages/create_template.sh >> /tmp/e2b.log 2>&1
                     break
                     echo "Done!" >> /tmp/e2b.log
                     ;;
