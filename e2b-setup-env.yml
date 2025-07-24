@@ -420,7 +420,7 @@ Resources:
     Properties:
       BucketName: !Sub "terraform-${AWS::StackName}-${AWS::Region}-${AWS::AccountId}"
       VersioningConfiguration:
-        Status: Enabled
+        Status: Suspended
       BucketEncryption:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault:
@@ -440,7 +440,7 @@ Resources:
     Properties:
       BucketName: !Sub "software-${AWS::StackName}-${AWS::Region}-${AWS::AccountId}"
       VersioningConfiguration:
-        Status: Enabled
+        Status: Suspended
       BucketEncryption:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault:
