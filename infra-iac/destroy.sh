@@ -105,46 +105,46 @@ done
 
 echo "Completed emptying S3 buckets and modifying ELB deletion protection."
 
-# # Now proceed with Terraform destroy
-# TERRAFORM_DIR="/opt/infra/sample-e2b-on-aws/infra-iac/terraform"
+# Now proceed with Terraform destroy
+TERRAFORM_DIR="/opt/infra/sample-e2b-on-aws/infra-iac/terraform"
 
-# echo "Changing directory to $TERRAFORM_DIR to execute terraform destroy..."
+echo "Changing directory to $TERRAFORM_DIR to execute terraform destroy..."
 
-# # Check if the directory exists
-# if [ ! -d "$TERRAFORM_DIR" ]; then
-#     echo "Directory $TERRAFORM_DIR does not exist. Cannot proceed with terraform destroy." >&2
-#     # Continue execution despite this error
-#     echo "Continuing with the rest of the script..."
-# else
-#     # Change to the terraform directory
-#     cd "$TERRAFORM_DIR" || {
-#         echo "Failed to change directory to $TERRAFORM_DIR" >&2
-#         # Continue execution despite this error
-#         echo "Continuing with the rest of the script..."
-#     }
+# Check if the directory exists
+if [ ! -d "$TERRAFORM_DIR" ]; then
+    echo "Directory $TERRAFORM_DIR does not exist. Cannot proceed with terraform destroy." >&2
+    # Continue execution despite this error
+    echo "Continuing with the rest of the script..."
+else
+    # Change to the terraform directory
+    cd "$TERRAFORM_DIR" || {
+        echo "Failed to change directory to $TERRAFORM_DIR" >&2
+        # Continue execution despite this error
+        echo "Continuing with the rest of the script..."
+    }
 
-#     echo "Current directory: $(pwd)"
-#     echo "Checking for terraform installation..."
+    echo "Current directory: $(pwd)"
+    echo "Checking for terraform installation..."
 
-#     # Check if terraform is installed
-#     if ! command -v terraform &> /dev/null; then
-#         echo "Terraform is not installed. Cannot proceed with terraform destroy." >&2
-#         # Continue execution despite this error
-#         echo "Continuing with the rest of the script..."
-#     else
-#         echo "Running terraform destroy..."
+    # Check if terraform is installed
+    if ! command -v terraform &> /dev/null; then
+        echo "Terraform is not installed. Cannot proceed with terraform destroy." >&2
+        # Continue execution despite this error
+        echo "Continuing with the rest of the script..."
+    else
+        echo "Running terraform destroy..."
 
-#         # Run terraform destroy with auto-approve
-#         terraform destroy -auto-approve
+        # Run terraform destroy with auto-approve
+        terraform destroy -auto-approve
         
-#         # Check if terraform destroy was successful, but continue regardless
-#         if [ $? -eq 0 ]; then
-#             echo "Terraform destroy completed successfully."
-#         else
-#             echo "Terraform destroy encountered issues, but continuing with the script." >&2
-#         fi
-#     fi
-# fi
+        # Check if terraform destroy was successful, but continue regardless
+        if [ $? -eq 0 ]; then
+            echo "Terraform destroy completed successfully."
+        else
+            echo "Terraform destroy encountered issues, but continuing with the script." >&2
+        fi
+    fi
+fi
 
 echo "Infrastructure cleanup process completed."
 

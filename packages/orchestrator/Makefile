@@ -1,5 +1,5 @@
 client := gcloud compute instances list --format='csv(name)' --project $(GCP_PROJECT_ID) | grep "client"
-COMMIT_SHA := $(shell grep "^BUILD=" /tmp/e2b.log | cut -d= -f2)
+# COMMIT_SHA := $(shell grep "^BUILD=" /tmp/e2b.log | cut -d= -f2)
 
 .PHONY: init
 init:
@@ -17,7 +17,7 @@ generate:
 
 .PHONY: build
 build:
-# 	$(eval COMMIT_SHA := $(shell git rev-parse --short HEAD))
+	$(eval COMMIT_SHA := $(shell git rev-parse --short HEAD))
 	$(eval ARCHITECTURE := $(shell grep "^CFNARCHITECTURE=" /opt/config.properties | cut -d= -f2 || echo "amd64"))
 	@rm -rf .shared/
 	@cp -r ../shared .shared/
