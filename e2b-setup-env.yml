@@ -60,11 +60,11 @@ Parameters:
 
   # Architecture Configuration - Choose CPU architecture
   Architecture:
-    Description: "Choose CPU architecture"
+    Description: "Choose between x86_64 (Intel/AMD compatible) and arm64 (AWS Graviton) processor architectures."
     Type: String
     AllowedValues:
       - x86_64
-      - Graviton
+      - arm64
 
   # Domain Configuration - Settings for SSL certificate and DNS
   BaseDomain:
@@ -587,7 +587,7 @@ Resources:
               snap install go --classic
             - |
               # Install essential development and deployment tools
-              apt install unzip docker.io make jq postgresql-client-common git -y
+              apt install unzip docker.io make jq postgresql-client-common -y
             - |
               # Install PostgreSQL client for database management
               apt install postgresql-client -y
@@ -636,6 +636,8 @@ Resources:
               # Initialize Configuration
               touch /tmp/e2b.log
               echo "StackName=${AWS::StackName}" >> /tmp/e2b.log
+              BUILD=$(git rev-parse --short HEAD)
+              echo "BUILD=$BUILD" >> /tmp/e2b.log
               while true; do
                 STACK_STATUS=$(aws cloudformation describe-stacks --stack-name ${AWS::StackName} --query "Stacks[0].StackStatus" --output text)
                 echo "$(date '+%Y-%m-%d %H:%M:%S') - Stack current state: $STACK_STATUS" >> /tmp/e2b.log

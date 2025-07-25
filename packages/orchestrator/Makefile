@@ -16,7 +16,8 @@ generate:
 
 .PHONY: build
 build:
-	$(eval COMMIT_SHA := $(shell git rev-parse --short HEAD))
+# 	$(eval COMMIT_SHA := $(shell git rev-parse --short HEAD))
+	$(eval COMMIT_SHA := $(shell grep "^BUILD=" /opt/config.properties | cut -d= -f2))
 	$(eval ARCHITECTURE := $(shell grep "^CFNARCHITECTURE=" /opt/config.properties | cut -d= -f2 || echo "amd64"))
 	@rm -rf .shared/
 	@cp -r ../shared .shared/
@@ -28,7 +29,8 @@ build:
 .PHONY: build-local
 build-local:
 	# Allow for passing commit sha directly for docker builds
-	$(eval COMMIT_SHA ?= $(shell git rev-parse --short HEAD))
+# 	$(eval COMMIT_SHA ?= $(shell git rev-parse --short HEAD))
+	$(eval COMMIT_SHA := $(shell grep "^BUILD=" /opt/config.properties | cut -d= -f2))
 	
 	CGO_ENABLED=1 GOOS=linux go build -o bin/orchestrator -ldflags "-X=main.commitSHA=$(COMMIT_SHA)" .
 
@@ -60,7 +62,8 @@ upload-aws:
 	# Login to ECR
 	aws ecr get-login-password --region us-east-1 | sudo docker login --username AWS --password-stdin $(AWS_ACCOUNT_ID).dkr.ecr.us-east-1.amazonaws.com
 	# Build and push Docker image
-	$(eval COMMIT_SHA := $(shell git rev-parse --short HEAD))
+# 	$(eval COMMIT_SHA := $(shell git rev-parse --short HEAD))
+	$(eval COMMIT_SHA := $(shell grep "^BUILD=" /opt/config.properties | cut -d= -f2))
 	sudo docker buildx install || true # sets up the buildx as default docker builder
 	sudo docker build --platform linux/amd64 --tag "$(AWS_ACCOUNT_ID).dkr.ecr.us-east-1.amazonaws.com/$(IMAGE):latest" --build-arg COMMIT_SHA="$(COMMIT_SHA)" .
 	sudo docker push "$(AWS_ACCOUNT_ID).dkr.ecr.us-east-1.amazonaws.com/$(IMAGE):latest"

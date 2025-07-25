@@ -6,7 +6,8 @@ IMAGE := docker-reverse-proxy
 .PHONY: build
 build:
 	# Allow for passing commit sha directly for docker builds
-	$(eval COMMIT_SHA ?= $(shell git rev-parse --short HEAD))
+# 	$(eval COMMIT_SHA ?= $(shell git rev-parse --short HEAD))
+	$(eval COMMIT_SHA := $(shell grep "^BUILD=" /opt/config.properties | cut -d= -f2))
 	CGO_ENABLED=0 go build -o bin/docker-reverse-proxy -ldflags "-X=main.commitSHA=$(COMMIT_SHA)" .
 
 .PHONY: build-debug
@@ -15,7 +16,8 @@ build-debug:
 
 .PHONY: build-and-upload
 build-and-upload:
-	$(eval COMMIT_SHA := $(shell git rev-parse --short HEAD))
+# 	$(eval COMMIT_SHA := $(shell git rev-parse --short HEAD))
+	$(eval COMMIT_SHA := $(shell grep "^BUILD=" /opt/config.properties | cut -d= -f2))
 	@cp -r ../shared .shared/
 	@docker buildx install # sets up the buildx as default docker builder (otherwise the command below won't work)
 	@docker build --platform linux/amd64 --tag "$(GCP_REGION)-docker.pkg.dev/$(GCP_PROJECT_ID)/$(IMAGE)" --push --build-arg COMMIT_SHA="$(COMMIT_SHA)" .
@@ -31,7 +33,8 @@ build-and-upload-aws:
 	$(eval AWS_ACCOUNT_ID := $(shell grep "^account_id=" /opt/config.properties | cut -d= -f2))
 	$(eval AWS_REGION := $(shell grep "^AWSREGION=" /opt/config.properties | cut -d= -f2))
 	$(eval ARCHITECTURE := $(shell grep "^CFNARCHITECTURE=" /opt/config.properties | cut -d= -f2 || echo "amd64"))
-	$(eval COMMIT_SHA := $(shell git rev-parse --short HEAD))
+# 	$(eval COMMIT_SHA := $(shell git rev-parse --short HEAD))
+	$(eval COMMIT_SHA := $(shell grep "^BUILD=" /opt/config.properties | cut -d= -f2))
 	# Create ECR repository if it doesn't exist
 	@aws ecr describe-repositories --repository-names $(IMAGE) || aws ecr create-repository --repository-name $(IMAGE)
 	# Login to ECR
