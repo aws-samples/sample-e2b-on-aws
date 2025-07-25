@@ -3,6 +3,7 @@ IMAGE := e2b-orchestration/api
 
 openapi := ../../spec/openapi.yml
 codegen := go tool github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen
+COMMIT_SHA := $(shell grep "^BUILD=" /tmp/e2b.log | cut -d= -f2)
 expectedMigration := $(shell ./../../scripts/get-latest-migration.sh)
 
 .PHONY: generate
@@ -16,14 +17,12 @@ generate:
 build:
 	# Allow for passing commit sha directly for docker builds
 # 	$(eval COMMIT_SHA ?= $(shell git rev-parse --short HEAD))
-	$(eval COMMIT_SHA := $(shell grep "^BUILD=" /opt/config.properties | cut -d= -f2))
 	$(eval EXPECTED_MIGRATION_TIMESTAMP ?= $(expectedMigration))
 	CGO_ENABLED=0 go build -o bin/api -ldflags "-X=main.commitSHA=$(COMMIT_SHA) -X=main.expectedMigrationTimestamp=$(EXPECTED_MIGRATION_TIMESTAMP)" .
 
 .PHONY: build-debug
 build-debug:
 # 	$(eval COMMIT_SHA ?= $(shell git rev-parse --short HEAD))
-	$(eval COMMIT_SHA := $(shell grep "^BUILD=" /opt/config.properties | cut -d= -f2))
 	$(eval EXPECTED_MIGRATION_TIMESTAMP ?= $(expectedMigration))
 	CGO_ENABLED=1 go build -race -gcflags=all="-N -l" -o bin/api -ldflags "-X=main.commitSHA=$(COMMIT_SHA) -X=main.expectedMigrationTimestamp=$(EXPECTED_MIGRATION_TIMESTAMP)" .
 
@@ -54,7 +53,6 @@ profiler:
 .PHONY: build-and-upload
 build-and-upload:
 # 	$(eval COMMIT_SHA := $(shell git rev-parse --short HEAD))
-	$(eval COMMIT_SHA := $(shell grep "^BUILD=" /opt/config.properties | cut -d= -f2))
 	$(eval EXPECTED_MIGRATION_TIMESTAMP := $(expectedMigration))
 	@rm -rf .shared/ .db/
 	@cp -r ../shared .shared/
