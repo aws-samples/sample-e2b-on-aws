@@ -5,7 +5,6 @@
 setup_environment() {
   # Get CloudFormation stack ID
   STACK_ID=$(grep "^StackName=" /tmp/e2b.log | cut -d'=' -f2)
-  BUILD=$(grep "^BUILD=" /tmp/e2b.log | cut -d'=' -f2)
   
   # Dynamic export of CFN outputs
   declare -A CFN_OUTPUTS
@@ -31,7 +30,6 @@ setup_environment() {
 
   REGION=$(aws configure get region)
   echo "AWSREGION=$REGION" >> /opt/config.properties
-  echo "BUILD=$BUILD" >> /opt/config.properties
 
   # Verification output
   echo "=== Exported Variables ==="

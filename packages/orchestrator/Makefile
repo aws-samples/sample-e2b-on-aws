@@ -1,5 +1,4 @@
 client := gcloud compute instances list --format='csv(name)' --project $(GCP_PROJECT_ID) | grep "client"
-# COMMIT_SHA := $(shell grep "^BUILD=" /tmp/e2b.log | cut -d= -f2)
 
 .PHONY: init
 init:
@@ -29,7 +28,7 @@ build:
 .PHONY: build-local
 build-local:
 	# Allow for passing commit sha directly for docker builds
-# 	$(eval COMMIT_SHA ?= $(shell git rev-parse --short HEAD))
+	$(eval COMMIT_SHA ?= $(shell git rev-parse --short HEAD))
 	
 	CGO_ENABLED=1 GOOS=linux go build -o bin/orchestrator -ldflags "-X=main.commitSHA=$(COMMIT_SHA)" .
 
@@ -61,7 +60,7 @@ upload-aws:
 	# Login to ECR
 	aws ecr get-login-password --region us-east-1 | sudo docker login --username AWS --password-stdin $(AWS_ACCOUNT_ID).dkr.ecr.us-east-1.amazonaws.com
 	# Build and push Docker image
-# 	$(eval COMMIT_SHA := $(shell git rev-parse --short HEAD))
+	$(eval COMMIT_SHA := $(shell git rev-parse --short HEAD))
 	sudo docker buildx install || true # sets up the buildx as default docker builder
 	sudo docker build --platform linux/amd64 --tag "$(AWS_ACCOUNT_ID).dkr.ecr.us-east-1.amazonaws.com/$(IMAGE):latest" --build-arg COMMIT_SHA="$(COMMIT_SHA)" .
 	sudo docker push "$(AWS_ACCOUNT_ID).dkr.ecr.us-east-1.amazonaws.com/$(IMAGE):latest"

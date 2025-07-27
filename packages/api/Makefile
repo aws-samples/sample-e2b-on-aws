@@ -1,6 +1,5 @@
 IMAGE := e2b-orchestration/api
 
-
 openapi := ../../spec/openapi.yml
 codegen := go tool github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen
 COMMIT_SHA := $(shell grep "^BUILD=" /tmp/e2b.log | cut -d= -f2)
