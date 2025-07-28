@@ -71,7 +71,7 @@ func (tm *TemplateManager) setLocalClientStatus(s orchestratorinfo.ServiceInfoSt
 }
 
 func (tm *TemplateManager) GetLocalClientStatus() orchestratorinfo.ServiceInfoStatus {
-	tm.localClientMutex.Lock()
-	defer tm.localClientMutex.Unlock()
-	return tm.localClientStatus
+	tm.localClientMutex.RLock()  // 改为读锁
+    defer tm.localClientMutex.RUnlock()
+    return tm.localClientStatus
 }
