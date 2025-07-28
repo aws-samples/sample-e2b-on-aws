@@ -127,8 +127,8 @@ func (tm *TemplateManager) BuildsStatusPeriodicalSync(ctx context.Context) {
 
 func (tm *TemplateManager) getBuilderClient(clusterID *uuid.UUID, nodeID *string, placement bool) (*grpclient.GRPCClient, metadata.MD, PlacementLogsProvider, error) {
 	if clusterID == nil || nodeID == nil {
-		// tm.localClientMutex.RLock()
-		// defer tm.localClientMutex.RUnlock()
+		tm.localClientMutex.RLock()
+		defer tm.localClientMutex.RUnlock()
 
 		zap.L().Info("使用本地template manager", 
 			zap.Bool("placement", placement), 
