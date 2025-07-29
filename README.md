@@ -6,7 +6,7 @@
 
 E2B on AWS provides a secure, scalable, and customizable environment for running AI agent sandboxes in your own AWS account. This project addresses the growing need for organizations to maintain control over their AI infrastructure while leveraging the power of E2B's sandbox technology for AI agent development, testing, and deployment.
 
-This project is built based on version [c746fd93d5f1260315c893dbd5d7290c0a41e52a](https://github.com/e2b-dev/infra/commit/c746fd93d5f1260315c893dbd5d7290c0a41e52a) (Mar 2), with newer versions still undergoing modifications. This E2B deployment can be used for testing purposes. If you encounter any issues, please contact the relevant team members or submit a PR directly. We would like to express our special thanks to all contributors involved in the project transformation.
+This project is built based on version [0c35ed5c3b8492f96d1e0bbfb91fff96541a8c74](https://github.com/e2b-dev/infra/commit/0c35ed5c3b8492f96d1e0bbfb91fff96541a8c74) (Jul 1). This E2B deployment can be used for testing purposes. If you encounter any issues, please contact the relevant team members or submit a PR directly. We would like to express our special thanks to all contributors involved in the project transformation.
 
 ## Table of Contents
 
