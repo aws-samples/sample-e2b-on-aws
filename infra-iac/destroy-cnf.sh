@@ -60,6 +60,33 @@ for BUCKET_VAR in "${BUCKET_VARS_CNF[@]}"; do
     fi
 done
 
+echo "Starting to delete CNF S3 buckets..."
+
+# Delete each bucket after emptying
+for BUCKET_VAR in "${BUCKET_VARS_CNF[@]}"; do
+    # Extract the bucket name from the config file
+    BUCKET_NAME=$(grep "^$BUCKET_VAR=" /opt/config.properties | cut -d= -f2)
+
+    if [ -n "$BUCKET_NAME" ]; then
+        echo "Deleting bucket: $BUCKET_NAME"
+
+        # Check if the bucket exists
+        if aws s3api head-bucket --bucket "$BUCKET_NAME" --region "$REGION" >/dev/null 2>&1; then
+            # Delete the bucket
+            aws s3api delete-bucket --bucket "$BUCKET_NAME" --region "$REGION" >/dev/null 2>&1
+            if [ $? -eq 0 ]; then
+                echo "Successfully deleted bucket: $BUCKET_NAME"
+            else
+                echo "Failed to delete bucket: $BUCKET_NAME. It may still contain objects or have other dependencies."
+            fi
+        else
+            echo "Bucket $BUCKET_NAME does not exist or you don't have access to it. Skipping deletion."
+        fi
+    else
+        echo "Could not find bucket name for variable $BUCKET_VAR. Skipping deletion."
+    fi
+done
+
 TERRAFORM_BUCKET=$(grep "^CFNTERRAFORMBUCKET=" /opt/config.properties | cut -d= -f2)
 
 # Check if bucket exists
