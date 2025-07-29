@@ -11,12 +11,7 @@ This project is built based on version [0c35ed5c3b8492f96d1e0bbfb91fff96541a8c74
 ## Table of Contents
 
 - [Prerequisites](#prerequisites)
-- [Deployment Steps](#deployment-steps)
-  - [1. Setup E2B Landing Zone](#1-setup-e2b-landing-zone)
-  - [2. Setup E2B Infrastructure](#2-setup-e2b-infrastructure)
-  - [3. Deploy E2B Applications](#3-deploy-e2b-applications)
-  - [4. Configure E2B Monitoring (Optional)](#4-configure-e2b-monitoring-optional)
-  - [5. Test by E2B SDK](#5-test-by-e2b-sdk)
+- [How to Deploy](#deployment)
 - [Using E2B CLI](#using-e2b-cli)
 - [E2B SDK Cookbook](#e2b-sdk-cookbook)
 - [Troubleshooting](#troubleshooting)
@@ -42,19 +37,18 @@ This project is built based on version [0c35ed5c3b8492f96d1e0bbfb91fff96541a8c74
 > - `S3_BUCKET_LOGGING_ENABLED`
 > - `EC2 Metadata service configuration`
 
-## Deployment Steps
-
-### 1. Setup E2B Landing Zone
-
+## Deployment
+### 1. E2B Deployment
 1. **Deploy CloudFormation Stack**
+   - Git Clone the project
    - Open AWS CloudFormation console and create a new stack
-   - Upload the `e2b-setup-env.yml` template file
+   - Upload the `e2b-setup-env.yml` file
    - Configure the following parameters:
      - **Stack Name**: Enter a name for the stack, **must be lowercase**(e.g., `e2b-infra`)
-     - **VPC Configuration**: E2B deployed network environment configuration
+     - **VPC Configuration**: Deployed new VPC environment configuration
      - **Environment Configuration**: Choose an Environment (Support dev and prod, prod has a more stringent resource protection mechanism)
      - **Architecture Configuration**: Choose CPU architecture (Support x64 and Graviton)
-     - **Domain Configuration**: Enter a domain you own (e.g., `example.com`)
+     - **Domain Configuration**: Enter a domain you own(e.g., `example.com`)
      - **EC2 Key Pair**: Select an existing key pair for SSH access
      - **AllowRemoteSSHIPs**: Adjust IP range for SSH access (default restricts to private networks for security)
      - **Database Settings**: Configure RDS parameters following password requirements(must be 8-30 characters with letters and numbers)
@@ -66,71 +60,24 @@ This project is built based on version [0c35ed5c3b8492f96d1e0bbfb91fff96541a8c74
    - Add the CNAME record to your domain's DNS settings(Cloudflare DNS settings)
    - Wait for domain validation (typically in **5 minutes**)
 
-3. **Monitor Stack Creation**
-   - Return to CloudFormation console
-   - Wait for stack creation to complete successfully
-   - The Stack creation may takes about **10 minutes**
-
-### 2. Setup E2B Infrastructure
-
-1. **Connect to Bastion Machine**
+3. **Connect to Bastion Machine**
    - Use SSH with your EC2 key pair: `ssh -i your-key.pem ubuntu@<instance-ip>`
    - Or use AWS Session Manager from the EC2 console for browser-based access
 
-2. **Build E2B AMI and deploy E2B cloud infrastructure**
+4. **Watch Deployment Logs**
 ```bash 
 # Switch to root user for administrative privileges required for infrastructure setup
 sudo su root
 
-# Enter the working directory.
-cd /opt/infra/sample-e2b-on-aws
-
-# Build custom AMI images using Packer for the E2B infrastructure
-# This may take a while, please be patient
-bash infra-iac/packer/packer.sh
-
-# Deploy the complete E2B infrastructure using Terraform
-bash infra-iac/terraform/start.sh
+tail -f /tmp/e2b.log
 ```
 
-3. **Setup Database**
-```bash
-bash infra-iac/db/init-db.sh
-
-# Please save the output information for later use:
-# User: xxx
-# Team ID: <ID>
-# Access Token: <e2b_token>
-# Team API Key: <e2b_API>
-```
-
-4. **Configure E2B DNS records(in Cloudflare)**
+5. **Configure E2B DNS records(in Cloudflare)**
    - **Setup Wildcard DNS**: Add a CNAME record for `*` (wildcard) pointing to the DNS name of the automatically created Application Load Balancer (ALB). This enables all E2B subdomains to route through the load balancer.
    - **Access Nomad Dashboard**: Navigate to `https://nomad.<your-domain>` in your browser and authenticate using the retrieved token to monitor and manage the Nomad cluster workloads.
-   - **Retrieve Nomad Access Token**: Execute `more /opt/config.properties | grep NOMAD` to extract the Nomad cluster management token from the configuration file.
+   - **Retrieve Nomad Access Token**: Execute `cat /opt/config.properties` to extract the Nomad cluster management token from the configuration file.
 
-### 3. Build and Deploy E2B Applications
-1. **Build E2B Application Components**
-```bash
-# Compile E2B components and push into ECR registry in your account
-bash packages/build.sh
-```
-2. **Deploy E2B Applications**
-
-```bash
-# Load Nomad environment variables and configuration settings
-source nomad/nomad.sh
-
-# Prepare the Nomad cluster and configure job templates
-bash nomad/prepare.sh
-
-# Deploy all E2B applications to the Nomad cluster
-bash nomad/deploy.sh
-
-# There are 10 applications in total
-```
-
-### 4. Configure E2B Monitoring (Optional)
+### 2. Configure E2B Monitoring (Optional)
 
 1. Login to https://grafana.com/ (register if needed)
 2. Access your settings page at https://grafana.com/orgs/<username>
@@ -163,7 +110,7 @@ bash nomad/deploy.sh otel-collector
 
 8. Open Grafana Cloud Dashboard to view metrics, traces, and logs（Optional）
 
-### 5. E2B Test
+### 3. E2B Test
 
 1. Create a template:
 ```bash
