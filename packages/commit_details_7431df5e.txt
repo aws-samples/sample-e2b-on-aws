@@ -1,0 +1,22 @@
+COMMIT: 7431df5e - Add index for snapshot table (#858)
+Author: Jakub Novák <jakub@e2b.dev>
+Date: Wed Jul 9 07:34:21 2025 -0700
+
+FILES CHANGED:
+- packages/db/migrations/20250708135400_snapshots_migrations.sql (新文件)
+
+CHANGES SUMMARY:
+为snapshots表的sandbox_id字段添加数据库索引，以提高查询性能。
+
+DETAILED CHANGES:
+
+1. packages/db/migrations/20250708135400_snapshots_migrations.sql:
+   - 创建新的数据库迁移文件
+   - 使用CONCURRENTLY选项创建索引，避免锁表
+   - 为snapshots表的sandbox_id字段添加索引
+
+MANUAL ACTIONS NEEDED:
+1. 创建新的迁移文件
+2. 添加索引创建和删除的SQL语句
+
+STATUS: [ ] 待处理

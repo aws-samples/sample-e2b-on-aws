@@ -1,0 +1,37 @@
+COMMIT: 4918526a - Decrease level for "expected" errors (#852)
+Author: Jakub Novák <jakub@e2b.dev>
+Date: Wed Jul 9 07:34:47 2025 -0700
+
+FILES CHANGED:
+- packages/api/internal/auth/middleware.go
+- packages/api/internal/handlers/sandbox_get.go
+- packages/api/internal/handlers/sandbox_refresh.go
+- packages/api/internal/handlers/sandbox_timeout.go
+- packages/api/internal/orchestrator/keep_alive.go
+
+CHANGES SUMMARY:
+降低"预期"错误的日志级别，从Error/Critical改为Warn，减少日志噪音。
+
+DETAILED CHANGES:
+
+1. packages/api/internal/auth/middleware.go:
+   - 将认证错误从ReportCriticalError改为ReportError
+
+2. packages/api/internal/handlers/sandbox_get.go:
+   - 将沙盒访问权限错误从Error改为Warn
+   - 将快照获取错误从Error改为Warn
+
+3. packages/api/internal/handlers/sandbox_refresh.go:
+   - 将刷新沙盒错误从ReportCriticalError改为ReportError
+
+4. packages/api/internal/handlers/sandbox_timeout.go:
+   - 将设置超时错误从ReportCriticalError改为ReportError
+
+5. packages/api/internal/orchestrator/keep_alive.go:
+   - 将设置沙盒超时错误从Error改为Warn
+
+MANUAL ACTIONS NEEDED:
+1. 检查所有相关文件是否存在
+2. 逐个应用日志级别的修改
+
+STATUS: [ ] 待处理

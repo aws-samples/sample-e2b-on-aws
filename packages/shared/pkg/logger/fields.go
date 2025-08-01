@@ -28,3 +28,7 @@ func WithClusterID(clusterId uuid.UUID) zap.Field {
 func WithClusterNodeID(nodeId string) zap.Field {
 	return zap.String("cluster.node.id", nodeId)
 }
+
+func WithNodeID(nodeId string) zap.Field {
+	return zap.String("node.id", nodeId)
+}

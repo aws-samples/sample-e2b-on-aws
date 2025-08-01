@@ -1,0 +1,23 @@
+COMMIT: 5b5c8c4a - Update dotenv for client cluster size (#851)
+Author: Jakub Novák <jakub@e2b.dev>
+Date: Tue Jul 8 00:10:45 2025 -0700
+
+FILES CHANGED:
+- .env.template
+
+CHANGES SUMMARY:
+更新dotenv模板文件中的客户端集群大小配置。简化了配置选项，将两个分离的配置合并为一个。
+
+DETAILED CHANGES:
+
+1. .env.template:
+   - 删除了CLIENT_CLUSTER_AUTO_SCALING_MAX配置项
+   - 删除了CLIENT_REGIONAL_CLUSTER_SIZE配置项
+   - 添加了CLIENT_CLUSTER_SIZE_MAX配置项
+   - 更新了注释，将示例值从0改为2
+
+MANUAL ACTIONS NEEDED:
+1. 检查.env.template文件是否存在
+2. 由于.env.template文件不存在，此commit不适用于当前项目
+
+STATUS: [S] 已跳过（文件不存在）

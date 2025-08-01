@@ -1,0 +1,21 @@
+COMMIT: 1267eb91 - Fix start-docker Makefile directive in envd (#843)
+Author: 0div <98087403+0div@users.noreply.github.com>
+Date: Thu Jul 3 10:00:56 2025 -0700
+
+FILES CHANGED:
+- packages/envd/Makefile ✓
+
+CHANGES SUMMARY:
+修复envd中start-docker Makefile指令，将-debug标志更改为-isnotfc标志。
+
+DETAILED CHANGES:
+
+1. packages/envd/Makefile: ✓
+   - 在start-docker目标中，将/usr/bin/envd -debug改为/usr/bin/envd -isnotfc
+
+MANUAL ACTIONS NEEDED:
+1. 检查packages/envd/Makefile文件是否存在 ✓
+2. 如果存在，更新start-docker目标中的标志 ✓
+3. 如果不存在，需要确认是否需要此修改 N/A
+
+STATUS: [x] 已完成

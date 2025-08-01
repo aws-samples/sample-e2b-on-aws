@@ -1,0 +1,23 @@
+COMMIT: 0e390adf - Fix edge pool race condition (#862)
+Author: Jiri Sveceny <jiri.sveceny@icloud.com>
+Date: Thu Jul 10 11:19:00 2025 +0200
+
+FILES CHANGED:
+- packages/api/internal/edge/pool.go
+
+CHANGES SUMMARY:
+修复边缘池中的竞态条件，通过重新排序初始化顺序来确保同步机制在启动前完全设置。
+
+DETAILED CHANGES:
+
+1. packages/api/internal/edge/pool.go:
+   - 移除了startSync()方法
+   - 将同步启动逻辑移到NewPool函数的末尾
+   - 确保synchronization对象在启动同步之前完全初始化
+   - 这修复了可能的竞态条件，其中同步可能在synchronization对象完全设置之前开始
+
+MANUAL ACTIONS NEEDED:
+1. 检查packages/api/internal/edge/pool.go文件是否存在
+2. 应用竞态条件修复
+
+STATUS: [ ] 待处理

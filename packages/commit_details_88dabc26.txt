@@ -1,0 +1,24 @@
+COMMIT: 88dabc26 - Handle Unexpected EOF for ReadAt in AWS S3 storage provider (#841)
+Author: Jiri Sveceny <jiri.sveceny@icloud.com>
+Date: Wed Jul 2 18:33:47 2025 -0700
+
+FILES CHANGED:
+- packages/shared/pkg/storage/storage_aws.go ✓
+
+CHANGES SUMMARY:
+处理AWS S3存储提供程序中ReadAt方法的意外EOF错误。当对象小于请求的范围时，将意外EOF转换为正常EOF。
+
+DETAILED CHANGES:
+
+1. packages/shared/pkg/storage/storage_aws.go: ✓
+   - 在ReadAt方法中添加错误处理逻辑
+   - 将io.ReadFull的直接返回改为先处理错误
+   - 当遇到io.ErrUnexpectedEOF时，将其转换为io.EOF
+   - 添加注释说明处理逻辑
+
+MANUAL ACTIONS NEEDED:
+1. 检查packages/shared/pkg/storage/storage_aws.go文件是否存在 ✓
+2. 如果存在，应用ReadAt方法的修改 ✓ (已存在)
+3. 如果不存在，需要确认是否需要此修改 N/A
+
+STATUS: [x] 已完成 (修改已存在)

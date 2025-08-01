@@ -1,0 +1,70 @@
+COMMIT: 13636c43 - Make sandbox metadata available globally in envd (#789)
+Author: 0div <98087403+0div@users.noreply.github.com>
+Date: Wed Jul 2 17:32:33 2025 -0700
+
+FILES CHANGED:
+- packages/envd/internal/api/init.go ✓
+- packages/envd/internal/api/store.go ✓
+- packages/envd/internal/logs/exporter/mmds.go -> packages/envd/internal/host/mmds.go (重命名并修改) ✓
+- packages/envd/internal/host/sync.go ✓
+- packages/envd/internal/logs/exporter/exporter.go ✓
+- packages/envd/internal/logs/logger.go ✓
+- packages/envd/internal/services/process/service.go ✓
+- packages/envd/internal/services/process/start.go ✓
+- packages/envd/main.go ✓
+
+CHANGES SUMMARY:
+使沙盒元数据在envd中全局可用。主要变更包括重构MMDS处理逻辑，添加全局环境变量存储，以及改进日志导出器的并发处理。
+
+DETAILED CHANGES:
+
+1. packages/envd/internal/api/init.go: ✓
+   - 添加context和time包导入
+   - 修改host.Sync()调用为host.SyncClock()
+   - 添加新的goroutine调用host.PollForMMDSOpts()
+
+2. packages/envd/internal/api/store.go: ✓
+   - 在API结构体中添加isNotFC字段和mmdsChan通道
+   - 修改New函数签名，添加mmdsChan和isNotFC参数
+
+3. packages/envd/internal/logs/exporter/mmds.go -> packages/envd/internal/host/mmds.go: ✓
+   - 文件从exporter包移动到host包
+   - 重命名opts结构体为MMDSOpts并导出
+   - 添加Update方法和AddOptsToJSON方法
+   - 重构MMDS相关函数，使其独立于HTTPExporter
+   - 添加PollForMMDSOpts函数，支持环境变量存储和文件写入
+
+4. packages/envd/internal/host/sync.go: ✓
+   - 重命名Sync函数为SyncClock
+
+5. packages/envd/internal/logs/exporter/exporter.go: ✓
+   - 重构HTTPExporter结构体，添加并发控制字段
+   - 修改构造函数，接收mmdsChan通道
+   - 重构启动逻辑，支持异步接收MMDS选项
+   - 改进并发安全性，使用读写锁
+
+6. packages/envd/internal/logs/logger.go: ✓
+   - 修改NewLogger函数签名，接收mmdsChan参数
+   - 更新日志导出器初始化逻辑
+
+7. packages/envd/internal/services/process/service.go: ✓
+   - 重命名envs字段为envVars
+   - 更新相关函数签名
+
+8. packages/envd/internal/services/process/start.go: ✓
+   - 更新变量名从envs到envVars
+
+9. packages/envd/main.go: ✓
+   - 版本号从0.2.0更新到0.2.1
+   - 重命名debug标志为isNotFC
+   - 添加E2B运行目录创建逻辑
+   - 添加环境变量和文件系统状态管理
+   - 重构MMDS通道初始化和传递逻辑
+
+MANUAL ACTIONS NEEDED:
+1. 检查所有相关文件是否存在 ✓
+2. 逐个应用文件修改 ✓
+3. 确保新的并发逻辑正确实现 ✓
+4. 验证环境变量和文件系统操作 ✓
+
+STATUS: [x] 已完成

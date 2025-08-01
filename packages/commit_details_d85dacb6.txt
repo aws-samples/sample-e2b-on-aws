@@ -1,0 +1,20 @@
+COMMIT: d85dacb6 - Update the CPU threshold (#853)
+Author: Jakub Novák <jakub@e2b.dev>
+Date: Tue Jul 8 02:28:06 2025 -0700
+
+FILES CHANGED:
+- .env.template
+
+CHANGES SUMMARY:
+更新CPU阈值从80%降低到60%。
+
+DETAILED CHANGES:
+
+1. .env.template:
+   - 将注释中的CPU使用率阈值从80%更改为60%
+
+MANUAL ACTIONS NEEDED:
+1. 检查.env.template文件是否存在
+2. 由于.env.template文件不存在，此commit不适用于当前项目
+
+STATUS: [S] 已跳过（文件不存在）

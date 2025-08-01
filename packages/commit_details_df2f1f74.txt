@@ -1,0 +1,55 @@
+COMMIT: df2f1f74 - Improve logs retrieval speed (#828)
+Author: Jakub Dobry <jakub.dobry8@gmail.com>
+Date: Wed Jul 9 07:35:13 2025 -0700
+
+FILES CHANGED:
+- packages/api/internal/template-manager/logs/edge_provider.go (新文件)
+- packages/api/internal/template-manager/logs/loki_provider.go (新文件)
+- packages/api/internal/template-manager/logs/provider.go (新文件)
+- packages/api/internal/template-manager/logs/template_manager_provider.go (新文件)
+- packages/api/internal/template-manager/template_manager.go (重构)
+- packages/orchestrator/cmd/build-template/main.go
+- packages/orchestrator/internal/template/build/template_builder.go
+- packages/orchestrator/internal/template/build/template_config.go
+- packages/orchestrator/internal/template/build/writer/postprocessor.go
+- packages/orchestrator/internal/template/build/writer/writer.go
+- packages/orchestrator/internal/template/cache/build_cache.go
+- packages/orchestrator/internal/template/cache/safe_buffer.go (新文件)
+- packages/orchestrator/internal/template/server/create_template.go
+- packages/orchestrator/internal/template/server/template_status.go
+- packages/orchestrator/template-manager.proto
+- packages/shared/pkg/grpc/template-manager/template-manager.pb.go
+
+CHANGES SUMMARY:
+重构日志检索系统，提高性能并支持多种日志提供者。主要改进包括：
+1. 将日志提供者抽象化，支持多种后端
+2. 在内存中缓存构建日志
+3. 改进日志流处理和同步机制
+
+DETAILED CHANGES:
+
+1. 新的日志提供者架构:
+   - 创建Provider接口，支持多种日志后端
+   - EdgeProvider: 从集群边缘节点获取日志
+   - LokiProvider: 从Loki获取日志
+   - TemplateManagerProvider: 从模板管理器获取日志
+
+2. 内存日志缓存:
+   - 添加SafeBuffer用于线程安全的日志缓存
+   - 在构建过程中实时收集日志到内存
+
+3. 构建流程改进:
+   - 重构Build方法，分离日志写入器
+   - 改进后处理器的同步机制
+   - 移除硬编码的8秒等待时间
+
+4. gRPC协议更新:
+   - 在TemplateStatusRequest中添加offset参数
+   - 在TemplateBuildStatusResponse中添加logs字段
+
+MANUAL ACTIONS NEEDED:
+1. 创建新的日志提供者文件
+2. 更新相关的构建和缓存逻辑
+3. 由于涉及大量重构，需要仔细验证
+
+STATUS: [ ] 待处理

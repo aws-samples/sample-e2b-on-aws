@@ -40,23 +40,13 @@ func NewPool(ctx context.Context, tel *telemetry.Client, db *client.Client, trac
 		clusters: smap.New[*Cluster](),
 	}
 
-	// Periodically sync clusters with the database
-	go p.startSync()
-
-	// Shutdown function to gracefully close the pool
-	go func() {
-		<-ctx.Done()
-		p.Close()
-	}()
-
 	store := poolSynchronizationStore{pool: p}
 	p.synchronization = synchronization.NewSynchronize(p.tracer, "clusters-pool", "Clusters pool", store)
 
-	return p, nil
-}
+	// Periodically sync clusters with the database
+	go p.synchronization.Start(poolSyncInterval, poolSyncTimeout, true)
 
-func (p *Pool) startSync() {
-	p.synchronization.Start(poolSyncInterval, poolSyncTimeout, true)
+	return p, nil
 }
 
 func (p *Pool) GetClusterById(id uuid.UUID) (*Cluster, bool) {

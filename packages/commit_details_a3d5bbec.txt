@@ -1,0 +1,56 @@
+COMMIT: a3d5bbec - Remove use of sandbox id client part (#855)
+Author: Jiri Sveceny <jiri.sveceny@icloud.com>
+Date: Thu Jul 10 11:19:06 2025 +0200
+
+FILES CHANGED:
+- packages/api/internal/cache/instance/sync.go
+- packages/api/internal/handlers/sandbox.go
+- packages/api/internal/handlers/sandbox_create.go
+- packages/api/internal/handlers/sandbox_resume.go
+- packages/api/internal/handlers/sandboxes_list.go
+- packages/api/internal/orchestrator/cache.go
+- packages/api/internal/orchestrator/create_instance.go
+- packages/api/internal/orchestrator/keep_alive.go
+- packages/api/internal/orchestrator/node.go
+- packages/api/internal/orchestrator/pause_instance.go
+- packages/db/migrations/20250708135401_snapshot_pause_node_id.sql (新文件)
+- packages/db/queries/get_last_snapshot.sql.go
+- packages/db/queries/get_snapshots_with_cursor.sql.go
+- packages/db/queries/models.go
+- packages/shared/pkg/db/snapshot.go
+- packages/shared/pkg/models/* (多个模型文件)
+- packages/shared/pkg/schema/snapshots.go
+
+CHANGES SUMMARY:
+移除从沙盒ID中提取客户端部分的使用，改为使用数据库中存储的节点ID。这是一个重要的架构改进，提高了数据一致性。
+
+DETAILED CHANGES:
+
+1. 数据库架构变更:
+   - 为snapshots表添加origin_node_id字段
+   - 更新相关查询以包含新字段
+
+2. 代码重构:
+   - 将Instance.ClientID的使用改为Node.ID
+   - 更新所有相关的日志记录和错误处理
+   - 改进节点ID的获取逻辑
+
+3. 沙盒恢复逻辑改进:
+   - 优先使用数据库中存储的origin_node_id
+   - 保留临时的向后兼容逻辑（从沙盒ID提取客户端ID）
+   - 添加了迁移期间的处理逻辑
+
+4. 暂停实例逻辑更新:
+   - 在创建快照时记录origin_node_id
+   - 更新暂停相关的数据库操作
+
+5. 缓存和同步逻辑更新:
+   - 更新实例缓存同步逻辑
+   - 修复节点状态检查逻辑
+
+MANUAL ACTIONS NEEDED:
+1. 创建数据库迁移文件
+2. 由于涉及大量模型文件变更，主要是生成代码
+3. 重点关注核心逻辑的修改
+
+STATUS: [ ] 待处理

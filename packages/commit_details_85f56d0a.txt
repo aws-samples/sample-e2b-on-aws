@@ -1,0 +1,25 @@
+COMMIT: 85f56d0a - Prevent nbd allocation log spam on error (#842)
+Author: Jakub Dobry <jakub.dobry8@gmail.com>
+Date: Thu Jul 3 15:41:33 2025 -0700
+
+FILES CHANGED:
+- packages/orchestrator/internal/sandbox/nbd/pool.go ✓
+
+CHANGES SUMMARY:
+防止NBD分配错误时的日志垃圾信息。添加错误计数和延迟机制，只在每100次失败时记录一次错误。
+
+DETAILED CHANGES:
+
+1. packages/orchestrator/internal/sandbox/nbd/pool.go: ✓
+   - 添加waitOnNBDError常量（50毫秒）
+   - 在Populate方法中添加failedCount变量跟踪失败次数
+   - 修改错误日志逻辑，只在failedCount是100的倍数时记录错误
+   - 在错误时添加睡眠延迟
+   - 成功时重置failedCount为0
+
+MANUAL ACTIONS NEEDED:
+1. 检查packages/orchestrator/internal/sandbox/nbd/pool.go文件是否存在 ✓
+2. 如果存在，应用相关修改 ✓
+3. 如果不存在，需要确认是否需要此修改 N/A
+
+STATUS: [x] 已完成

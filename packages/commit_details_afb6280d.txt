@@ -1,0 +1,27 @@
+COMMIT: afb6280d - Fix sandbox logs ingestion from services (#839)
+Author: Jakub Dobry <jakub.dobry8@gmail.com>
+Date: Tue Jul 1 17:08:58 2025 -0700
+
+FILES CHANGED:
+- packages/nomad/logs-collector.hcl
+
+CHANGES SUMMARY:
+修复了从服务中摄取沙盒日志的问题。主要添加了对多个ID字段的处理逻辑。
+
+DETAILED CHANGES:
+
+1. packages/nomad/logs-collector.hcl:
+   - 在第97行后添加了多个条件检查和字段重命名逻辑：
+     * 检查并重命名 "template.id" 为 templateID
+     * 检查并重命名 "sandbox.id" 为 sandboxID  
+     * 检查并重命名 "build.id" 为 buildID
+     * 检查并重命名 "env.id" 为 envID
+     * 检查并重命名 "team.id" 为 teamID
+   - 在第153行后添加了调试用的控制台输出配置（被注释掉）
+
+MANUAL ACTIONS NEEDED:
+1. 检查 packages/nomad/logs-collector.hcl 文件是否存在
+2. 如果存在，在适当位置添加上述字段处理逻辑
+3. 如果不存在，需要创建该文件或确认是否需要此修改
+
+STATUS: [ ] 待处理

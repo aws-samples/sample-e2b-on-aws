@@ -1,0 +1,22 @@
+COMMIT: 8987cc55 - Update self-host.md - small update to GCP requirements (#838)
+Author: Tomas Srnka <tomassrnka@users.noreply.github.com>
+Date: Wed Jul 9 16:31:59 2025 +0200
+
+FILES CHANGED:
+- self-host.md
+
+CHANGES SUMMARY:
+更新自托管文档中的GCP资源要求，增加了磁盘空间和CPU配额要求。
+
+DETAILED CHANGES:
+
+1. self-host.md:
+   - 将Persistent Disk SSD配额要求从1200G增加到2500G
+   - 添加了CPU配额要求：至少24个CPU
+
+MANUAL ACTIONS NEEDED:
+1. 检查self-host.md文件是否存在
+2. 如果存在，更新GCP配额要求
+3. 如果不存在，此commit不适用于当前项目
+
+STATUS: [ ] 待处理

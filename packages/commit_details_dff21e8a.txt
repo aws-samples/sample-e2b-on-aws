@@ -1,0 +1,31 @@
+COMMIT: dff21e8a - Fix Redis in cluster mode (#845)
+Author: Jakub Dobry <jakub.dobry8@gmail.com>
+Date: Thu Jul 3 13:06:00 2025 -0700
+
+FILES CHANGED:
+- packages/nomad/api.hcl
+- packages/nomad/edge.hcl
+- packages/nomad/main.tf
+
+CHANGES SUMMARY:
+修复Redis集群模式的配置。添加REDIS_CLUSTER_URL环境变量，并更新相关的Terraform配置。
+
+DETAILED CHANGES:
+
+1. packages/nomad/api.hcl:
+   - 添加REDIS_CLUSTER_URL环境变量
+
+2. packages/nomad/edge.hcl:
+   - 添加REDIS_CLUSTER_URL环境变量
+
+3. packages/nomad/main.tf:
+   - 更新redis_url逻辑，当使用外部Redis时设为空字符串
+   - 添加redis_cluster_url配置，当使用外部Redis时设置为实际URL
+   - 在client_proxy资源中应用相同的逻辑
+   - 修复文件末尾缺少换行符的问题
+
+MANUAL ACTIONS NEEDED:
+1. 检查packages/nomad/目录是否存在
+2. 由于nomad目录不存在，此commit不适用于当前项目
+
+STATUS: [S] 已跳过（文件不存在）

@@ -1,0 +1,48 @@
+COMMIT: 5d351557 - Rework query metrics (#835)
+Author: Jakub Dobry <jakub.dobry8@gmail.com>
+Date: Wed Jul 9 07:35:39 2025 -0700
+
+FILES CHANGED:
+- 多个go.mod和go.sum文件 (依赖更新)
+- packages/nomad/api.hcl
+- packages/nomad/main.tf
+- packages/shared/pkg/chdb/* (整个目录删除)
+- packages/shared/pkg/feature-flags/flags.go
+- packages/shared/pkg/models/chmodels/* (整个目录删除)
+- spec/openapi.yml
+
+CHANGES SUMMARY:
+重构查询指标系统，移除ClickHouse相关代码，简化指标API，并更新相关配置。
+
+DETAILED CHANGES:
+
+1. 依赖更新:
+   - 更新OpenTelemetry SDK版本从1.35.0到1.36.0
+   - 更新ClickHouse Go驱动版本
+   - 移除多个不再需要的依赖
+
+2. ClickHouse相关代码移除:
+   - 删除整个packages/shared/pkg/chdb目录
+   - 删除ClickHouse连接、配置、迁移相关代码
+   - 删除ClickHouse模型定义
+
+3. Nomad配置更新:
+   - 简化ClickHouse连接字符串配置
+   - 移除分离的用户名、密码、数据库配置
+   - 添加LaunchDarkly API密钥配置
+
+4. API规范更新:
+   - 移除/sandboxes/{sandboxID}/metrics端点
+   - 将指标从数组改为单个对象
+   - 内存单位从MiB改为bytes
+   - 字段名从memUsedMiB/memTotalMiB改为memUsed/memTotal
+
+5. 功能标志更新:
+   - 添加sandbox-metrics-read功能标志
+
+MANUAL ACTIONS NEEDED:
+1. 由于涉及大量依赖和配置变更，主要是清理工作
+2. 删除相关的ClickHouse代码文件
+3. 更新功能标志定义
+
+STATUS: [ ] 待处理

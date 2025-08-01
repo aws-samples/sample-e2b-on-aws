@@ -1,0 +1,22 @@
+COMMIT: bf0f6945 - Fix grammar (#840)
+Author: Vasek Mlejnsky <vasek@e2b.dev>
+Date: Mon Jul 7 23:19:36 2025 -0700
+
+FILES CHANGED:
+- packages/api/internal/edge/cluster.go ✓
+
+CHANGES SUMMARY:
+修复语法错误，删除了一个语法不正确的注释。
+
+DETAILED CHANGES:
+
+1. packages/api/internal/edge/cluster.go: ✓
+   - 删除了第112行的注释："// we don't want to place new builds to not healthy nodes"
+   - 这个注释语法不正确，应该是"to unhealthy nodes"
+
+MANUAL ACTIONS NEEDED:
+1. 检查packages/api/internal/edge/cluster.go文件是否存在 ✓
+2. 如果存在，删除相应的注释行 ✓
+3. 如果不存在，需要确认是否需要此修改 N/A
+
+STATUS: [x] 已完成

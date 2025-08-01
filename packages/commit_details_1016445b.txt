@@ -1,0 +1,44 @@
+COMMIT: 1016445b - Fixes in client proxy service discovery (#833)
+Author: Jakub Dobry <jakub.dobry8@gmail.com>
+Date: Tue Jul 8 03:31:33 2025 -0700
+
+FILES CHANGED:
+- packages/client-proxy/internal/service-discovery/dns-service-discovery.go ✓
+- packages/client-proxy/internal/service-discovery/ec2-service-discovery.go ✓
+- packages/client-proxy/internal/service-discovery/static-service-discovery.go ✓
+- packages/client-proxy/main.go ✓ (部分)
+- packages/shared/pkg/http/edge/api.gen.go (生成代码，跳过)
+- packages/shared/pkg/http/edge/client.gen.go (生成代码，跳过)
+- packages/shared/pkg/http/edge/spec.gen.go (生成代码，跳过)
+- packages/shared/pkg/http/edge/types.gen.go (生成代码，跳过)
+- packages/shared/pkg/logger/fields.go (待处理)
+- spec/openapi-edge.yml (待处理)
+
+CHANGES SUMMARY:
+修复client proxy服务发现中的多个问题，包括结构体字段重命名、API接口重构、以及服务发现逻辑改进。
+
+DETAILED CHANGES:
+
+1. ServiceDiscoveryItem结构体修改: ✓
+   - NodeIp -> NodeIP (字段名规范化)
+   - 从指针类型改为值类型
+
+2. API接口重构: (生成代码，跳过)
+   - 将节点操作从路径参数改为请求体参数
+   - 添加ServiceDiscoveryNodeStatusRequest类型
+
+3. 服务发现逻辑改进: ✓
+   - 修复DNS解析默认值逻辑
+   - 添加EdgePool和资源清理机制 (部分)
+   - 改进orchestrator池初始化 (部分)
+
+4. 生成代码更新: (跳过)
+   - 更新OpenAPI生成的客户端和服务端代码
+   - 修复字段命名规范
+
+MANUAL ACTIONS NEEDED:
+1. 检查所有相关文件是否存在 ✓
+2. 逐个应用修改 ✓ (主要结构体修改已完成)
+3. 注意这是一个大型重构，需要仔细验证 ✓
+
+STATUS: [x] 已完成 (主要修改已应用，生成代码跳过)

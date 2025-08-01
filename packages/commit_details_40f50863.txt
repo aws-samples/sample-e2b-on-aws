@@ -1,0 +1,52 @@
+COMMIT: 40f50863 - Report build status reason (#829)
+Author: Jakub Dobry <jakub.dobry8@gmail.com>
+Date: Tue Jul 8 03:31:33 2025 -0700
+
+FILES CHANGED:
+- packages/api/internal/handlers/template_start_build.go
+- packages/api/internal/template-manager/template_manager_test.go
+- packages/api/internal/template-manager/template_status.go
+- packages/db/migrations/20250624232413_add_build_reason.sql (新文件)
+- packages/db/queries/*.sql.go (多个查询文件)
+- packages/db/queries/models.go
+- packages/orchestrator/internal/template/cache/build_cache.go
+- packages/orchestrator/internal/template/server/create_template.go
+- packages/orchestrator/internal/template/server/template_status.go
+- packages/orchestrator/template-manager.proto
+- packages/shared/pkg/grpc/template-manager/template-manager.pb.go
+- packages/shared/pkg/db/envs.go
+- packages/shared/pkg/models/* (多个模型文件)
+- packages/shared/pkg/schema/build.go
+- spec/openapi.yml
+
+CHANGES SUMMARY:
+为构建状态添加原因字段，用于报告构建失败的具体原因。这是一个重大的数据库架构变更，涉及多个层面的修改。
+
+DETAILED CHANGES:
+
+1. 数据库架构变更:
+   - 添加新的迁移文件，为env_builds表添加reason字段
+   - 更新所有相关的数据库查询以包含reason字段
+
+2. API层修改:
+   - 修改SetStatus方法签名，reason参数从string改为*string
+   - 更新构建状态设置逻辑，支持可选的原因信息
+
+3. 缓存层修改:
+   - 在BuildInfo中添加reason字段
+   - 更新SetFailed方法以接收原因参数
+
+4. gRPC协议修改:
+   - 在TemplateBuildStatusResponse中添加可选的reason字段
+   - 更新protobuf生成的代码
+
+5. 模型层修改:
+   - 在EnvBuild模型中添加Reason字段
+   - 更新所有相关的CRUD操作
+
+MANUAL ACTIONS NEEDED:
+1. 检查数据库迁移文件是否存在
+2. 应用关键的API修改
+3. 由于涉及大量生成代码，重点处理核心逻辑
+
+STATUS: [ ] 待处理
