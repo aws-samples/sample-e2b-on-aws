@@ -1,0 +1,115 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+bin/
+
+# Go specific
+*.o
+*.a
+*.test
+*.out
+go.work
+
+# Mac OS specific
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Linux specific
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+.nfs*
+
+# Windows specific
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.cab
+*.msi
+*.msm
+*.msp
+*.lnk
+
+# Editor directories and files
+.idea/
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+*.sublime-workspace
+*.swp
+*.swo
+*~
+.project
+.classpath
+.c9/
+*.launch
+.settings/
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Build and package artifacts
+mkfcenv.tar.gz
+*.tar.gz
+*.tar
+*.zip
+dist/
+build/
+
+# Dependency directories
+vendor/
+node_modules/
+jspm_packages/
+.pnp/
+.pnp.js
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+
+# Database files
+.db
+*.db
+*.sqlite
+*.sqlite3
+
+# Temporary files
+.tmp/
+.temp/
+tmp/
+temp/
+*.tmp
+
+# Docker
+.docker/
+docker-compose.override.yml
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+.terraformrc
+terraform.rc
+terraform.tfvars
+*.tfvars.json
+
+# Packer
+packer_cache/
+
+# Project specific
+.shared

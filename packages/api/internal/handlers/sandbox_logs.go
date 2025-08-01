@@ -35,7 +35,7 @@ func (a *APIStore) GetSandboxesSandboxIDLogs(
 
 	telemetry.SetAttributes(ctx,
 		attribute.String("instance.id", sandboxID),
-		attribute.String("team.id", teamID.String()),
+		telemetry.WithTeamID(teamID.String()),
 	)
 
 	var start time.Time
@@ -51,12 +51,11 @@ func (a *APIStore) GetSandboxesSandboxIDLogs(
 	// Sanitize ID
 	// https://grafana.com/blog/2021/01/05/how-to-escape-special-characters-with-lokis-logql/
 	id := strings.ReplaceAll(sandboxID, "`", "")
-	query := fmt.Sprintf("{source=\"logs-collector\", service=\"envd\", teamID=`%s`, sandboxID=`%s`, category!=\"metrics\"}", teamID.String(), id)
+	query := fmt.Sprintf("{teamID=`%s`, sandboxID=`%s`, category!=\"metrics\"}", teamID.String(), id)
 
 	res, err := a.lokiClient.QueryRange(query, int(*params.Limit), start, end, logproto.FORWARD, time.Duration(0), time.Duration(0), true)
 	if err != nil {
-		errMsg := fmt.Errorf("error when returning logs for sandbox: %w", err)
-		telemetry.ReportCriticalError(ctx, errMsg)
+		telemetry.ReportCriticalError(ctx, "error when returning logs for sandbox", err)
 		a.sendAPIStoreError(c, http.StatusNotFound, fmt.Sprintf("Error returning logs for sandbox '%s'", sandboxID))
 
 		return
@@ -87,8 +86,7 @@ func (a *APIStore) GetSandboxesSandboxIDLogs(
 		})
 
 	default:
-		errMsg := fmt.Errorf("unexpected value type %T", res.Data.Result.Type())
-		telemetry.ReportCriticalError(ctx, errMsg)
+		telemetry.ReportCriticalError(ctx, "unexpected value type", fmt.Errorf("unexpected value type %T", res.Data.Result.Type()))
 		a.sendAPIStoreError(c, http.StatusInternalServerError, fmt.Sprintf("Error returning logs for sandbox '%s", sandboxID))
 
 		return

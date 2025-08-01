@@ -68,7 +68,7 @@ accessToken=$ACCESS_TOKEN
 teamApiKey=$TEAM_API_KEY
 EOF
 
-echo "JSON配置文件已生成为config.json"
-echo "teamId: $TEAM_ID"
-echo "accessToken: $ACCESS_TOKEN"
-echo "teamApiKey: $TEAM_API_KEY"
+DOMAIN=$(grep "^CFNDOMAIN=" /opt/config.properties | cut -d= -f2)
+echo "export E2B_DOMAIN=$DOMAIN"
+echo "export E2B_API_KEY=$TEAM_API_KEY"
+echo "export E2B_ACCESS_TOKEN=$ACCESS_TOKEN"

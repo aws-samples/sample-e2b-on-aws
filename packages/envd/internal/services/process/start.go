@@ -3,15 +3,19 @@ package process
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net/http"
 	"os/user"
+	"strconv"
+	"time"
+
+	"connectrpc.com/connect"
 
 	"github.com/e2b-dev/infra/packages/envd/internal/host"
 	"github.com/e2b-dev/infra/packages/envd/internal/logs"
 	"github.com/e2b-dev/infra/packages/envd/internal/permissions"
 	"github.com/e2b-dev/infra/packages/envd/internal/services/process/handler"
 	rpc "github.com/e2b-dev/infra/packages/envd/internal/services/spec/process"
-
-	"connectrpc.com/connect"
 )
 
 func (s *Service) InitializeStartProcess(ctx context.Context, user *user.User, req *rpc.StartRequest) error {
@@ -27,7 +31,8 @@ func (s *Service) InitializeStartProcess(ctx context.Context, user *user.User, r
 
 	handlerL := s.logger.With().Str(string(logs.OperationIDKey), ctx.Value(logs.OperationIDKey).(string)).Logger()
 
-	proc, err := handler.New(user, req, &handlerL, nil)
+	startProcCtx, startProcCancel := context.WithCancel(ctx)
+	proc, err := handler.New(startProcCtx, user, req, &handlerL, nil, startProcCancel)
 	if err != nil {
 		return err
 	}
@@ -67,8 +72,23 @@ func (s *Service) handleStart(ctx context.Context, req *connect.Request[rpc.Star
 		return err
 	}
 
-	proc, err := handler.New(u, req.Msg, &handlerL, s.envs)
+	timeout, err := determineTimeoutFromHeader(stream.Conn().RequestHeader())
 	if err != nil {
+		return connect.NewError(connect.CodeInvalidArgument, err)
+	}
+
+	// Create a new context with a timeout if provided.
+	// We do not want the command to be killed if the request context is cancelled
+	procCtx, cancelProc := context.Background(), func() {}
+	if timeout > 0 { // zero timeout means no timeout
+		procCtx, cancelProc = context.WithTimeout(procCtx, timeout)
+	}
+
+	proc, err := handler.New(procCtx, u, req.Msg, &handlerL, s.envs, cancelProc)
+	if err != nil {
+		// Ensure the process cancel is called to cleanup resources.
+		cancelProc()
+
 		return err
 	}
 
@@ -107,7 +127,7 @@ func (s *Service) handleStart(ctx context.Context, req *connect.Request[rpc.Star
 				},
 			})
 			if streamErr != nil {
-				cancel(connect.NewError(connect.CodeUnknown, streamErr))
+				cancel(connect.NewError(connect.CodeUnknown, fmt.Errorf("error sending start event: %w", streamErr)))
 
 				return
 			}
@@ -128,7 +148,7 @@ func (s *Service) handleStart(ctx context.Context, req *connect.Request[rpc.Star
 					},
 				})
 				if streamErr != nil {
-					cancel(connect.NewError(connect.CodeUnknown, streamErr))
+					cancel(connect.NewError(connect.CodeUnknown, fmt.Errorf("error sending keepalive: %w", streamErr)))
 					return
 				}
 			case <-ctx.Done():
@@ -145,7 +165,7 @@ func (s *Service) handleStart(ctx context.Context, req *connect.Request[rpc.Star
 					},
 				})
 				if streamErr != nil {
-					cancel(connect.NewError(connect.CodeUnknown, streamErr))
+					cancel(connect.NewError(connect.CodeUnknown, fmt.Errorf("error sending data event: %w", streamErr)))
 					return
 				}
 
@@ -171,7 +191,7 @@ func (s *Service) handleStart(ctx context.Context, req *connect.Request[rpc.Star
 				},
 			})
 			if streamErr != nil {
-				cancel(connect.NewError(connect.CodeUnknown, streamErr))
+				cancel(connect.NewError(connect.CodeUnknown, fmt.Errorf("error sending end event: %w", streamErr)))
 
 				return
 			}
@@ -203,4 +223,19 @@ func (s *Service) handleStart(ctx context.Context, req *connect.Request[rpc.Star
 	case <-exitChan:
 		return nil
 	}
+}
+
+func determineTimeoutFromHeader(header http.Header) (time.Duration, error) {
+	timeoutHeader := header.Get("Connect-Timeout-Ms")
+
+	if timeoutHeader == "" {
+		return 0, nil
+	}
+
+	timeout, err := strconv.Atoi(timeoutHeader)
+	if err != nil {
+		return 0, err
+	}
+
+	return time.Duration(timeout) * time.Millisecond, nil
 }

@@ -34,18 +34,24 @@ job "docker-reverse-proxy" {
       }
 
       env {
+        # POSTGRES_CONNECTION_STRING = "${CFNDBURL}"
+        # CFNDBURL = "${CFNDBURL}"
+        # AWS_REGION                 = "${AWSREGION}"
+        # AWS_ACCOUNT_ID             = "${account_id}"
+        # AWS_ECR_REPOSITORY         = "e2bdev/base"
+        # DOMAIN_NAME                = "${CFNDOMAIN}"
+        # LOG_LEVEL                  = "debug"
+
+        CLOUD_PROVIDER             =   "aws"
         POSTGRES_CONNECTION_STRING = "${CFNDBURL}"
-        CFNDBURL = "${CFNDBURL}"
-        AWS_REGION                 = "${AWSREGION}"
-        AWS_ACCOUNT_ID             = "${account_id}"
-        AWS_ECR_REPOSITORY         = "e2bdev/base"
         DOMAIN_NAME                = "${CFNDOMAIN}"
+        AWS_ECR_REPOSITORY_NAME    = "e2bdev/base"
         LOG_LEVEL                  = "debug"
       }
 
       config {
         network_mode = "host"
-        image        = "${account_id}.dkr.ecr.${AWSREGION}.amazonaws.com/e2b-orchestration/docker-reverse-proxy:latest"
+        image        = "${account_id}.dkr.ecr.${AWSREGION}.amazonaws.com/docker-reverse-proxy:latest"
         ports        = ["docker-reverse-proxy"]
         args         = ["--port", "5000"]
         force_pull   = true

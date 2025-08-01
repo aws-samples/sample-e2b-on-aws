@@ -6,19 +6,17 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/e2b-dev/infra/packages/shared/pkg/telemetry"
-
 	"github.com/gin-gonic/gin"
+
+	"github.com/e2b-dev/infra/packages/shared/pkg/telemetry"
 )
 
 func ParseBody[B any](ctx context.Context, c *gin.Context) (body B, err error) {
 	err = c.Bind(&body)
 	if err != nil {
-		bodyErr := fmt.Errorf("error when parsing request: %w", err)
+		telemetry.ReportCriticalError(ctx, "error when parsing request", err)
 
-		telemetry.ReportCriticalError(ctx, bodyErr)
-
-		return body, bodyErr
+		return body, fmt.Errorf("error when parsing request: %w", err)
 	}
 
 	return body, nil

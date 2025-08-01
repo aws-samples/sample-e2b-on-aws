@@ -11,8 +11,9 @@ import (
 )
 
 type API struct {
-	logger  *zerolog.Logger
-	envVars *utils.Map[string, string]
+	logger      *zerolog.Logger
+	accessToken *string
+	envVars     *utils.Map[string, string]
 }
 
 func New(l *zerolog.Logger, envVars *utils.Map[string, string]) *API {

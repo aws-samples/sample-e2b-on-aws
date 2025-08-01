@@ -37,27 +37,18 @@ echo "Current directory: $(pwd)"
 make build-and-upload
 echo "orchestrator module build and upload completed successfully"
 
-# Build and upload template-manager module
-echo "=== Building and uploading template-manager module ==="
-cd "$PROJECT_ROOT/template-manager" || { echo "template-manager directory not found"; exit 1; }
+# Build and upload envd module
+echo "=== Building envd module ==="
+cd "$PROJECT_ROOT/envd" || { echo "envd directory not found"; exit 1; }
 echo "Current directory: $(pwd)"
 make build-and-upload
-echo "template-manager module build and upload completed successfully"
+echo "envd module build-and-upload completed successfully"
 
-# Build and upload template-manager module
-# echo "=== Building envd module ==="
-# cd "$PROJECT_ROOT/envd" || { echo "envd directory not found"; exit 1; }
-# echo "Current directory: $(pwd)"
-# make build
-# echo "envd module build  completed successfully"
-
-# Upload envd and other required files
-echo "=== Uploading envd and required files ==="
+# Upload other required files
+echo "=== Uploading required files ==="
 cd "$PROJECT_ROOT" || { echo "Cannot return to project root"; exit 1; }
 echo "Current directory: $(pwd)"
-chmod u+x upload.sh
-./upload.sh
+bash ./upload.sh
 echo "envd upload completed successfully"
-
 
 echo "=== All builds and uploads completed successfully ==="

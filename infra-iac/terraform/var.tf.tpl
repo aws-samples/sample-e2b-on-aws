@@ -2,6 +2,12 @@
 # This file defines all variables used in the Terraform configuration
 # Placeholder values will be replaced by the prepare.sh script using values from config.properties
 
+# Terraform Environment
+variable "environment" {
+  type    = string
+  default = "${CFNENVIRONMENT}"
+}
+
 # Resource Prefix
 # Used to name and tag all resources created by Terraform
 variable "prefix" {
@@ -50,4 +56,12 @@ variable "VPC" {
     private_subnets = ["${CFNPRIVATESUBNET1}", "${CFNPRIVATESUBNET2}"]  # Private subnet ID placeholders
     public_subnets  = ["${CFNPUBLICSUBNET1}", "${CFNPUBLICSUBNET2}"]    # Public subnet ID placeholders
   }
+}
+
+# Architecture
+# CPU architecture to use for EC2 instances (x86_64 or arm64)
+variable "architecture" {
+  description = "CPU architecture to use for EC2 instances"
+  type        = string
+  default     = "${CFNARCHITECTURE}"
 }

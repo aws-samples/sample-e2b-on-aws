@@ -1,21 +1,26 @@
 package handlers
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/gin-gonic/gin"
+	"go.opentelemetry.io/otel/trace"
+	"go.uber.org/zap"
+
 	"github.com/e2b-dev/infra/packages/api/internal/api"
 	"github.com/e2b-dev/infra/packages/api/internal/auth"
 	authcache "github.com/e2b-dev/infra/packages/api/internal/cache/auth"
 	"github.com/e2b-dev/infra/packages/api/internal/cache/instance"
 	"github.com/e2b-dev/infra/packages/api/internal/utils"
-	"github.com/e2b-dev/infra/packages/shared/pkg/logs"
+	"github.com/e2b-dev/infra/packages/db/queries"
+	"github.com/e2b-dev/infra/packages/shared/pkg/logger"
+	sbxlogger "github.com/e2b-dev/infra/packages/shared/pkg/logger/sandbox"
 	"github.com/e2b-dev/infra/packages/shared/pkg/telemetry"
-	"github.com/gin-gonic/gin"
-	"go.opentelemetry.io/otel/trace"
 )
 
 func getSandboxIDClient(sandboxID string) (string, bool) {
@@ -43,8 +48,7 @@ func (a *APIStore) PostSandboxesSandboxIDResume(c *gin.Context, sandboxID api.Sa
 	if err != nil {
 		a.sendAPIStoreError(c, http.StatusBadRequest, fmt.Sprintf("Error when parsing request: %s", err))
 
-		errMsg := fmt.Errorf("error when parsing request: %w", err)
-		telemetry.ReportCriticalError(ctx, errMsg)
+		telemetry.ReportCriticalError(ctx, "error when parsing request", err)
 
 		return
 	}
@@ -74,8 +78,15 @@ func (a *APIStore) PostSandboxesSandboxIDResume(c *gin.Context, sandboxID api.Sa
 
 	sandboxID = utils.ShortID(sandboxID)
 
-	_, err = a.orchestrator.GetSandbox(sandboxID)
+	sbxCache, err := a.orchestrator.GetSandbox(sandboxID)
 	if err == nil {
+		zap.L().Debug("Sandbox is already running",
+			logger.WithSandboxID(sandboxID),
+			zap.Time("end_time", sbxCache.GetEndTime()),
+			zap.Bool("auto_pause", sbxCache.AutoPause.Load()),
+			zap.Time("start_time", sbxCache.StartTime),
+			zap.String("node_id", sbxCache.Node.ID),
+		)
 		a.sendAPIStoreError(c, http.StatusConflict, fmt.Sprintf("Sandbox %s is already running", sandboxID))
 
 		return
@@ -94,41 +105,65 @@ func (a *APIStore) PostSandboxesSandboxIDResume(c *gin.Context, sandboxID api.Sa
 		clientID = pausedOnNode.ID
 	}
 
-	snapshot, build, err := a.db.GetLastSnapshot(ctx, sandboxID, teamInfo.Team.ID)
+	lastSnapshot, err := a.sqlcDB.GetLastSnapshot(ctx, queries.GetLastSnapshotParams{SandboxID: sandboxID, TeamID: teamInfo.Team.ID})
 	if err != nil {
-		a.sendAPIStoreError(c, http.StatusNotFound, fmt.Sprintf("Error resuming sandbox: %s", err))
+		if errors.Is(err, sql.ErrNoRows) {
+			zap.L().Debug("Snapshot not found", logger.WithSandboxID(sandboxID))
+			a.sendAPIStoreError(c, http.StatusNotFound, "Sandbox snapshot not found")
+			return
+		}
 
+		zap.L().Error("Error getting last snapshot", logger.WithSandboxID(sandboxID), zap.Error(err))
+		a.sendAPIStoreError(c, http.StatusInternalServerError, "Error when getting snapshot")
 		return
 	}
 
-	sandboxLogger := logs.NewSandboxLogger(
-		sandboxID,
-		*build.EnvID,
-		teamInfo.Team.ID.String(),
-		build.Vcpu,
-		build.RAMMB,
-		false,
-	)
-	sandboxLogger.Debugf("Started resuming sandbox")
+	snap := lastSnapshot.Snapshot
+	build := lastSnapshot.EnvBuild
 
-	sbx, err := a.startSandbox(
+	alias := ""
+	if len(lastSnapshot.Aliases) > 0 {
+		alias = lastSnapshot.Aliases[0]
+	}
+
+	sbxlogger.E(&sbxlogger.SandboxMetadata{
+		SandboxID:  sandboxID,
+		TemplateID: *build.EnvID,
+		TeamID:     teamInfo.Team.ID.String(),
+	}).Debug("Started resuming sandbox")
+
+	var envdAccessToken *string = nil
+	if snap.EnvSecure {
+		accessToken, tokenErr := a.getEnvdAccessToken(build.EnvdVersion, sandboxID)
+		if tokenErr != nil {
+			zap.L().Error("Secure envd access token error", zap.Error(tokenErr.Err), logger.WithTemplateID(*build.EnvID), logger.WithBuildID(build.ID.String()))
+			a.sendAPIStoreError(c, tokenErr.Code, tokenErr.ClientMsg)
+			return
+		}
+
+		envdAccessToken = &accessToken
+	}
+
+	sbx, createErr := a.startSandbox(
 		ctx,
-		snapshot.SandboxID,
+		snap.SandboxID,
 		timeout,
 		nil,
-		snapshot.Metadata,
-		"",
+		snap.Metadata,
+		alias,
 		teamInfo,
 		build,
-		sandboxLogger,
 		&c.Request.Header,
 		true,
 		&clientID,
-		snapshot.BaseEnvID,
+		snap.BaseEnvID,
 		autoPause,
+		envdAccessToken,
 	)
-	if err != nil {
-		a.sendAPIStoreError(c, http.StatusInternalServerError, fmt.Sprintf("Error resuming sandbox: %s", err))
+
+	if createErr != nil {
+		zap.L().Error("Failed to resume sandbox", zap.Error(createErr.Err))
+		a.sendAPIStoreError(c, createErr.Code, createErr.ClientMsg)
 
 		return
 	}

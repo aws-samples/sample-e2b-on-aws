@@ -134,8 +134,25 @@ function install_binaries {
   local readonly path="$2"
   local readonly username="$3"
 
-  local readonly url="https://releases.hashicorp.com/nomad/${version}/nomad_${version}_linux_amd64.zip"
-  local readonly download_path="/tmp/nomad_${version}_linux_amd64.zip"
+  # Detect system architecture
+  local arch=$(arch)
+  log_info "Auto-detected architecture: $arch"
+
+  local nomad_arch="amd64"
+  # Map architecture to Nomad's naming convention
+  if [[ "$arch" == "aarch64" || "$arch" == "arm64" ]]; then
+    nomad_arch="arm64"
+  elif [[ "$arch" == "x86_64" ]]; then
+    nomad_arch="amd64"
+  else
+    log_error "Unsupported architecture: $arch"
+    exit 1
+  fi
+  
+  log_info "Using Nomad architecture: $nomad_arch"
+
+  local readonly url="https://releases.hashicorp.com/nomad/${version}/nomad_${version}_linux_${nomad_arch}.zip"
+  local readonly download_path="/tmp/nomad_${version}_linux.zip"
   local readonly bin_dir="$path/bin"
   local readonly nomad_dest_path="$bin_dir/nomad"
 

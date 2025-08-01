@@ -5,25 +5,27 @@ cd "$(dirname "$0")"
 
 # terraform-output-to-config.sh - Convert Terraform outputs to configuration and append to file
 
-# Default config file path
+# Default values
 CONFIG_FILE="/opt/config.properties"
+ENVIRONMENT=$(grep "^CFNENVIRONMENT=" "$CONFIG_FILE" | cut -d'=' -f2)
 
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
-    case \$1 in
+    case $1 in
         -c|--config-file)
-            CONFIG_FILE=\$2
+            CONFIG_FILE=$2
             shift 2
             ;;
         -h|--help)
-            echo "Usage: \$0 [options]"
+            echo "Usage: $0 [options]"
             echo "Options:"
             echo "  -c, --config-file FILE  Specify the config file to append to (default: /opt/config.properties)"
+            echo "  -e, --env ENV           Specify the environment to deploy (default: dev)"
             echo "  -h, --help              Show this help message"
             exit 0
             ;;
         *)
-            echo "Error: Unknown parameter \$1"
+            echo "Error: Unknown parameter $1"
             exit 1
             ;;
     esac
@@ -46,11 +48,11 @@ else
     echo "prepare.sh executed successfully"
 fi
 
-# Execute terraform plan and apply
-echo "Creating Terraform plan..."
-terraform plan -out=tfplan
+# Execute terraform plan and apply with environment variable
+echo "Creating Terraform plan for environment: $ENVIRONMENT..."
+terraform plan -var="environment=$ENVIRONMENT" -out=tfplan
 
-echo "Applying Terraform plan..."
+echo "Applying Terraform plan for environment: $ENVIRONMENT..."
 terraform apply tfplan
 
 # Check if apply was successful
@@ -138,7 +140,7 @@ echo "" >> "$CONFIG_FILE"
 echo "# Additional parameters" >> "$CONFIG_FILE"
 echo "account_id=$(aws sts get-caller-identity --query Account --output text)" >> "$CONFIG_FILE"
 echo "build_id=latest" >> "$CONFIG_FILE"
-echo "environment=dev" >> "$CONFIG_FILE"
+echo "environment=$ENVIRONMENT" >> "$CONFIG_FILE"
 
 # Extract AWSREGION value from the config file
 AWSREGION=$(grep "^AWSREGION=" "$CONFIG_FILE" | cut -d'=' -f2)

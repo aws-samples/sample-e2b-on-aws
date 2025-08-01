@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"os"
 
+	"connectrpc.com/connect"
+
 	"github.com/e2b-dev/infra/packages/envd/internal/permissions"
 	rpc "github.com/e2b-dev/infra/packages/envd/internal/services/spec/filesystem"
-
-	"connectrpc.com/connect"
 )
 
 func (Service) Stat(ctx context.Context, req *connect.Request[rpc.StatRequest]) (*connect.Response[rpc.StatResponse], error) {
@@ -31,18 +31,12 @@ func (Service) Stat(ctx context.Context, req *connect.Request[rpc.StatRequest]) 
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("error statting file: %w", err))
 	}
 
-	var t rpc.FileType
-	if fileInfo.IsDir() {
-		t = rpc.FileType_FILE_TYPE_DIRECTORY
-	} else {
-		t = rpc.FileType_FILE_TYPE_FILE
-	}
-
 	return connect.NewResponse(
 		&rpc.StatResponse{
 			Entry: &rpc.EntryInfo{
 				Name: fileInfo.Name(),
-				Type: t,
+				Type: getEntryType(fileInfo),
+				Path: path,
 			},
 		},
 	), nil

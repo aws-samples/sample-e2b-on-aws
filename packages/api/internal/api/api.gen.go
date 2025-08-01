@@ -14,6 +14,24 @@ import (
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
 
+	// (POST /access-tokens)
+	PostAccessTokens(c *gin.Context)
+
+	// (DELETE /access-tokens/{accessTokenID})
+	DeleteAccessTokensAccessTokenID(c *gin.Context, accessTokenID AccessTokenID)
+
+	// (GET /api-keys)
+	GetApiKeys(c *gin.Context)
+
+	// (POST /api-keys)
+	PostApiKeys(c *gin.Context)
+
+	// (DELETE /api-keys/{apiKeyID})
+	DeleteApiKeysApiKeyID(c *gin.Context, apiKeyID ApiKeyID)
+
+	// (PATCH /api-keys/{apiKeyID})
+	PatchApiKeysApiKeyID(c *gin.Context, apiKeyID ApiKeyID)
+
 	// (GET /health)
 	GetHealth(c *gin.Context)
 
@@ -82,6 +100,9 @@ type ServerInterface interface {
 
 	// (GET /templates/{templateID}/builds/{buildID}/status)
 	GetTemplatesTemplateIDBuildsBuildIDStatus(c *gin.Context, templateID TemplateID, buildID BuildID, params GetTemplatesTemplateIDBuildsBuildIDStatusParams)
+
+	// (GET /v2/sandboxes)
+	GetV2Sandboxes(c *gin.Context, params GetV2SandboxesParams)
 }
 
 // ServerInterfaceWrapper converts contexts to parameters.
@@ -92,6 +113,137 @@ type ServerInterfaceWrapper struct {
 }
 
 type MiddlewareFunc func(c *gin.Context)
+
+// PostAccessTokens operation middleware
+func (siw *ServerInterfaceWrapper) PostAccessTokens(c *gin.Context) {
+
+	c.Set(Supabase1TokenAuthScopes, []string{})
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.PostAccessTokens(c)
+}
+
+// DeleteAccessTokensAccessTokenID operation middleware
+func (siw *ServerInterfaceWrapper) DeleteAccessTokensAccessTokenID(c *gin.Context) {
+
+	var err error
+
+	// ------------- Path parameter "accessTokenID" -------------
+	var accessTokenID AccessTokenID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "accessTokenID", c.Param("accessTokenID"), &accessTokenID, runtime.BindStyledParameterOptions{Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter accessTokenID: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	c.Set(Supabase1TokenAuthScopes, []string{})
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.DeleteAccessTokensAccessTokenID(c, accessTokenID)
+}
+
+// GetApiKeys operation middleware
+func (siw *ServerInterfaceWrapper) GetApiKeys(c *gin.Context) {
+
+	c.Set(Supabase1TokenAuthScopes, []string{})
+
+	c.Set(Supabase2TeamAuthScopes, []string{})
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.GetApiKeys(c)
+}
+
+// PostApiKeys operation middleware
+func (siw *ServerInterfaceWrapper) PostApiKeys(c *gin.Context) {
+
+	c.Set(Supabase1TokenAuthScopes, []string{})
+
+	c.Set(Supabase2TeamAuthScopes, []string{})
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.PostApiKeys(c)
+}
+
+// DeleteApiKeysApiKeyID operation middleware
+func (siw *ServerInterfaceWrapper) DeleteApiKeysApiKeyID(c *gin.Context) {
+
+	var err error
+
+	// ------------- Path parameter "apiKeyID" -------------
+	var apiKeyID ApiKeyID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "apiKeyID", c.Param("apiKeyID"), &apiKeyID, runtime.BindStyledParameterOptions{Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter apiKeyID: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	c.Set(Supabase1TokenAuthScopes, []string{})
+
+	c.Set(Supabase2TeamAuthScopes, []string{})
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.DeleteApiKeysApiKeyID(c, apiKeyID)
+}
+
+// PatchApiKeysApiKeyID operation middleware
+func (siw *ServerInterfaceWrapper) PatchApiKeysApiKeyID(c *gin.Context) {
+
+	var err error
+
+	// ------------- Path parameter "apiKeyID" -------------
+	var apiKeyID ApiKeyID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "apiKeyID", c.Param("apiKeyID"), &apiKeyID, runtime.BindStyledParameterOptions{Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter apiKeyID: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	c.Set(Supabase1TokenAuthScopes, []string{})
+
+	c.Set(Supabase2TeamAuthScopes, []string{})
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.PatchApiKeysApiKeyID(c, apiKeyID)
+}
 
 // GetHealth operation middleware
 func (siw *ServerInterfaceWrapper) GetHealth(c *gin.Context) {
@@ -180,14 +332,18 @@ func (siw *ServerInterfaceWrapper) GetSandboxes(c *gin.Context) {
 
 	c.Set(ApiKeyAuthScopes, []string{})
 
+	c.Set(Supabase1TokenAuthScopes, []string{})
+
+	c.Set(Supabase2TeamAuthScopes, []string{})
+
 	// Parameter object where we will unmarshal all parameters from the context
 	var params GetSandboxesParams
 
-	// ------------- Optional query parameter "query" -------------
+	// ------------- Optional query parameter "metadata" -------------
 
-	err = runtime.BindQueryParameter("form", true, false, "query", c.Request.URL.Query(), &params.Query)
+	err = runtime.BindQueryParameter("form", true, false, "metadata", c.Request.URL.Query(), &params.Metadata)
 	if err != nil {
-		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter query: %w", err), http.StatusBadRequest)
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter metadata: %w", err), http.StatusBadRequest)
 		return
 	}
 
@@ -205,6 +361,10 @@ func (siw *ServerInterfaceWrapper) GetSandboxes(c *gin.Context) {
 func (siw *ServerInterfaceWrapper) PostSandboxes(c *gin.Context) {
 
 	c.Set(ApiKeyAuthScopes, []string{})
+
+	c.Set(Supabase1TokenAuthScopes, []string{})
+
+	c.Set(Supabase2TeamAuthScopes, []string{})
 
 	for _, middleware := range siw.HandlerMiddlewares {
 		middleware(c)
@@ -226,11 +386,11 @@ func (siw *ServerInterfaceWrapper) GetSandboxesMetrics(c *gin.Context) {
 	// Parameter object where we will unmarshal all parameters from the context
 	var params GetSandboxesMetricsParams
 
-	// ------------- Optional query parameter "query" -------------
+	// ------------- Optional query parameter "metadata" -------------
 
-	err = runtime.BindQueryParameter("form", true, false, "query", c.Request.URL.Query(), &params.Query)
+	err = runtime.BindQueryParameter("form", true, false, "metadata", c.Request.URL.Query(), &params.Metadata)
 	if err != nil {
-		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter query: %w", err), http.StatusBadRequest)
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter metadata: %w", err), http.StatusBadRequest)
 		return
 	}
 
@@ -260,6 +420,10 @@ func (siw *ServerInterfaceWrapper) DeleteSandboxesSandboxID(c *gin.Context) {
 
 	c.Set(ApiKeyAuthScopes, []string{})
 
+	c.Set(Supabase1TokenAuthScopes, []string{})
+
+	c.Set(Supabase2TeamAuthScopes, []string{})
+
 	for _, middleware := range siw.HandlerMiddlewares {
 		middleware(c)
 		if c.IsAborted() {
@@ -286,6 +450,10 @@ func (siw *ServerInterfaceWrapper) GetSandboxesSandboxID(c *gin.Context) {
 
 	c.Set(ApiKeyAuthScopes, []string{})
 
+	c.Set(Supabase1TokenAuthScopes, []string{})
+
+	c.Set(Supabase2TeamAuthScopes, []string{})
+
 	for _, middleware := range siw.HandlerMiddlewares {
 		middleware(c)
 		if c.IsAborted() {
@@ -311,6 +479,10 @@ func (siw *ServerInterfaceWrapper) GetSandboxesSandboxIDLogs(c *gin.Context) {
 	}
 
 	c.Set(ApiKeyAuthScopes, []string{})
+
+	c.Set(Supabase1TokenAuthScopes, []string{})
+
+	c.Set(Supabase2TeamAuthScopes, []string{})
 
 	// Parameter object where we will unmarshal all parameters from the context
 	var params GetSandboxesSandboxIDLogsParams
@@ -357,6 +529,10 @@ func (siw *ServerInterfaceWrapper) GetSandboxesSandboxIDMetrics(c *gin.Context) 
 
 	c.Set(ApiKeyAuthScopes, []string{})
 
+	c.Set(Supabase1TokenAuthScopes, []string{})
+
+	c.Set(Supabase2TeamAuthScopes, []string{})
+
 	for _, middleware := range siw.HandlerMiddlewares {
 		middleware(c)
 		if c.IsAborted() {
@@ -382,6 +558,10 @@ func (siw *ServerInterfaceWrapper) PostSandboxesSandboxIDPause(c *gin.Context) {
 	}
 
 	c.Set(ApiKeyAuthScopes, []string{})
+
+	c.Set(Supabase1TokenAuthScopes, []string{})
+
+	c.Set(Supabase2TeamAuthScopes, []string{})
 
 	for _, middleware := range siw.HandlerMiddlewares {
 		middleware(c)
@@ -409,6 +589,10 @@ func (siw *ServerInterfaceWrapper) PostSandboxesSandboxIDRefreshes(c *gin.Contex
 
 	c.Set(ApiKeyAuthScopes, []string{})
 
+	c.Set(Supabase1TokenAuthScopes, []string{})
+
+	c.Set(Supabase2TeamAuthScopes, []string{})
+
 	for _, middleware := range siw.HandlerMiddlewares {
 		middleware(c)
 		if c.IsAborted() {
@@ -434,6 +618,10 @@ func (siw *ServerInterfaceWrapper) PostSandboxesSandboxIDResume(c *gin.Context) 
 	}
 
 	c.Set(ApiKeyAuthScopes, []string{})
+
+	c.Set(Supabase1TokenAuthScopes, []string{})
+
+	c.Set(Supabase2TeamAuthScopes, []string{})
 
 	for _, middleware := range siw.HandlerMiddlewares {
 		middleware(c)
@@ -461,6 +649,10 @@ func (siw *ServerInterfaceWrapper) PostSandboxesSandboxIDTimeout(c *gin.Context)
 
 	c.Set(ApiKeyAuthScopes, []string{})
 
+	c.Set(Supabase1TokenAuthScopes, []string{})
+
+	c.Set(Supabase2TeamAuthScopes, []string{})
+
 	for _, middleware := range siw.HandlerMiddlewares {
 		middleware(c)
 		if c.IsAborted() {
@@ -475,6 +667,8 @@ func (siw *ServerInterfaceWrapper) PostSandboxesSandboxIDTimeout(c *gin.Context)
 func (siw *ServerInterfaceWrapper) GetTeams(c *gin.Context) {
 
 	c.Set(AccessTokenAuthScopes, []string{})
+
+	c.Set(Supabase1TokenAuthScopes, []string{})
 
 	for _, middleware := range siw.HandlerMiddlewares {
 		middleware(c)
@@ -492,6 +686,8 @@ func (siw *ServerInterfaceWrapper) GetTemplates(c *gin.Context) {
 	var err error
 
 	c.Set(AccessTokenAuthScopes, []string{})
+
+	c.Set(Supabase1TokenAuthScopes, []string{})
 
 	// Parameter object where we will unmarshal all parameters from the context
 	var params GetTemplatesParams
@@ -519,6 +715,8 @@ func (siw *ServerInterfaceWrapper) PostTemplates(c *gin.Context) {
 
 	c.Set(AccessTokenAuthScopes, []string{})
 
+	c.Set(Supabase1TokenAuthScopes, []string{})
+
 	for _, middleware := range siw.HandlerMiddlewares {
 		middleware(c)
 		if c.IsAborted() {
@@ -544,6 +742,8 @@ func (siw *ServerInterfaceWrapper) DeleteTemplatesTemplateID(c *gin.Context) {
 	}
 
 	c.Set(AccessTokenAuthScopes, []string{})
+
+	c.Set(Supabase1TokenAuthScopes, []string{})
 
 	for _, middleware := range siw.HandlerMiddlewares {
 		middleware(c)
@@ -571,6 +771,8 @@ func (siw *ServerInterfaceWrapper) PatchTemplatesTemplateID(c *gin.Context) {
 
 	c.Set(AccessTokenAuthScopes, []string{})
 
+	c.Set(Supabase1TokenAuthScopes, []string{})
+
 	for _, middleware := range siw.HandlerMiddlewares {
 		middleware(c)
 		if c.IsAborted() {
@@ -596,6 +798,8 @@ func (siw *ServerInterfaceWrapper) PostTemplatesTemplateID(c *gin.Context) {
 	}
 
 	c.Set(AccessTokenAuthScopes, []string{})
+
+	c.Set(Supabase1TokenAuthScopes, []string{})
 
 	for _, middleware := range siw.HandlerMiddlewares {
 		middleware(c)
@@ -632,6 +836,8 @@ func (siw *ServerInterfaceWrapper) PostTemplatesTemplateIDBuildsBuildID(c *gin.C
 
 	c.Set(AccessTokenAuthScopes, []string{})
 
+	c.Set(Supabase1TokenAuthScopes, []string{})
+
 	for _, middleware := range siw.HandlerMiddlewares {
 		middleware(c)
 		if c.IsAborted() {
@@ -667,6 +873,8 @@ func (siw *ServerInterfaceWrapper) GetTemplatesTemplateIDBuildsBuildIDStatus(c *
 
 	c.Set(AccessTokenAuthScopes, []string{})
 
+	c.Set(Supabase1TokenAuthScopes, []string{})
+
 	// Parameter object where we will unmarshal all parameters from the context
 	var params GetTemplatesTemplateIDBuildsBuildIDStatusParams
 
@@ -686,6 +894,62 @@ func (siw *ServerInterfaceWrapper) GetTemplatesTemplateIDBuildsBuildIDStatus(c *
 	}
 
 	siw.Handler.GetTemplatesTemplateIDBuildsBuildIDStatus(c, templateID, buildID, params)
+}
+
+// GetV2Sandboxes operation middleware
+func (siw *ServerInterfaceWrapper) GetV2Sandboxes(c *gin.Context) {
+
+	var err error
+
+	c.Set(ApiKeyAuthScopes, []string{})
+
+	c.Set(Supabase1TokenAuthScopes, []string{})
+
+	c.Set(Supabase2TeamAuthScopes, []string{})
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetV2SandboxesParams
+
+	// ------------- Optional query parameter "metadata" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "metadata", c.Request.URL.Query(), &params.Metadata)
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter metadata: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "state" -------------
+
+	err = runtime.BindQueryParameter("form", false, false, "state", c.Request.URL.Query(), &params.State)
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter state: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "nextToken" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "nextToken", c.Request.URL.Query(), &params.NextToken)
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter nextToken: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "limit", c.Request.URL.Query(), &params.Limit)
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter limit: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.GetV2Sandboxes(c, params)
 }
 
 // GinServerOptions provides options for the Gin server.
@@ -715,6 +979,12 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 		ErrorHandler:       errorHandler,
 	}
 
+	router.POST(options.BaseURL+"/access-tokens", wrapper.PostAccessTokens)
+	router.DELETE(options.BaseURL+"/access-tokens/:accessTokenID", wrapper.DeleteAccessTokensAccessTokenID)
+	router.GET(options.BaseURL+"/api-keys", wrapper.GetApiKeys)
+	router.POST(options.BaseURL+"/api-keys", wrapper.PostApiKeys)
+	router.DELETE(options.BaseURL+"/api-keys/:apiKeyID", wrapper.DeleteApiKeysApiKeyID)
+	router.PATCH(options.BaseURL+"/api-keys/:apiKeyID", wrapper.PatchApiKeysApiKeyID)
 	router.GET(options.BaseURL+"/health", wrapper.GetHealth)
 	router.GET(options.BaseURL+"/nodes", wrapper.GetNodes)
 	router.GET(options.BaseURL+"/nodes/:nodeID", wrapper.GetNodesNodeID)
@@ -738,4 +1008,5 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.POST(options.BaseURL+"/templates/:templateID", wrapper.PostTemplatesTemplateID)
 	router.POST(options.BaseURL+"/templates/:templateID/builds/:buildID", wrapper.PostTemplatesTemplateIDBuildsBuildID)
 	router.GET(options.BaseURL+"/templates/:templateID/builds/:buildID/status", wrapper.GetTemplatesTemplateIDBuildsBuildIDStatus)
+	router.GET(options.BaseURL+"/v2/sandboxes", wrapper.GetV2Sandboxes)
 }

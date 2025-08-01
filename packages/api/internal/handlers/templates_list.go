@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"fmt"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -10,7 +9,7 @@ import (
 
 	"github.com/e2b-dev/infra/packages/api/internal/api"
 	"github.com/e2b-dev/infra/packages/api/internal/auth"
-	"github.com/e2b-dev/infra/packages/shared/pkg/models"
+	"github.com/e2b-dev/infra/packages/db/queries"
 	"github.com/e2b-dev/infra/packages/shared/pkg/telemetry"
 )
 
@@ -20,13 +19,12 @@ func (a *APIStore) GetTemplates(c *gin.Context, params api.GetTemplatesParams) {
 
 	userID := c.Value(auth.UserIDContextKey).(uuid.UUID)
 
-	var team *models.Team
-	teams, err := a.db.GetTeams(ctx, userID)
+	var team *queries.Team
+	teams, err := a.sqlcDB.GetTeamsWithUsersTeams(ctx, userID)
 	if err != nil {
-		a.sendAPIStoreError(c, http.StatusInternalServerError, fmt.Sprintf("Error when getting teams"))
+		a.sendAPIStoreError(c, http.StatusInternalServerError, "Error when getting teams")
 
-		err = fmt.Errorf("error when getting teams: %w", err)
-		telemetry.ReportCriticalError(ctx, err)
+		telemetry.ReportCriticalError(ctx, "error when getting teams", err)
 
 		return
 	}
@@ -36,14 +34,14 @@ func (a *APIStore) GetTemplates(c *gin.Context, params api.GetTemplatesParams) {
 		if err != nil {
 			a.sendAPIStoreError(c, http.StatusBadRequest, "Invalid team ID")
 
-			telemetry.ReportError(ctx, err)
+			telemetry.ReportError(ctx, "invalid team ID", err)
 
 			return
 		}
 
 		for _, t := range teams {
-			if t.ID == teamUUID {
-				team = t
+			if t.Team.ID == teamUUID {
+				team = &t.Team
 				break
 			}
 		}
@@ -51,14 +49,14 @@ func (a *APIStore) GetTemplates(c *gin.Context, params api.GetTemplatesParams) {
 		if team == nil {
 			a.sendAPIStoreError(c, http.StatusNotFound, "Team not found")
 
-			telemetry.ReportError(ctx, fmt.Errorf("team not found"))
+			telemetry.ReportError(ctx, "team not found", err)
 
 			return
 		}
 	} else {
 		for _, t := range teams {
-			if t.Edges.UsersTeams[0].IsDefault {
-				team = t
+			if t.UsersTeam.IsDefault {
+				team = &t.Team
 				break
 			}
 		}
@@ -66,7 +64,7 @@ func (a *APIStore) GetTemplates(c *gin.Context, params api.GetTemplatesParams) {
 		if team == nil {
 			a.sendAPIStoreError(c, http.StatusInternalServerError, "Default team not found")
 
-			telemetry.ReportError(ctx, fmt.Errorf("default team not found"))
+			telemetry.ReportError(ctx, "default team not found", err)
 
 			return
 		}
@@ -74,15 +72,14 @@ func (a *APIStore) GetTemplates(c *gin.Context, params api.GetTemplatesParams) {
 
 	telemetry.SetAttributes(ctx,
 		attribute.String("user.id", userID.String()),
-		attribute.String("team.id", team.ID.String()),
+		telemetry.WithTeamID(team.ID.String()),
 	)
 
 	envs, err := a.db.GetEnvs(ctx, team.ID)
 	if err != nil {
 		a.sendAPIStoreError(c, http.StatusInternalServerError, "Error when getting sandbox templates")
 
-		err = fmt.Errorf("error when getting envs: %w", err)
-		telemetry.ReportCriticalError(ctx, err)
+		telemetry.ReportCriticalError(ctx, "error when getting envs", err)
 
 		return
 	}

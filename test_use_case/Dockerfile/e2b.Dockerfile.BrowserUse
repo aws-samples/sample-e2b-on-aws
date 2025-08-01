@@ -1,0 +1,54 @@
+# E2B Desktop Sandbox Template
+#
+# This Dockerfile contains the commands to create a computer use sandbox on E2B.
+# If you want to make your own template based on this one, make your changes
+
+FROM ubuntu:22.04
+
+# Environment variables:
+
+ENV \
+    # Avoid system prompts: \
+    DEBIAN_FRONTEND=noninteractive \
+    DEBIAN_PRIORITY=high \
+    # Pip settings: \
+    PIP_DEFAULT_TIMEOUT=100 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1
+
+# Desktop environment:
+
+RUN yes | unminimize && \
+    apt-get update && \
+    # X window server:
+    apt-get install -y xserver-xorg xorg x11-xserver-utils xvfb x11-utils xauth && \
+    # XFCE desktop environment:
+    apt-get install -y xfce4 xfce4-goodies && \ 
+    # Basic system utilities:
+    apt-get install -y util-linux sudo curl git wget && \
+    # Pip will be used to install Python packages:
+    apt-get install -y python3-pip && \ 
+    # Tools used by the desktop SDK:
+    apt-get install -y xdotool scrot ffmpeg
+
+# Streaming server:
+
+RUN \
+    # VNC: \
+    apt-get install -y x11vnc && \
+    # NoVNC: \
+    git clone --branch e2b-desktop https://github.com/e2b-dev/noVNC.git /opt/noVNC && \
+    ln -s /opt/noVNC/vnc.html /opt/noVNC/index.html && \
+    # Websockify: \
+    apt-get install -y net-tools netcat && \
+    pip install numpy && \
+    git clone --branch v0.12.0 https://github.com/novnc/websockify /opt/noVNC/utils/websockify
+
+# User applications:
+
+# ~ Make your changes to this template BELOW this line ~
+
+#For BrowserUse
+RUN apt-get install -y python3.11 python3.11-dev && \
+    python3.11 -m pip install --no-cache-dir boto3 langchain-aws pydantic browser_use[memory]==0.3.2 playwright dotenv && \
+    playwright install chromium --with-deps --no-shell
