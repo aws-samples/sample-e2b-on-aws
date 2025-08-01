@@ -130,12 +130,12 @@ func (p *OrchestratorsPool) syncNodes(ctx context.Context) {
 	// connect / refresh discovered orchestrators
 	for _, sdNode := range sdNodes {
 		wg.Add(1)
-		go func(sdNode *sd.ServiceDiscoveryItem) {
+		go func(sdNode sd.ServiceDiscoveryItem) {
 			defer wg.Done()
 
 			var found *OrchestratorNode = nil
 
-			host := fmt.Sprintf("%s:%d", sdNode.NodeIp, sdNode.NodePort)
+			host := fmt.Sprintf("%s:%d", sdNode.NodeIP, sdNode.NodePort)
 			for _, node := range p.nodes.Items() {
 				if host == node.Host {
 					found = node
@@ -167,7 +167,7 @@ func (p *OrchestratorsPool) syncNodes(ctx context.Context) {
 			found := false
 
 			for _, sdNode := range sdNodes {
-				host := fmt.Sprintf("%s:%d", sdNode.NodeIp, sdNode.NodePort)
+				host := fmt.Sprintf("%s:%d", sdNode.NodeIP, sdNode.NodePort)
 				if host == node.Host {
 					found = true
 					break
@@ -189,11 +189,11 @@ func (p *OrchestratorsPool) syncNodes(ctx context.Context) {
 	wg.Wait()
 }
 
-func (p *OrchestratorsPool) connectNode(ctx context.Context, node *sd.ServiceDiscoveryItem) error {
+func (p *OrchestratorsPool) connectNode(ctx context.Context, node sd.ServiceDiscoveryItem) error {
 	ctx, childSpan := p.tracer.Start(ctx, "connect-orchestrator-node")
 	defer childSpan.End()
 
-	o, err := NewOrchestrator(ctx, p.tracerProvider, p.metricProvider, node.NodeIp, node.NodePort)
+	o, err := NewOrchestrator(ctx, p.tracerProvider, p.metricProvider, node.NodeIP, node.NodePort)
 	if err != nil {
 		return err
 	}

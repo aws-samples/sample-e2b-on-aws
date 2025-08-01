@@ -105,12 +105,12 @@ func (p *EdgePool) syncNodes(ctx context.Context) {
 	// connect / refresh discovered orchestrators
 	for _, sdNode := range sdNodes {
 		wg.Add(1)
-		go func(sdNode *sd.ServiceDiscoveryItem) {
+		go func(sdNode sd.ServiceDiscoveryItem) {
 			defer wg.Done()
 
 			var found *EdgeNode = nil
 
-			host := fmt.Sprintf("%s:%d", sdNode.NodeIp, sdNode.NodePort)
+			host := fmt.Sprintf("%s:%d", sdNode.NodeIP, sdNode.NodePort)
 
 			// skip self registration
 			if host == p.nodeSelfHost {
@@ -148,7 +148,7 @@ func (p *EdgePool) syncNodes(ctx context.Context) {
 			found := false
 
 			for _, sdNode := range sdNodes {
-				host := fmt.Sprintf("%s:%d", sdNode.NodeIp, sdNode.NodePort)
+				host := fmt.Sprintf("%s:%d", sdNode.NodeIP, sdNode.NodePort)
 				if host == node.Host {
 					found = true
 					break
@@ -170,11 +170,11 @@ func (p *EdgePool) syncNodes(ctx context.Context) {
 	wg.Wait()
 }
 
-func (p *EdgePool) connectNode(ctx context.Context, node *sd.ServiceDiscoveryItem) error {
+func (p *EdgePool) connectNode(ctx context.Context, node sd.ServiceDiscoveryItem) error {
 	ctx, childSpan := p.tracer.Start(ctx, "connect-edge-node")
 	defer childSpan.End()
 
-	host := fmt.Sprintf("%s:%d", node.NodeIp, node.NodePort)
+	host := fmt.Sprintf("%s:%d", node.NodeIP, node.NodePort)
 	o, err := NewEdgeNode(ctx, host)
 	if err != nil {
 		return err
