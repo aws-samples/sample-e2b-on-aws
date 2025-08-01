@@ -164,7 +164,7 @@ INSERT INTO public.tiers (
         disk_mb,
         concurrent_instances
     )
-VALUES ('base_v1', 'Base tier', 2, 512, 8192, 20);
+VALUES ('base_v1', 'Base tier', 2, 512, 8192, 1000000);
 -- Create user for triggers
 CREATE USER trigger_user;
 GRANT trigger_user TO postgres;
@@ -284,7 +284,7 @@ SET DEFAULT 'vmlinux-5.10.186';
 ALTER TABLE "public"."tiers"
 ADD COLUMN "max_length_hours" bigint NULL;
 UPDATE "public"."tiers"
-SET "max_length_hours" = 1;
+SET "max_length_hours" = 24;
 ALTER TABLE "public"."tiers"
 ALTER COLUMN "max_length_hours"
 SET NOT NULL;
@@ -667,4 +667,116 @@ ALTER COLUMN slug
 SET NOT NULL;
 ALTER TABLE "public"."snapshots"
 ADD CONSTRAINT "snapshots_envs_env_id" FOREIGN KEY ("env_id") REFERENCES "public"."envs" ("id") ON UPDATE NO ACTION ON DELETE CASCADE,
-    ADD CONSTRAINT "snapshots_envs_base_env_id" FOREIGN KEY ("base_env_id") REFERENCES "public"."envs" ("id") ON UPDATE NO ACTION ON DELETE CASCADE;
+ADD CONSTRAINT "snapshots_envs_base_env_id" FOREIGN KEY ("base_env_id") REFERENCES "public"."envs" ("id") ON UPDATE NO ACTION ON DELETE CASCADE;
+
+
+-- Add new columns to team_api_keys table
+ALTER TABLE team_api_keys
+    ADD COLUMN IF NOT EXISTS api_key_hash TEXT UNIQUE,
+    ADD COLUMN IF NOT EXISTS api_key_mask VARCHAR(44);
+
+-- Add new columns to access_tokens table
+ALTER TABLE access_tokens
+    ADD COLUMN IF NOT EXISTS id UUID DEFAULT gen_random_uuid(),
+    ADD COLUMN IF NOT EXISTS access_token_hash TEXT UNIQUE,
+    ADD COLUMN IF NOT EXISTS access_token_mask TEXT,
+    ADD COLUMN IF NOT EXISTS name TEXT NOT NULL DEFAULT 'Unnamed Access Token';
+
+-- Mark sensitive columns as sensitive
+COMMENT ON COLUMN team_api_keys.api_key_hash IS 'sensitive';
+COMMENT ON COLUMN access_tokens.access_token_hash IS 'sensitive';
+
+
+CREATE INDEX IF NOT EXISTS idx_envs_builds_envs ON public.env_builds (env_id);
+CREATE INDEX IF NOT EXISTS idx_envs_envs_aliases ON public.env_aliases (env_id);
+CREATE INDEX IF NOT EXISTS idx_users_access_tokens ON public.access_tokens (user_id);
+CREATE INDEX IF NOT EXISTS idx_teams_envs ON public.envs (team_id);
+CREATE INDEX IF NOT EXISTS idx_team_team_api_keys ON public.team_api_keys (team_id);
+CREATE INDEX IF NOT EXISTS idx_teams_user_teams ON public.users_teams (team_id);
+CREATE INDEX IF NOT EXISTS idx_users_user_teams ON public.users_teams (user_id);
+
+ALTER TABLE "public"."snapshots"
+  ADD COLUMN IF NOT EXISTS "sandbox_started_at" timestamp with time zone NOT NULL 
+  DEFAULT TIMESTAMP WITH TIME ZONE '1970-01-01 00:00:00 UTC';
+
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.schemata WHERE schema_name = 'billing'
+  ) AND EXISTS (
+    SELECT 1 FROM information_schema.tables 
+    WHERE table_schema = 'billing' AND table_name = 'sandbox_logs'
+  ) THEN
+    UPDATE public.snapshots s
+    SET sandbox_started_at = latest_starts.started_at
+    FROM (
+      SELECT sandbox_id, MAX(started_at) as started_at
+      FROM billing.sandbox_logs
+      GROUP BY sandbox_id
+    ) latest_starts
+    WHERE s.sandbox_id = latest_starts.sandbox_id;
+  END IF;
+END $$;
+
+-- Remove the default constraint after populating data
+ALTER TABLE "public"."snapshots"
+ALTER COLUMN "sandbox_started_at" DROP DEFAULT;
+
+ALTER TABLE snapshots
+ADD COLUMN env_secure boolean NOT NULL DEFAULT false;
+
+CREATE INDEX CONCURRENTLY idx_env_builds_status ON public.env_builds(status);
+
+ALTER TABLE tiers
+    ADD COLUMN "max_vcpu" bigint NOT NULL default '8'::bigint,
+    ADD COLUMN "max_ram_mb" bigint NOT NULL DEFAULT '8096'::bigint;
+
+ALTER TABLE tiers
+    ALTER COLUMN "max_ram_mb" SET DEFAULT '8192'::bigint;
+UPDATE tiers SET "max_ram_mb" = 8192 WHERE "max_ram_mb" = 8096;
+
+ALTER TABLE public.users_teams ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+ALTER TABLE public.env_builds
+    ADD COLUMN ready_cmd      TEXT;
+
+-- Add new columns to team_api_keys table
+ALTER TABLE team_api_keys
+    ADD COLUMN IF NOT EXISTS api_key_prefix VARCHAR(10),
+    ADD COLUMN IF NOT EXISTS api_key_length INTEGER,
+    ADD COLUMN IF NOT EXISTS api_key_mask_prefix VARCHAR(5),
+    ADD COLUMN IF NOT EXISTS api_key_mask_suffix VARCHAR(5);
+
+-- Add new columns to access_tokens table
+ALTER TABLE access_tokens
+    ADD COLUMN IF NOT EXISTS access_token_prefix VARCHAR(10),
+    ADD COLUMN IF NOT EXISTS access_token_length INTEGER,
+    ADD COLUMN IF NOT EXISTS access_token_mask_prefix VARCHAR(5),
+    ADD COLUMN IF NOT EXISTS access_token_mask_suffix VARCHAR(5);
+
+CREATE TABLE IF NOT EXISTS clusters (
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    endpoint      TEXT NOT NULL,
+    endpoint_tls  BOOLEAN NOT NULL DEFAULT TRUE,
+    token         TEXT NOT NULL
+);
+
+ALTER TABLE teams
+    ADD COLUMN IF NOT EXISTS cluster_id UUID NULL
+    REFERENCES clusters(id);
+
+CREATE INDEX IF NOT EXISTS teams_cluster_id_uq
+    ON teams (cluster_id)
+    WHERE cluster_id IS NOT NULL;
+
+ALTER TABLE "public"."clusters" ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE envs
+    ADD COLUMN IF NOT EXISTS cluster_id UUID NULL
+    REFERENCES clusters(id);
+
+CREATE INDEX IF NOT EXISTS envs_cluster_id
+    ON envs (cluster_id)
+    WHERE cluster_id IS NOT NULL;
+
+ALTER TABLE env_builds
+    ADD COLUMN IF NOT EXISTS cluster_node_id TEXT NULL;

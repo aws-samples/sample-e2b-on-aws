@@ -8,9 +8,6 @@ job "api" {
       port "api" {
         static = "50001"
       }
-      port "dns" {
-        static = "5353"
-      }
     }
 
     constraint {
@@ -20,7 +17,7 @@ job "api" {
 
     service {
       name = "api"
-      port = "api"
+      port = "50001"
       task = "start"
 
       check {
@@ -29,7 +26,7 @@ job "api" {
         path     = "/health"
         interval = "3s"
         timeout  = "3s"
-        port     = "api"
+        port     = "50001"
       }
     }
 
@@ -50,9 +47,14 @@ job "api" {
 
       env {
         ORCHESTRATOR_PORT             = 5008
-        TEMPLATE_MANAGER_ADDRESS      = "http://template-manager.service.consul:5009"
+        TEMPLATE_MANAGER_HOST         = "template-manager.service.consul:5009"
         AWS_ENABLED                   = "true"
-        CFNDBURL                      = "${CFNDBURL}"
+        POSTGRES_CONNECTION_STRING    = "${CFNDBURL}"
+        SUPABASE_JWT_SECRETS          = "${CFNDBURL}"
+        CLICKHOUSE_CONNECTION_STRING   = ""
+        CLICKHOUSE_USERNAME            = ""
+        CLICKHOUSE_PASSWORD            = ""
+        CLICKHOUSE_DATABASE            = ""
         DB_HOST                       = "${postgres_host}"
         DB_USER                       = "${postgres_user}"
         DB_PASSWORD                   = "${postgres_password}"
@@ -67,8 +69,9 @@ job "api" {
         CONSUL_HTTP_TOKEN             = "${consul_http_token}"
         OTEL_COLLECTOR_GRPC_ENDPOINT  = "localhost:4317"
         ADMIN_TOKEN                   = "${admin_token}"
-        REDIS_URL                     = "redis://${REDIS_ENDPOINT}:6379"
+        REDIS_URL                     = "${REDIS_ENDPOINT}:6379"
         DNS_PORT                      = 5353
+        SANDBOX_ACCESS_TOKEN_HASH_SEED = "${admin_token}"
         # This is here just because it is required in some part of our code which is transitively imported
         TEMPLATE_BUCKET_NAME          = "skip"
       }
@@ -76,7 +79,7 @@ job "api" {
       config {
         network_mode = "host"
         image        = "${account_id}.dkr.ecr.${AWSREGION}.amazonaws.com/e2b-orchestration/api:latest"
-        ports        = ["api", "dns"]
+        ports        = ["api"]
         args         = [
           "--port", "50001",
         ]

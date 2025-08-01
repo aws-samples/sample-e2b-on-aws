@@ -225,11 +225,10 @@ plugin_dir = "/opt/nomad/plugins"
 
 plugin "docker" {
   config {
-    volumes {
-      enabled = true
-    }
     auth {
-      config = "/root/docker/config.json"
+      # Nomad will prepend "docker-credential-" to the helper value and call
+      # that script name.
+      helper = "ecr-login"
     }
   }
 }

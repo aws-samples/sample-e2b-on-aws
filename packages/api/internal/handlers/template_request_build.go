@@ -8,11 +8,14 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/attribute"
+	"go.uber.org/zap"
 
 	"github.com/e2b-dev/infra/packages/api/internal/api"
 	"github.com/e2b-dev/infra/packages/api/internal/constants"
 	"github.com/e2b-dev/infra/packages/api/internal/utils"
+	"github.com/e2b-dev/infra/packages/db/queries"
 	"github.com/e2b-dev/infra/packages/shared/pkg/id"
+	"github.com/e2b-dev/infra/packages/shared/pkg/logger"
 	"github.com/e2b-dev/infra/packages/shared/pkg/models"
 	"github.com/e2b-dev/infra/packages/shared/pkg/models/env"
 	"github.com/e2b-dev/infra/packages/shared/pkg/models/envalias"
@@ -38,8 +41,7 @@ func (a *APIStore) PostTemplatesTemplateID(c *gin.Context, templateID api.Templa
 	if err != nil {
 		a.sendAPIStoreError(c, http.StatusBadRequest, fmt.Sprintf("Invalid template ID: %s", cleanedTemplateID))
 
-		err = fmt.Errorf("invalid template ID: %w", err)
-		telemetry.ReportCriticalError(c.Request.Context(), err)
+		telemetry.ReportCriticalError(c.Request.Context(), "invalid template ID", err)
 
 		return
 	}
@@ -55,17 +57,23 @@ func (a *APIStore) TemplateRequestBuild(c *gin.Context, templateID api.TemplateI
 	ctx := c.Request.Context()
 
 	body, err := utils.ParseBody[api.TemplateBuildRequest](ctx, c)
+	if err != nil {
+		a.sendAPIStoreError(c, http.StatusBadRequest, fmt.Sprintf("Invalid request body: %s", err))
+		telemetry.ReportCriticalError(ctx, "invalid request body", err)
+
+		return nil
+	}
 
 	telemetry.ReportEvent(ctx, "started request for environment build")
 
-	var team *models.Team
+	var team *queries.Team
+	var tier *queries.Tier
 	// Prepare info for rebuilding env
 	userID, teams, err := a.GetUserAndTeams(c)
 	if err != nil {
 		a.sendAPIStoreError(c, http.StatusInternalServerError, fmt.Sprintf("Error when getting user: %s", err))
 
-		err = fmt.Errorf("error when getting default team: %w", err)
-		telemetry.ReportCriticalError(ctx, err)
+		telemetry.ReportCriticalError(ctx, "error when getting user", err)
 
 		return nil
 	}
@@ -75,15 +83,15 @@ func (a *APIStore) TemplateRequestBuild(c *gin.Context, templateID api.TemplateI
 		if err != nil {
 			a.sendAPIStoreError(c, http.StatusBadRequest, fmt.Sprintf("Invalid team ID: %s", *body.TeamID))
 
-			err = fmt.Errorf("invalid team ID: %w", err)
-			telemetry.ReportCriticalError(ctx, err)
+			telemetry.ReportCriticalError(ctx, "invalid team ID", err)
 
 			return nil
 		}
 
 		for _, t := range teams {
-			if t.ID == teamUUID {
-				team = t
+			if t.Team.ID == teamUUID {
+				team = &t.Team
+				tier = &t.Tier
 				break
 			}
 		}
@@ -91,15 +99,15 @@ func (a *APIStore) TemplateRequestBuild(c *gin.Context, templateID api.TemplateI
 		if team == nil {
 			a.sendAPIStoreError(c, http.StatusNotFound, fmt.Sprintf("Team '%s' not found", *body.TeamID))
 
-			err = fmt.Errorf("team not found: %w", err)
-			telemetry.ReportCriticalError(ctx, err)
+			telemetry.ReportCriticalError(ctx, "team not found", err)
 
 			return nil
 		}
 	} else {
 		for _, t := range teams {
-			if t.Edges.UsersTeams[0].IsDefault {
-				team = t
+			if t.UsersTeam.IsDefault {
+				team = &t.Team
+				tier = &t.Tier
 				break
 			}
 		}
@@ -107,8 +115,7 @@ func (a *APIStore) TemplateRequestBuild(c *gin.Context, templateID api.TemplateI
 		if team == nil {
 			a.sendAPIStoreError(c, http.StatusInternalServerError, "Default team not found")
 
-			err = fmt.Errorf("default team not found: %w", err)
-			telemetry.ReportCriticalError(ctx, err)
+			telemetry.ReportCriticalError(ctx, "default team not found", err)
 
 			return nil
 		}
@@ -118,11 +125,9 @@ func (a *APIStore) TemplateRequestBuild(c *gin.Context, templateID api.TemplateI
 		// Check if the user has access to the template
 		_, err = a.db.Client.Env.Query().Where(env.ID(templateID), env.TeamID(team.ID)).Only(ctx)
 		if err != nil {
-			errMsg := fmt.Sprintf("Error when getting template '%s' for team '%s'", templateID, team.ID.String())
-			a.sendAPIStoreError(c, http.StatusNotFound, fmt.Sprintf("%s: %s", errMsg, err))
+			a.sendAPIStoreError(c, http.StatusNotFound, fmt.Sprintf("Error when getting template '%s' for team '%s'", templateID, team.ID.String()))
 
-			err = fmt.Errorf("%s: %w", errMsg, err)
-			telemetry.ReportCriticalError(ctx, err)
+			telemetry.ReportCriticalError(ctx, "error when getting template", err, telemetry.WithTemplateID(templateID), telemetry.WithTeamID(team.ID.String()))
 
 			return nil
 		}
@@ -131,8 +136,7 @@ func (a *APIStore) TemplateRequestBuild(c *gin.Context, templateID api.TemplateI
 	// Generate a build id for the new build
 	buildID, err := uuid.NewRandom()
 	if err != nil {
-		err = fmt.Errorf("error when generating build id: %w", err)
-		telemetry.ReportCriticalError(ctx, err)
+		telemetry.ReportCriticalError(ctx, "error when generating build id", err)
 
 		a.sendAPIStoreError(c, http.StatusInternalServerError, "Failed to generate build id")
 
@@ -143,9 +147,9 @@ func (a *APIStore) TemplateRequestBuild(c *gin.Context, templateID api.TemplateI
 		attribute.String("user.id", userID.String()),
 		attribute.String("env.team.id", team.ID.String()),
 		attribute.String("env.team.name", team.Name),
-		attribute.String("env.id", templateID),
+		telemetry.WithTemplateID(templateID),
 		attribute.String("env.team.tier", team.Tier),
-		attribute.String("build.id", buildID.String()),
+		telemetry.WithBuildID(buildID.String()),
 		attribute.String("env.dockerfile", body.Dockerfile),
 	)
 
@@ -156,6 +160,10 @@ func (a *APIStore) TemplateRequestBuild(c *gin.Context, templateID api.TemplateI
 		telemetry.SetAttributes(ctx, attribute.String("env.start_cmd", *body.StartCmd))
 	}
 
+	if body.ReadyCmd != nil {
+		telemetry.SetAttributes(ctx, attribute.String("env.ready_cmd", *body.ReadyCmd))
+	}
+
 	if body.CpuCount != nil {
 		telemetry.SetAttributes(ctx, attribute.Int("env.cpu", int(*body.CpuCount)))
 	}
@@ -164,9 +172,9 @@ func (a *APIStore) TemplateRequestBuild(c *gin.Context, templateID api.TemplateI
 		telemetry.SetAttributes(ctx, attribute.Int("env.memory_mb", int(*body.MemoryMB)))
 	}
 
-	cpuCount, ramMB, apiError := getCPUAndRAM(team.Tier, body.CpuCount, body.MemoryMB)
+	cpuCount, ramMB, apiError := getCPUAndRAM(tier, body.CpuCount, body.MemoryMB)
 	if apiError != nil {
-		telemetry.ReportCriticalError(ctx, apiError.Err)
+		telemetry.ReportCriticalError(ctx, "error when getting CPU and RAM", apiError.Err)
 		a.sendAPIStoreError(c, apiError.Code, apiError.ClientMsg)
 
 		return nil
@@ -178,8 +186,7 @@ func (a *APIStore) TemplateRequestBuild(c *gin.Context, templateID api.TemplateI
 		if err != nil {
 			a.sendAPIStoreError(c, http.StatusBadRequest, fmt.Sprintf("Invalid alias: %s", alias))
 
-			err = fmt.Errorf("invalid alias: %w", err)
-			telemetry.ReportCriticalError(ctx, err)
+			telemetry.ReportCriticalError(ctx, "invalid alias", err)
 
 			return nil
 		}
@@ -190,8 +197,7 @@ func (a *APIStore) TemplateRequestBuild(c *gin.Context, templateID api.TemplateI
 	if err != nil {
 		a.sendAPIStoreError(c, http.StatusInternalServerError, fmt.Sprintf("Error when starting transaction: %s", err))
 
-		err = fmt.Errorf("error when starting transaction: %w", err)
-		telemetry.ReportCriticalError(ctx, err)
+		telemetry.ReportCriticalError(ctx, "error when starting transaction", err)
 
 		return nil
 	}
@@ -205,6 +211,7 @@ func (a *APIStore) TemplateRequestBuild(c *gin.Context, templateID api.TemplateI
 		SetTeamID(team.ID).
 		SetCreatedBy(*userID).
 		SetPublic(false).
+		SetNillableClusterID(team.ClusterID).
 		OnConflictColumns(env.FieldID).
 		UpdateUpdatedAt().
 		Update(func(e *models.EnvUpsert) {
@@ -214,8 +221,7 @@ func (a *APIStore) TemplateRequestBuild(c *gin.Context, templateID api.TemplateI
 	if err != nil {
 		a.sendAPIStoreError(c, http.StatusInternalServerError, fmt.Sprintf("Error when updating template: %s", err))
 
-		err = fmt.Errorf("error when updating env: %w", err)
-		telemetry.ReportCriticalError(ctx, err)
+		telemetry.ReportCriticalError(ctx, "error when updating env", err)
 
 		return nil
 	}
@@ -228,10 +234,28 @@ func (a *APIStore) TemplateRequestBuild(c *gin.Context, templateID api.TemplateI
 	if err != nil {
 		a.sendAPIStoreError(c, http.StatusInternalServerError, fmt.Sprintf("Error when updating template: %s", err))
 
-		err = fmt.Errorf("error when updating env: %w", err)
-		telemetry.ReportCriticalError(ctx, err)
+		telemetry.ReportCriticalError(ctx, "error when updating env", err)
 
 		return nil
+	}
+
+	var builderNodeID *string
+	if team.ClusterID != nil {
+		cluster, found := a.clustersPool.GetClusterById(*team.ClusterID)
+		if !found {
+			a.sendAPIStoreError(c, http.StatusBadRequest, fmt.Sprintf("Cluster with ID '%s' not found", *team.ClusterID))
+			telemetry.ReportCriticalError(ctx, "cluster not found", fmt.Errorf("cluster with ID '%s' not found", *team.ClusterID), telemetry.WithTemplateID(templateID))
+			return nil
+		}
+
+		clusterNode, err := cluster.GetAvailableTemplateBuilder(ctx)
+		if err != nil {
+			a.sendAPIStoreError(c, http.StatusInternalServerError, fmt.Sprintf("Error when getting available template builder: %s", err))
+			telemetry.ReportCriticalError(ctx, "error when getting available template builder", err, telemetry.WithTemplateID(templateID))
+			return nil
+		}
+
+		builderNodeID = &clusterNode.NodeID
 	}
 
 	// Insert the new build
@@ -243,10 +267,19 @@ func (a *APIStore) TemplateRequestBuild(c *gin.Context, templateID api.TemplateI
 		SetVcpu(cpuCount).
 		SetKernelVersion(schema.DefaultKernelVersion).
 		SetFirecrackerVersion(schema.DefaultFirecrackerVersion).
-		SetFreeDiskSizeMB(team.Edges.TeamTier.DiskMB).
+		SetFreeDiskSizeMB(tier.DiskMb).
 		SetNillableStartCmd(body.StartCmd).
+		SetNillableReadyCmd(body.ReadyCmd).
+		SetNillableClusterNodeID(builderNodeID).
 		SetDockerfile(body.Dockerfile).
 		Exec(ctx)
+	if err != nil {
+		a.sendAPIStoreError(c, http.StatusInternalServerError, fmt.Sprintf("Error when inserting build: %s", err))
+
+		telemetry.ReportCriticalError(ctx, "error when inserting build", err)
+
+		return nil
+	}
 
 	// Check if the alias is available and claim it
 	if alias != "" {
@@ -258,8 +291,7 @@ func (a *APIStore) TemplateRequestBuild(c *gin.Context, templateID api.TemplateI
 		if err != nil {
 			a.sendAPIStoreError(c, http.StatusInternalServerError, fmt.Sprintf("Error when querying alias '%s': %s", alias, err))
 
-			err = fmt.Errorf("error when checking alias '%s': %w", alias, err)
-			telemetry.ReportCriticalError(ctx, err)
+			telemetry.ReportCriticalError(ctx, "error when checking alias", err, attribute.String("alias", alias))
 
 			return nil
 		}
@@ -267,8 +299,7 @@ func (a *APIStore) TemplateRequestBuild(c *gin.Context, templateID api.TemplateI
 		if len(envs) > 0 {
 			a.sendAPIStoreError(c, http.StatusConflict, fmt.Sprintf("Alias '%s' is already used", alias))
 
-			err = fmt.Errorf("conflict of alias '%s' with template ID: %w", alias, err)
-			telemetry.ReportCriticalError(ctx, err)
+			telemetry.ReportCriticalError(ctx, "conflict of alias", err, attribute.String("alias", alias))
 
 			return nil
 		}
@@ -278,8 +309,7 @@ func (a *APIStore) TemplateRequestBuild(c *gin.Context, templateID api.TemplateI
 			if !models.IsNotFound(err) {
 				a.sendAPIStoreError(c, http.StatusInternalServerError, fmt.Sprintf("Error when querying for alias: %s", err))
 
-				err = fmt.Errorf("error when checking alias: %w", err)
-				telemetry.ReportCriticalError(ctx, err)
+				telemetry.ReportCriticalError(ctx, "error when checking alias", err, attribute.String("alias", alias))
 
 				return nil
 
@@ -289,8 +319,7 @@ func (a *APIStore) TemplateRequestBuild(c *gin.Context, templateID api.TemplateI
 			if err != nil {
 				a.sendAPIStoreError(c, http.StatusInternalServerError, fmt.Sprintf("Error when deleting template alias: %s", err))
 
-				err = fmt.Errorf("error when deleting template alias: %w", err)
-				telemetry.ReportCriticalError(ctx, err)
+				telemetry.ReportCriticalError(ctx, "error when deleting template alias", err, attribute.String("alias", alias))
 
 				return nil
 			}
@@ -307,8 +336,7 @@ func (a *APIStore) TemplateRequestBuild(c *gin.Context, templateID api.TemplateI
 			if err != nil {
 				a.sendAPIStoreError(c, http.StatusInternalServerError, fmt.Sprintf("Error when inserting alias '%s': %s", alias, err))
 
-				err = fmt.Errorf("error when inserting alias '%s': %w", alias, err)
-				telemetry.ReportCriticalError(ctx, err)
+				telemetry.ReportCriticalError(ctx, "error when inserting alias", err, attribute.String("alias", alias))
 
 				return nil
 
@@ -316,8 +344,7 @@ func (a *APIStore) TemplateRequestBuild(c *gin.Context, templateID api.TemplateI
 		} else if aliasDB.EnvID != templateID {
 			a.sendAPIStoreError(c, http.StatusForbidden, fmt.Sprintf("Alias '%s' already used", alias))
 
-			err = fmt.Errorf("alias '%s' already used: %w", alias, err)
-			telemetry.ReportCriticalError(ctx, err)
+			telemetry.ReportCriticalError(ctx, "alias already used", err, attribute.String("alias", alias))
 
 			return nil
 		}
@@ -330,8 +357,7 @@ func (a *APIStore) TemplateRequestBuild(c *gin.Context, templateID api.TemplateI
 	if err != nil {
 		a.sendAPIStoreError(c, http.StatusInternalServerError, fmt.Sprintf("Error when committing transaction: %s", err))
 
-		err = fmt.Errorf("error when committing transaction: %w", err)
-		telemetry.ReportCriticalError(ctx, err)
+		telemetry.ReportCriticalError(ctx, "error when committing transaction", err)
 
 		return nil
 	}
@@ -357,7 +383,7 @@ func (a *APIStore) TemplateRequestBuild(c *gin.Context, templateID api.TemplateI
 		aliases = append(aliases, alias)
 	}
 
-	a.logger.Infof("Built template %s with build id %s", templateID, buildID.String())
+	zap.L().Info("Built template", logger.WithTemplateID(templateID), logger.WithBuildID(buildID.String()))
 
 	return &api.Template{
 		TemplateID: templateID,
@@ -367,50 +393,57 @@ func (a *APIStore) TemplateRequestBuild(c *gin.Context, templateID api.TemplateI
 	}
 }
 
-func getCPUAndRAM(tierID string, cpuCount, memoryMB *int32) (int64, int64, *api.APIError) {
+func getCPUAndRAM(tier *queries.Tier, cpuCount, memoryMB *int32) (int64, int64, *api.APIError) {
 	cpu := constants.DefaultTemplateCPU
 	ramMB := constants.DefaultTemplateMemory
 
-	// // Check if team can customize the resources
-	// if (cpuCount != nil || memoryMB != nil) && tierID == constants.BaseTierID {
-	// 	return 0, 0, &api.APIError{
-	// 		Err:       fmt.Errorf("team with tier %s can't customize resources", tierID),
-	// 		ClientMsg: "Team with this tier can't customize resources, don't specify cpu count or memory",
-	// 		Code:      http.StatusBadRequest,
-	// 	}
-	// }
-
 	if cpuCount != nil {
-		if *cpuCount < constants.MinTemplateCPU || *cpuCount > constants.MaxTemplateCPU {
+		cpu = int64(*cpuCount)
+		if cpu < constants.MinTemplateCPU {
 			return 0, 0, &api.APIError{
-				Err:       fmt.Errorf("customCPU must be between %d and %d", constants.MinTemplateCPU, constants.MaxTemplateCPU),
-				ClientMsg: fmt.Sprintf("CPU must be between %d and %d", constants.MinTemplateCPU, constants.MaxTemplateCPU),
+				Err:       fmt.Errorf("CPU count must be at least %d", constants.MinTemplateCPU),
+				ClientMsg: fmt.Sprintf("CPU count must be at least %d", constants.MinTemplateCPU),
 				Code:      http.StatusBadRequest,
 			}
 		}
 
-		cpu = *cpuCount
+		if cpu > tier.MaxVcpu {
+			return 0, 0, &api.APIError{
+				Err:       fmt.Errorf("CPU count exceeds team limits (%d)", tier.MaxVcpu),
+				ClientMsg: fmt.Sprintf("CPU count can't be higher than %d (if you need to increase this limit, please contact support)", tier.MaxVcpu),
+				Code:      http.StatusBadRequest,
+			}
+		}
+
 	}
 
 	if memoryMB != nil {
-		if *memoryMB < constants.MinTemplateMemory || *memoryMB > constants.MaxTemplateMemory {
+		ramMB = int64(*memoryMB)
+
+		if ramMB < constants.MinTemplateMemory {
 			return 0, 0, &api.APIError{
-				Err:       fmt.Errorf("customMemory must be between %d and %d", constants.MinTemplateMemory, constants.MaxTemplateMemory),
-				ClientMsg: fmt.Sprintf("Memory must be between %d and %d", constants.MinTemplateMemory, constants.MaxTemplateMemory),
+				Err:       fmt.Errorf("memory must be at least %d MiB", constants.MinTemplateMemory),
+				ClientMsg: fmt.Sprintf("Memory must be at least %d MiB", constants.MinTemplateMemory),
 				Code:      http.StatusBadRequest,
 			}
 		}
 
-		if *memoryMB%2 != 0 {
+		if ramMB%2 != 0 {
 			return 0, 0, &api.APIError{
-				Err:       fmt.Errorf("customMemory must be divisible by 2"),
-				ClientMsg: "Memory must be a divisible by 2",
+				Err:       fmt.Errorf("user provided memory size isn't divisible by 2"),
+				ClientMsg: "Memory must be divisible by 2",
 				Code:      http.StatusBadRequest,
 			}
 		}
 
-		ramMB = *memoryMB
+		if ramMB > tier.MaxRamMb {
+			return 0, 0, &api.APIError{
+				Err:       fmt.Errorf("memory exceeds team limits (%d MiB)", tier.MaxRamMb),
+				ClientMsg: fmt.Sprintf("Memory can't be higher than %d MiB (if you need to increase this limit, please contact support)", tier.MaxRamMb),
+				Code:      http.StatusBadRequest,
+			}
+		}
 	}
 
-	return int64(cpu), int64(ramMB), nil
+	return cpu, ramMB, nil
 }

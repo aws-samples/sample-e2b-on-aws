@@ -8,6 +8,11 @@ import (
 	"net/http"
 	"time"
 
+	"connectrpc.com/authn"
+	connectcors "connectrpc.com/cors"
+	"github.com/go-chi/chi/v5"
+	"github.com/rs/cors"
+
 	"github.com/e2b-dev/infra/packages/envd/internal/api"
 	"github.com/e2b-dev/infra/packages/envd/internal/logs"
 	"github.com/e2b-dev/infra/packages/envd/internal/permissions"
@@ -15,29 +20,26 @@ import (
 	processRpc "github.com/e2b-dev/infra/packages/envd/internal/services/process"
 	processSpec "github.com/e2b-dev/infra/packages/envd/internal/services/spec/process"
 	"github.com/e2b-dev/infra/packages/envd/internal/utils"
-
-	"connectrpc.com/authn"
-	connectcors "connectrpc.com/cors"
-	"github.com/go-chi/chi/v5"
-	"github.com/rs/cors"
 )
 
 const (
-	// We limit the timeout more in proxies.
-	maxTimeout = 24 * time.Hour
-	maxAge     = 2 * time.Hour
+	// Downstream timeout should be greater than upstream (in orchestrator proxy).
+	idleTimeout = 640 * time.Second
+	maxAge      = 2 * time.Hour
 
 	defaultPort = 49983
 )
 
 var (
-	// These vars are automatically set by goreleaser.
-	Version = "0.1.5"
+	Version = "0.2.0"
+
+	commitSHA string
 
 	debug bool
 	port  int64
 
 	versionFlag  bool
+	commitFlag   bool
 	startCmdFlag string
 )
 
@@ -54,6 +56,13 @@ func parseFlags() {
 		"version",
 		false,
 		"print envd version",
+	)
+
+	flag.BoolVar(
+		&commitFlag,
+		"commit",
+		false,
+		"print envd source commit",
 	)
 
 	flag.Int64Var(
@@ -94,6 +103,18 @@ func withCORS(h http.Handler) http.Handler {
 			"Access-Control-Request-Private-Network",
 			"Access-Control-Expose-Headers",
 			"Keepalive-Ping-Interval", // for gRPC
+			// Custom headers sent from SDK
+			"browser",
+			"lang",
+			"lang_version",
+			"machine",
+			"os",
+			"package_version",
+			"processor",
+			"publisher",
+			"release",
+			"sdk_runtime",
+			"system",
 		),
 		ExposedHeaders: append(
 			connectcors.ExposedHeaders(),
@@ -111,7 +132,11 @@ func main() {
 
 	if versionFlag {
 		fmt.Printf("%s\n", Version)
+		return
+	}
 
+	if commitFlag {
+		fmt.Printf("%s\n", commitSHA)
 		return
 	}
 
@@ -127,25 +152,29 @@ func main() {
 	filesystemRpc.Handle(m, &fsLogger)
 
 	envVars := utils.NewMap[string, string]()
-
 	envVars.Store("E2B_SANDBOX", "true")
 
 	processLogger := l.With().Str("logger", "process").Logger()
 	processService := processRpc.Handle(m, &processLogger, envVars)
 
-	handler := api.HandlerFromMux(api.New(&envLogger, envVars), m)
-
+	service := api.New(&envLogger, envVars)
+	handler := api.HandlerFromMux(service, m)
 	middleware := authn.NewMiddleware(permissions.AuthenticateUsername)
 
 	s := &http.Server{
-		Handler:           withCORS(middleware.Wrap(handler)),
-		Addr:              fmt.Sprintf("0.0.0.0:%d", port),
-		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       maxTimeout,
-		WriteTimeout:      maxTimeout,
-		IdleTimeout:       maxTimeout,
+		Handler: withCORS(
+			service.WithAuthorization(
+				middleware.Wrap(handler),
+			),
+		),
+		Addr: fmt.Sprintf("0.0.0.0:%d", port),
+		// We remove the timeouts as the connection is terminated by closing of the sandbox and keepalive close.
+		ReadTimeout:  0,
+		WriteTimeout: 0,
+		IdleTimeout:  idleTimeout,
 	}
 
+	// TODO: Not used anymore in template build, replaced by direct envd command call.
 	if startCmdFlag != "" {
 		tag := "startCmd"
 		cwd := "/home/user"
