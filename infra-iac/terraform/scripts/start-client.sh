@@ -11,6 +11,9 @@ PS4='[\D{%Y-%m-%d %H:%M:%S}] '
 # Enable command tracing
 set -x
 
+sudo apt-get update
+sudo apt-get install -y amazon-ecr-credential-helper
+
 # Send the log output from this script to user-data.log, syslog, and the console
 # Inspired by https://alestic.com/2010/12/ec2-user-data-output/
 exec > >(tee /var/log/user-data.log | logger -t user-data -s 2>/dev/console) 2>&1

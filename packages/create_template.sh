@@ -222,4 +222,4 @@ while true; do
     sleep 10
 done
 
-echo "Script completed successfully!"
+echo "Building completed successfully!"
