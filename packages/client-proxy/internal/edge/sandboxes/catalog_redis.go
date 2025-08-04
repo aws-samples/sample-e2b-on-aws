@@ -151,5 +151,14 @@ func (c *RedisSandboxCatalog) DeleteSandbox(sandboxId string, executionId string
 }
 
 func (c *RedisSandboxCatalog) getCatalogKey(sandboxId string) string {
-	return fmt.Sprintf("sandbox-%s", sandboxId)
+	zap.L().Debug("getCatalogKey method called", 
+		zap.String("input_sandboxId", sandboxId))
+	
+	key := fmt.Sprintf("sandbox.dns.%s", sandboxId)
+	
+	zap.L().Debug("getCatalogKey method result", 
+		zap.String("input_sandboxId", sandboxId),
+		zap.String("output_key", key))
+	
+	return key
 }

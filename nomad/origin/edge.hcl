@@ -82,7 +82,7 @@ job "client-proxy" {
         ENVIRONMENT = "dev"
 
         // use legacy dns resolution for orchestrator services
-        USE_PROXY_CATALOG_RESOLUTION = "false"
+        USE_PROXY_CATALOG_RESOLUTION = "true"
 
         OTEL_COLLECTOR_GRPC_ENDPOINT  = "localhost:4317"
         LOGS_COLLECTOR_ADDRESS        = "analytics_collector_host"
