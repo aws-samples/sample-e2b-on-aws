@@ -17,6 +17,7 @@ import (
 	"github.com/e2b-dev/infra/packages/api/internal/cache/instance"
 	"github.com/e2b-dev/infra/packages/api/internal/node"
 	"github.com/e2b-dev/infra/packages/shared/pkg/grpc/orchestrator"
+	"github.com/e2b-dev/infra/packages/shared/pkg/logger"
 	sbxlogger "github.com/e2b-dev/infra/packages/shared/pkg/logger/sandbox"
 	"github.com/e2b-dev/infra/packages/shared/pkg/telemetry"
 )
@@ -323,7 +324,7 @@ func (o *Orchestrator) getInsertInstanceFunction(parentCtx context.Context, time
 		defer cancel()
 
 		zap.L().Info("Starting instance cache insert hook",
-			sbxlogger.WithSandboxID(info.Instance.SandboxID),
+			logger.WithSandboxID(info.Instance.SandboxID),
 			zap.String("execution_id", info.ExecutionID),
 			zap.String("client_id", info.Instance.ClientID),
 			zap.Bool("newly_created", created),
@@ -339,19 +340,19 @@ func (o *Orchestrator) getInsertInstanceFunction(parentCtx context.Context, time
 		)
 
 		zap.L().Debug("Getting node information for sandbox",
-			sbxlogger.WithSandboxID(info.Instance.SandboxID),
+			logger.WithSandboxID(info.Instance.SandboxID),
 			zap.String("client_id", info.Instance.ClientID),
 		)
 
 		node := o.GetNode(info.Instance.ClientID)
 		if node == nil {
 			zap.L().Error("Failed to get node for sandbox - DNS and resource tracking will be skipped",
-				sbxlogger.WithSandboxID(info.Instance.SandboxID),
+				logger.WithSandboxID(info.Instance.SandboxID),
 				zap.String("client_id", info.Instance.ClientID),
 			)
 		} else {
 			zap.L().Info("Successfully retrieved node information",
-				sbxlogger.WithSandboxID(info.Instance.SandboxID),
+				logger.WithSandboxID(info.Instance.SandboxID),
 				zap.String("node_id", node.Info.ID),
 				zap.String("node_ip", node.Info.IPAddress),
 				zap.Int64("current_cpu_usage", node.CPUUsage.Load()),
@@ -359,7 +360,7 @@ func (o *Orchestrator) getInsertInstanceFunction(parentCtx context.Context, time
 			)
 
 			zap.L().Debug("Updating node resource usage",
-				sbxlogger.WithSandboxID(info.Instance.SandboxID),
+				logger.WithSandboxID(info.Instance.SandboxID),
 				zap.String("node_id", node.Info.ID),
 				zap.Int64("adding_cpu", info.VCpu),
 				zap.Int64("adding_ram_mb", info.RamMB),
@@ -371,14 +372,14 @@ func (o *Orchestrator) getInsertInstanceFunction(parentCtx context.Context, time
 			node.RamUsage.Add(info.RamMB)
 
 			zap.L().Info("Node resource usage updated",
-				sbxlogger.WithSandboxID(info.Instance.SandboxID),
+				logger.WithSandboxID(info.Instance.SandboxID),
 				zap.String("node_id", node.Info.ID),
 				zap.Int64("node_cpu_after", node.CPUUsage.Load()),
 				zap.Int64("node_ram_after", node.RamUsage.Load()),
 			)
 
 			zap.L().Info("Adding sandbox to DNS registry (Redis)",
-				sbxlogger.WithSandboxID(info.Instance.SandboxID),
+				logger.WithSandboxID(info.Instance.SandboxID),
 				zap.String("node_ip", node.Info.IPAddress),
 				zap.String("dns_key", fmt.Sprintf("sandbox.dns.%s", info.Instance.SandboxID)),
 			)
@@ -387,21 +388,21 @@ func (o *Orchestrator) getInsertInstanceFunction(parentCtx context.Context, time
 			o.dns.Add(ctx, info.Instance.SandboxID, node.Info.IPAddress)
 
 			zap.L().Info("Successfully added sandbox to DNS registry (Redis)",
-				sbxlogger.WithSandboxID(info.Instance.SandboxID),
+				logger.WithSandboxID(info.Instance.SandboxID),
 				zap.String("node_ip", node.Info.IPAddress),
 			)
 		}
 
 		if info.AutoPause.Load() {
 			zap.L().Debug("Marking sandbox for auto-pause tracking",
-				sbxlogger.WithSandboxID(info.Instance.SandboxID),
+				logger.WithSandboxID(info.Instance.SandboxID),
 			)
 			o.instanceCache.MarkAsPausing(info)
 		}
 
 		if created {
 			zap.L().Info("Sandbox is newly created - starting analytics reporting",
-				sbxlogger.WithSandboxID(info.Instance.SandboxID),
+				logger.WithSandboxID(info.Instance.SandboxID),
 				zap.String("execution_id", info.ExecutionID),
 				zap.String("team_id", info.TeamID.String()),
 			)
@@ -423,7 +424,7 @@ func (o *Orchestrator) getInsertInstanceFunction(parentCtx context.Context, time
 		}
 
 		zap.L().Info("Instance cache insert hook completed successfully",
-			sbxlogger.WithSandboxID(info.Instance.SandboxID),
+			logger.WithSandboxID(info.Instance.SandboxID),
 			zap.String("execution_id", info.ExecutionID),
 			zap.Bool("newly_created", created),
 		)
