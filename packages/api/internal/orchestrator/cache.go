@@ -322,27 +322,90 @@ func (o *Orchestrator) getInsertInstanceFunction(parentCtx context.Context, time
 		ctx, cancel := context.WithTimeout(parentCtx, timeout)
 		defer cancel()
 
+		zap.L().Info("Starting instance cache insert hook",
+			sbxlogger.WithSandboxID(info.Instance.SandboxID),
+			zap.String("execution_id", info.ExecutionID),
+			zap.String("client_id", info.Instance.ClientID),
+			zap.Bool("newly_created", created),
+			zap.Time("start_time", info.StartTime),
+			zap.Time("end_time", info.GetEndTime()),
+			zap.Bool("auto_pause", info.AutoPause.Load()),
+		)
+
 		sbxlogger.I(info).Debug("Inserting sandbox to cache hook",
 			zap.Time("start_time", info.StartTime),
 			zap.Time("end_time", info.GetEndTime()),
 			zap.Bool("auto_pause", info.AutoPause.Load()),
 		)
 
+		zap.L().Debug("Getting node information for sandbox",
+			sbxlogger.WithSandboxID(info.Instance.SandboxID),
+			zap.String("client_id", info.Instance.ClientID),
+		)
+
 		node := o.GetNode(info.Instance.ClientID)
 		if node == nil {
-			zap.L().Error("failed to get node", zap.String("node_id", info.Instance.ClientID))
+			zap.L().Error("Failed to get node for sandbox - DNS and resource tracking will be skipped",
+				sbxlogger.WithSandboxID(info.Instance.SandboxID),
+				zap.String("client_id", info.Instance.ClientID),
+			)
 		} else {
+			zap.L().Info("Successfully retrieved node information",
+				sbxlogger.WithSandboxID(info.Instance.SandboxID),
+				zap.String("node_id", node.Info.ID),
+				zap.String("node_ip", node.Info.IPAddress),
+				zap.Int64("current_cpu_usage", node.CPUUsage.Load()),
+				zap.Int64("current_ram_usage", node.RamUsage.Load()),
+			)
+
+			zap.L().Debug("Updating node resource usage",
+				sbxlogger.WithSandboxID(info.Instance.SandboxID),
+				zap.String("node_id", node.Info.ID),
+				zap.Int64("adding_cpu", info.VCpu),
+				zap.Int64("adding_ram_mb", info.RamMB),
+				zap.Int64("node_cpu_before", node.CPUUsage.Load()),
+				zap.Int64("node_ram_before", node.RamUsage.Load()),
+			)
+
 			node.CPUUsage.Add(info.VCpu)
 			node.RamUsage.Add(info.RamMB)
 
+			zap.L().Info("Node resource usage updated",
+				sbxlogger.WithSandboxID(info.Instance.SandboxID),
+				zap.String("node_id", node.Info.ID),
+				zap.Int64("node_cpu_after", node.CPUUsage.Load()),
+				zap.Int64("node_ram_after", node.RamUsage.Load()),
+			)
+
+			zap.L().Info("Adding sandbox to DNS registry (Redis)",
+				sbxlogger.WithSandboxID(info.Instance.SandboxID),
+				zap.String("node_ip", node.Info.IPAddress),
+				zap.String("dns_key", fmt.Sprintf("sandbox.dns.%s", info.Instance.SandboxID)),
+			)
+
+			// This is where the sandbox gets registered in Redis for DNS resolution
 			o.dns.Add(ctx, info.Instance.SandboxID, node.Info.IPAddress)
+
+			zap.L().Info("Successfully added sandbox to DNS registry (Redis)",
+				sbxlogger.WithSandboxID(info.Instance.SandboxID),
+				zap.String("node_ip", node.Info.IPAddress),
+			)
 		}
 
 		if info.AutoPause.Load() {
+			zap.L().Debug("Marking sandbox for auto-pause tracking",
+				sbxlogger.WithSandboxID(info.Instance.SandboxID),
+			)
 			o.instanceCache.MarkAsPausing(info)
 		}
 
 		if created {
+			zap.L().Info("Sandbox is newly created - starting analytics reporting",
+				sbxlogger.WithSandboxID(info.Instance.SandboxID),
+				zap.String("execution_id", info.ExecutionID),
+				zap.String("team_id", info.TeamID.String()),
+			)
+
 			// Run in separate goroutine to not block sandbox creation
 			// Also use parentCtx to not cancel the request with this hook timeout
 			go reportInstanceStartAnalytics(
@@ -358,6 +421,12 @@ func (o *Orchestrator) getInsertInstanceFunction(parentCtx context.Context, time
 				info.TotalDiskSizeMB,
 			)
 		}
+
+		zap.L().Info("Instance cache insert hook completed successfully",
+			sbxlogger.WithSandboxID(info.Instance.SandboxID),
+			zap.String("execution_id", info.ExecutionID),
+			zap.Bool("newly_created", created),
+		)
 
 		sbxlogger.I(info).Debug("Inserted sandbox to cache hook",
 			zap.Time("start_time", info.StartTime),

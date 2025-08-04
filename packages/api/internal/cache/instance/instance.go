@@ -194,14 +194,45 @@ func (c *InstanceCache) Len() int {
 }
 
 func (c *InstanceCache) Set(key string, value *InstanceInfo, created bool) {
+	zap.L().Info("Attempting to set instance in lifecycle cache",
+		sbxlogger.WithSandboxID(key),
+		zap.String("execution_id", value.ExecutionID),
+		zap.Bool("newly_created", created),
+	)
+
 	inserted := c.cache.SetIfAbsent(key, value)
 	if inserted {
+		zap.L().Info("Instance successfully inserted into lifecycle cache - starting Redis operations",
+			sbxlogger.WithSandboxID(key),
+			zap.String("execution_id", value.ExecutionID),
+			zap.Bool("newly_created", created),
+		)
+
 		go func() {
+			zap.L().Debug("Calling insertInstance hook (this triggers Redis DNS and catalog operations)",
+				sbxlogger.WithSandboxID(key),
+				zap.String("execution_id", value.ExecutionID),
+			)
+
 			err := c.insertInstance(value, created)
 			if err != nil {
-				zap.L().Error("error inserting instance", zap.Error(err))
+				zap.L().Error("Error in insertInstance hook - Redis operations may have failed",
+					sbxlogger.WithSandboxID(key),
+					zap.String("execution_id", value.ExecutionID),
+					zap.Error(err),
+				)
+			} else {
+				zap.L().Info("insertInstance hook completed successfully - Redis operations completed",
+					sbxlogger.WithSandboxID(key),
+					zap.String("execution_id", value.ExecutionID),
+				)
 			}
 		}()
+	} else {
+		zap.L().Warn("Instance already exists in lifecycle cache - skipping Redis operations",
+			sbxlogger.WithSandboxID(key),
+			zap.String("execution_id", value.ExecutionID),
+		)
 	}
 }
 

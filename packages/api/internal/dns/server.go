@@ -56,19 +56,58 @@ func New(ctx context.Context, redisClient redis.UniversalClient) *DNS {
 }
 
 func (d *DNS) Add(ctx context.Context, sandboxID, ip string) {
+	zap.L().Info("Starting DNS registry operation for sandbox",
+		logger.WithSandboxID(sandboxID),
+		zap.String("node_ip", ip),
+		zap.Bool("using_redis", d.redisCache != nil),
+		zap.Bool("using_local", d.local != nil),
+	)
+
 	switch {
 	case d.redisCache != nil:
+		cacheKey := d.cacheKey(sandboxID)
+		zap.L().Info("Adding sandbox to Redis DNS cache",
+			logger.WithSandboxID(sandboxID),
+			zap.String("redis_key", cacheKey),
+			zap.String("node_ip", ip),
+			zap.Duration("ttl", redisTTL),
+		)
+
 		err := d.redisCache.Set(&cache.Item{
 			Ctx:   ctx,
 			TTL:   redisTTL,
-			Key:   d.cacheKey(sandboxID),
+			Key:   cacheKey,
 			Value: ip,
 		})
 		if err != nil {
-			zap.L().Error("error adding DNS item to redis cache", zap.Error(err), logger.WithSandboxID(sandboxID))
+			zap.L().Error("Failed to add sandbox to Redis DNS cache",
+				logger.WithSandboxID(sandboxID),
+				zap.String("redis_key", cacheKey),
+				zap.String("node_ip", ip),
+				zap.Error(err),
+			)
+		} else {
+			zap.L().Info("Successfully added sandbox to Redis DNS cache",
+				logger.WithSandboxID(sandboxID),
+				zap.String("redis_key", cacheKey),
+				zap.String("node_ip", ip),
+			)
 		}
 	case d.local != nil:
+		zap.L().Info("Adding sandbox to local DNS cache",
+			logger.WithSandboxID(sandboxID),
+			zap.String("node_ip", ip),
+		)
 		d.local.Insert(sandboxID, ip)
+		zap.L().Info("Successfully added sandbox to local DNS cache",
+			logger.WithSandboxID(sandboxID),
+			zap.String("node_ip", ip),
+		)
+	default:
+		zap.L().Error("No DNS cache available - sandbox DNS registration failed",
+			logger.WithSandboxID(sandboxID),
+			zap.String("node_ip", ip),
+		)
 	}
 }
 

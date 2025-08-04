@@ -23,6 +23,11 @@ import (
 	"github.com/e2b-dev/infra/packages/shared/pkg/logger"
 	"github.com/e2b-dev/infra/packages/shared/pkg/telemetry"
 )
+	"github.com/e2b-dev/infra/packages/db/queries"
+	"github.com/e2b-dev/infra/packages/shared/pkg/grpc/orchestrator"
+	"github.com/e2b-dev/infra/packages/shared/pkg/logger"
+	"github.com/e2b-dev/infra/packages/shared/pkg/telemetry"
+)
 
 const (
 	maxNodeRetries       = 3
@@ -54,7 +59,24 @@ func (o *Orchestrator) CreateSandbox(
 	childCtx, childSpan := o.tracer.Start(ctx, "create-sandbox")
 	defer childSpan.End()
 
+	zap.L().Info("Starting sandbox creation process",
+		logger.WithSandboxID(sandboxID),
+		zap.String("execution_id", executionID),
+		zap.String("team_id", team.Team.ID.String()),
+		zap.String("template_id", *build.EnvID),
+		zap.String("alias", alias),
+		zap.Bool("is_resume", isResume),
+		zap.Bool("auto_pause", autoPause),
+		zap.Any("metadata", metadata),
+	)
+
 	// Check if team has reached max instances
+	zap.L().Debug("Checking team sandbox reservation limits",
+		logger.WithSandboxID(sandboxID),
+		zap.String("team_id", team.Team.ID.String()),
+		zap.Int64("max_concurrent_instances", team.Tier.ConcurrentInstances),
+	)
+	
 	releaseTeamSandboxReservation, err := o.instanceCache.Reserve(sandboxID, team.Team.ID, team.Tier.ConcurrentInstances)
 	if err != nil {
 		var limitErr *instance.ErrSandboxLimitExceeded
@@ -88,8 +110,18 @@ func (o *Orchestrator) CreateSandbox(
 		}
 	}
 
+	zap.L().Info("Team sandbox reservation successful",
+		logger.WithSandboxID(sandboxID),
+		zap.String("team_id", team.Team.ID.String()),
+	)
+
 	telemetry.ReportEvent(childCtx, "Reserved sandbox for team")
 	defer releaseTeamSandboxReservation()
+
+	zap.L().Debug("Getting firecracker version features",
+		logger.WithSandboxID(sandboxID),
+		zap.String("firecracker_version", build.FirecrackerVersion),
+	)
 
 	features, err := sandbox.NewVersionInfo(build.FirecrackerVersion)
 	if err != nil {
@@ -102,7 +134,23 @@ func (o *Orchestrator) CreateSandbox(
 		}
 	}
 
+	zap.L().Debug("Firecracker version features retrieved successfully",
+		logger.WithSandboxID(sandboxID),
+		zap.String("firecracker_version", build.FirecrackerVersion),
+		zap.Bool("has_huge_pages", features.HasHugePages()),
+	)
+
 	telemetry.ReportEvent(childCtx, "Got FC version info")
+
+	zap.L().Debug("Creating sandbox request configuration",
+		logger.WithSandboxID(sandboxID),
+		zap.String("execution_id", executionID),
+		zap.String("template_id", *build.EnvID),
+		zap.String("base_template_id", baseTemplateID),
+		zap.Int64("vcpu", build.Vcpu),
+		zap.Int64("ram_mb", build.RamMb),
+		zap.Int64("max_sandbox_length_hours", team.Tier.MaxLengthHours),
+	)
 
 	sbxRequest := &orchestrator.SandboxCreateRequest{
 		Sandbox: &orchestrator.SandboxConfig{
@@ -133,19 +181,55 @@ func (o *Orchestrator) CreateSandbox(
 	var node *Node
 
 	if isResume && clientID != nil {
+		zap.L().Info("Attempting to place sandbox on specific node for resume",
+			logger.WithSandboxID(sandboxID),
+			zap.String("target_client_id", *clientID),
+		)
+		
 		telemetry.ReportEvent(childCtx, "Placing sandbox on the node where the snapshot was taken")
 
 		node, _ = o.nodes.Get(*clientID)
 		if node != nil && node.Status() != api.NodeStatusReady {
+			zap.L().Warn("Target node for resume is not ready, will select different node",
+				logger.WithSandboxID(sandboxID),
+				zap.String("target_client_id", *clientID),
+				zap.String("node_status", string(node.Status())),
+			)
 			node = nil
+		} else if node != nil {
+			zap.L().Info("Successfully selected target node for resume",
+				logger.WithSandboxID(sandboxID),
+				zap.String("selected_node_id", node.Info.ID),
+			)
+		} else {
+			zap.L().Warn("Target node for resume not found, will select different node",
+				logger.WithSandboxID(sandboxID),
+				zap.String("target_client_id", *clientID),
+			)
 		}
 	}
+
+	zap.L().Debug("Starting node selection and sandbox creation loop",
+		logger.WithSandboxID(sandboxID),
+		zap.Int("max_retries", maxNodeRetries),
+	)
 
 	attempt := 1
 	nodesExcluded := make(map[string]*Node)
 	for {
+		zap.L().Debug("Starting sandbox creation attempt",
+			logger.WithSandboxID(sandboxID),
+			zap.Int("attempt", attempt),
+			zap.Int("max_attempts", maxNodeRetries),
+		)
+
 		select {
 		case <-childCtx.Done():
+			zap.L().Error("Sandbox creation timed out",
+				logger.WithSandboxID(sandboxID),
+				zap.Int("attempt", attempt),
+				zap.Error(childCtx.Err()),
+			)
 			return nil, &api.APIError{
 				Code:      http.StatusRequestTimeout,
 				ClientMsg: "Failed to create sandbox",
@@ -156,6 +240,10 @@ func (o *Orchestrator) CreateSandbox(
 		}
 
 		if attempt > maxNodeRetries {
+			zap.L().Error("Exceeded maximum retry attempts for sandbox creation",
+				logger.WithSandboxID(sandboxID),
+				zap.Int("max_attempts", maxNodeRetries),
+			)
 			return nil, &api.APIError{
 				Code:      http.StatusInternalServerError,
 				ClientMsg: "Failed to create sandbox",
@@ -164,8 +252,17 @@ func (o *Orchestrator) CreateSandbox(
 		}
 
 		if node == nil {
+			zap.L().Debug("Selecting least busy node for sandbox creation",
+				logger.WithSandboxID(sandboxID),
+				zap.Int("excluded_nodes_count", len(nodesExcluded)),
+			)
+			
 			node, err = o.getLeastBusyNode(childCtx, nodesExcluded)
 			if err != nil {
+				zap.L().Error("Failed to get least busy node",
+					logger.WithSandboxID(sandboxID),
+					zap.Error(err),
+				)
 				telemetry.ReportError(childCtx, "failed to get least busy node", err)
 
 				return nil, &api.APIError{
@@ -174,20 +271,54 @@ func (o *Orchestrator) CreateSandbox(
 					Err:       fmt.Errorf("failed to get least busy node: %w", err),
 				}
 			}
+			
+			zap.L().Info("Selected node for sandbox creation",
+				logger.WithSandboxID(sandboxID),
+				zap.String("selected_node_id", node.Info.ID),
+				zap.String("node_ip", node.Info.IPAddress),
+				zap.Int64("node_cpu_usage", node.CPUUsage.Load()),
+				zap.Int64("node_ram_usage", node.RamUsage.Load()),
+			)
 		}
 
 		// To creating a lot of sandboxes at once on the same node
+		zap.L().Debug("Marking sandbox as in progress on node",
+			logger.WithSandboxID(sandboxID),
+			zap.String("node_id", node.Info.ID),
+			zap.Int64("sandbox_ram_mb", build.RamMb),
+			zap.Int64("sandbox_vcpu", build.Vcpu),
+		)
+		
 		node.sbxsInProgress.Insert(sandboxID, &sbxInProgress{
 			MiBMemory: build.RamMb,
 			CPUs:      build.Vcpu,
 		})
 
+		zap.L().Info("Sending sandbox creation request to orchestrator node",
+			logger.WithSandboxID(sandboxID),
+			zap.String("node_id", node.Info.ID),
+			zap.String("execution_id", executionID),
+			zap.Int("attempt", attempt),
+		)
+
 		_, err = node.Client.Sandbox.Create(childCtx, sbxRequest)
 		// The request is done, we will either add it to the cache or remove it from the node
 		if err == nil {
+			zap.L().Info("Sandbox creation successful on orchestrator node",
+				logger.WithSandboxID(sandboxID),
+				zap.String("node_id", node.Info.ID),
+				zap.Int("attempt", attempt),
+			)
 			// The sandbox was created successfully
 			break
 		}
+
+		zap.L().Warn("Sandbox creation failed on node, will retry on different node",
+			logger.WithSandboxID(sandboxID),
+			zap.String("failed_node_id", node.Info.ID),
+			zap.Int("attempt", attempt),
+			zap.Error(utils.UnwrapGRPCError(err)),
+		)
 
 		node.sbxsInProgress.Remove(sandboxID)
 
@@ -206,8 +337,21 @@ func (o *Orchestrator) CreateSandbox(
 	// The sandbox was created successfully, the resources will be counted in cache
 	defer node.sbxsInProgress.Remove(sandboxID)
 
+	zap.L().Info("Sandbox successfully created on orchestrator node",
+		logger.WithSandboxID(sandboxID),
+		zap.String("node_id", node.Info.ID),
+		zap.String("execution_id", executionID),
+	)
+
 	telemetry.SetAttributes(childCtx, attribute.String("node.id", node.Info.ID))
 	telemetry.ReportEvent(childCtx, "Created sandbox")
+
+	zap.L().Debug("Creating sandbox API object",
+		logger.WithSandboxID(sandboxID),
+		zap.String("client_id", node.Info.ID),
+		zap.String("template_id", *build.EnvID),
+		zap.String("envd_version", *build.EnvdVersion),
+	)
 
 	sbx := api.Sandbox{
 		ClientID:        node.Info.ID,
@@ -222,6 +366,20 @@ func (o *Orchestrator) CreateSandbox(
 	// Otherwise it could cause the instance to expire before user has a chance to use it
 	startTime = time.Now()
 	endTime = startTime.Add(timeout)
+
+	zap.L().Debug("Creating instance info for cache",
+		logger.WithSandboxID(sandboxID),
+		zap.String("execution_id", executionID),
+		zap.String("team_id", team.Team.ID.String()),
+		zap.String("build_id", build.ID.String()),
+		zap.Time("start_time", startTime),
+		zap.Time("end_time", endTime),
+		zap.Duration("timeout", timeout),
+		zap.Int64("vcpu", build.Vcpu),
+		zap.Int64("ram_mb", build.RamMb),
+		zap.Int64("total_disk_mb", *build.TotalDiskSizeMb),
+		zap.Bool("auto_pause", autoPause),
+	)
 
 	instanceInfo := instance.NewInstanceInfo(
 		&sbx,
@@ -244,13 +402,37 @@ func (o *Orchestrator) CreateSandbox(
 		baseTemplateID,
 	)
 
+	zap.L().Info("Adding sandbox to instance cache - this will trigger Redis catalog creation",
+		logger.WithSandboxID(sandboxID),
+		zap.String("execution_id", executionID),
+		zap.String("node_id", node.Info.ID),
+		zap.String("team_id", team.Team.ID.String()),
+	)
+
 	cacheErr := o.instanceCache.Add(childCtx, instanceInfo, true)
 	if cacheErr != nil {
+		zap.L().Error("Failed to add sandbox to instance cache",
+			logger.WithSandboxID(sandboxID),
+			zap.String("execution_id", executionID),
+			zap.Error(cacheErr),
+		)
+		
 		telemetry.ReportError(ctx, "error when adding instance to cache", cacheErr)
+
+		zap.L().Warn("Attempting to delete sandbox due to cache error",
+			logger.WithSandboxID(sandboxID),
+		)
 
 		deleted := o.DeleteInstance(childCtx, sbx.SandboxID, false)
 		if !deleted {
+			zap.L().Error("Failed to delete sandbox after cache error - sandbox may be orphaned",
+				logger.WithSandboxID(sandboxID),
+			)
 			telemetry.ReportEvent(ctx, "instance wasn't found in cache when deleting")
+		} else {
+			zap.L().Info("Successfully deleted sandbox after cache error",
+				logger.WithSandboxID(sandboxID),
+			)
 		}
 
 		return nil, &api.APIError{
@@ -259,6 +441,15 @@ func (o *Orchestrator) CreateSandbox(
 			Err:       fmt.Errorf("error when adding instance to cache: %w", cacheErr),
 		}
 	}
+
+	zap.L().Info("Sandbox creation process completed successfully",
+		logger.WithSandboxID(sandboxID),
+		zap.String("execution_id", executionID),
+		zap.String("client_id", sbx.ClientID),
+		zap.String("template_id", sbx.TemplateID),
+		zap.Time("start_time", startTime),
+		zap.Time("end_time", endTime),
+	)
 
 	return &sbx, nil
 }
