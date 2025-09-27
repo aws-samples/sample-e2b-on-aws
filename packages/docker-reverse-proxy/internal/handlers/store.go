@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os"
+	"regexp"
 	"strings"
 
 	"github.com/e2b-dev/infra/packages/docker-reverse-proxy/internal/cache"
@@ -14,6 +16,9 @@ import (
 	"github.com/e2b-dev/infra/packages/shared/pkg/consts"
 	"github.com/e2b-dev/infra/packages/shared/pkg/db"
 )
+
+var templateAndUploadIDReg = regexp.MustCompile("/v2/e2bdev/base/([^/]+)/blobs/uploads/([^/]+)")
+var customDomain = os.Getenv("CUSTOM_DOMAIN")
 
 type APIStore struct {
 	db        *db.DB
@@ -43,17 +48,17 @@ func NewStore() *APIStore {
 		if err != nil {
 			log.Fatalf("Failed to get AWS registry host: %v", err)
 		}
-		
+
 		targetUrl = &url.URL{
 			Scheme: "https",
 			Host:   registryHost,
 		}
 		log.Printf("[DEBUG] Store - Using AWS target URL: %s", targetUrl)
-		
+
 		// Get additional AWS info for debugging
 		accountID, _ := constants.GetAWSAccountID()
 		region, _ := constants.GetAWSRegion()
-		log.Printf("[DEBUG] Store - AWS Account ID: %s, Region: %s, Repository: %s", 
+		log.Printf("[DEBUG] Store - AWS Account ID: %s, Region: %s, Repository: %s",
 			accountID, region, constants.AWSECRRepository)
 	} else {
 		log.Fatal("Unsupported cloud provider")
@@ -65,31 +70,31 @@ func NewStore() *APIStore {
 	proxy.ModifyResponse = func(resp *http.Response) error {
 		// 记录所有响应，特别关注错误响应
 		if resp.StatusCode >= 400 {
-			log.Printf("[ERROR] Proxy Response - Status: %d, URL: %s, Method: %s", 
+			log.Printf("[ERROR] Proxy Response - Status: %d, URL: %s, Method: %s",
 				resp.StatusCode, resp.Request.URL, resp.Request.Method)
-			
+
 			// 读取响应体
 			respBody, err := io.ReadAll(resp.Body)
 			if err != nil {
 				log.Printf("[ERROR] Failed to read response body: %v", err)
 				return nil
 			}
-			
+
 			bodyStr := string(respBody)
-			
+
 			// 记录详细的错误信息
-			log.Printf("[ERROR] Detailed error response [%d] for %s %s:", 
+			log.Printf("[ERROR] Detailed error response [%d] for %s %s:",
 				resp.StatusCode, resp.Request.Method, resp.Request.URL)
 			log.Printf("[ERROR] Response body: %s", bodyStr)
-			
+
 			// 特别检查认证错误
 			if resp.StatusCode == http.StatusUnauthorized {
 				log.Printf("[ERROR] Authentication error detected!")
-				
+
 				// 检查是否包含 "Not Authorized" 错误
 				if strings.Contains(bodyStr, "Not Authorized") {
 					log.Printf("[ERROR] ECR Not Authorized error detected!")
-					
+
 					// 记录请求头信息
 					log.Printf("[ERROR] Request headers:")
 					for name, values := range resp.Request.Header {
@@ -106,10 +111,9 @@ func NewStore() *APIStore {
 					}
 				}
 			}
-			log.Printf("[ERROR] Detailed error response [%d] for %s %s:", 
+			log.Printf("[ERROR] Detailed error response [%d] for %s %s:",
 				resp.StatusCode, resp.Request.Method, resp.Request.URL)
 			log.Printf("[ERROR] Response body: %s", bodyStr)
-			
 			// 记录请求头信息（不包括完整的授权令牌）
 			log.Printf("[ERROR] Request headers:")
 			for name, values := range resp.Request.Header {
@@ -124,17 +128,37 @@ func NewStore() *APIStore {
 					log.Printf("[ERROR]   %s: %v", name, values)
 				}
 			}
-			
 			// 记录响应头信息
 			log.Printf("[ERROR] Response headers:")
 			for name, values := range resp.Header {
 				log.Printf("[ERROR]   %s: %v", name, values)
 			}
-			
 			// 创建一个新的读取器，包含相同的内容供下一个处理程序使用
 			resp.Body = io.NopCloser(strings.NewReader(bodyStr))
 		}
+		// change location for aws
+		if resp.Header.Get("Location") != "" {
+			location := resp.Header.Get("Location")
+			log.Printf("[DEBUG] Original Location: %s", location)
+			// 检查是否是ECR的Location URL
+			if strings.Contains(location, ".dkr.ecr.") && strings.Contains(location, "amazonaws.com") {
+				// 从原始请求URL中提取templateID
+				// 请求路径格式: /v2/e2bdev/custom-envs/{templateID}/blobs/uploads/{uuid}
+				repoPrefix := "/v2/e2bdev/custom-envs"
+				matches := templateAndUploadIDReg.FindStringSubmatch(location)
 
+				if len(matches) == 3 {
+					templateID, uploadUUID := matches[1], matches[2]
+					// 重构Location URL为代理URL
+					newLocation := fmt.Sprintf("%s%s/%s/blobs/uploads/%s", customDomain, repoPrefix, templateID, uploadUUID)
+					resp.Header.Set("Location", newLocation)
+					log.Println("[INFO] Location rewritten: %s -> %s", location, newLocation)
+
+				} else {
+					log.Println("[WARN] Could not extract upload UUID from Location: %s", location)
+				}
+			}
+		}
 		return nil
 	}
 
@@ -142,11 +166,11 @@ func NewStore() *APIStore {
 	originalDirector := proxy.Director
 	proxy.Director = func(req *http.Request) {
 		originalDirector(req)
-		
+
 		// 只记录基本请求信息
-		log.Printf("[INFO] Proxy Director - Forwarding request to: %s %s", 
+		log.Printf("[INFO] Proxy Director - Forwarding request to: %s %s",
 			req.Method, req.URL.String())
-		
+
 		// 对于PUT请求和digest参数，记录特殊调试信息
 		if req.Method == http.MethodPut && req.URL.Query().Get("digest") != "" {
 			log.Printf("[INFO] Proxy Director - PUT request with digest: %s", req.URL.Query().Get("digest"))
@@ -164,6 +188,6 @@ func (a *APIStore) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	// Set the host to the URL host
 	req.Host = req.URL.Host
 	log.Printf("[INFO] ServeHTTP - Proxying request to: %s %s", req.Method, req.URL.String())
-	
+
 	a.proxy.ServeHTTP(rw, req)
 }
