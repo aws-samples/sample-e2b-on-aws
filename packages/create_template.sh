@@ -5,13 +5,15 @@ DOCKERFILE="FROM e2bdev/code-interpreter:latest"
 DOCKER_IMAGE="e2bdev/code-interpreter:latest"
 CREATE_TYPE="default"
 ECR_IMAGE=""
-
+START_COMMAND="/root/.jupyter/start-up.sh"
+READY_COMMAND=""
 
 # Parse command line arguments
 while [ $# -gt 0 ]; do
     case "$1" in
         --docker-file)
             if [ -f "$2" ]; then
+                START_COMMAND=""
                 DOCKERFILE=$(cat "$2")
                 CREATE_TYPE="dockerfile"
                 echo "Will use below Dockerfile to create template: $DOCKERFILE"
@@ -22,6 +24,7 @@ while [ $# -gt 0 ]; do
             fi
             ;;
         --ecr-image)
+            START_COMMAND=""
             ECR_IMAGE="$2"
             DOCKERFILE="FROM $2"
             CREATE_TYPE="ecr_image"
@@ -77,11 +80,15 @@ RESPONSE=$(curl -s -X POST \
  -H "Authorization: $ACCESS_TOKEN" \
  -H 'Content-Type: application/json' \
  -d "{
+ \"readyCmd\": \"$READY_COMMAND\",
+ \"startCmd\": \"$START_COMMAND\",
  \"dockerfile\": \"$DOCKERFILE\",
+ \"alias\": \"test-$(date +%s)\",
  \"memoryMB\": 4096,
- \"cpuCount\": 4,
- \"startCmd\": \"/root/.jupyter/start-up.sh\"
+ \"cpuCount\": 4
  }")
+
+ echo "Response: $RESPONSE"
 
 # Extract buildID and templateID from response
 if command -v jq &> /dev/null; then
@@ -110,7 +117,8 @@ echo "AWS Account ID: $AWS_ACCOUNT_ID"
 
 # Execute ECR login command
 echo "Logging in to ECR..."
-aws ecr get-login-password --region $AWSREGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWSREGION.amazonaws.com
+ECR_DOMAIN="$AWS_ACCOUNT_ID.dkr.ecr.$AWSREGION.amazonaws.com"
+aws ecr get-login-password --region $AWSREGION | docker login --username AWS --password-stdin $ECR_DOMAIN
 if [ $? -ne 0 ]; then
     echo "Error: Failed to login to ECR"
     exit 1
@@ -168,7 +176,7 @@ case "$CREATE_TYPE" in
 esac
 
 # Tag and push the base image
-BASE_ECR_REPOSITORY="$AWS_ACCOUNT_ID.dkr.ecr.$AWSREGION.amazonaws.com/e2bdev/base/$TEMPLATE_ID:$BUILD_ID"
+BASE_ECR_REPOSITORY="$ECR_DOMAIN/e2bdev/base/$TEMPLATE_ID:$BUILD_ID"
 echo "Tagging base Docker image as $BASE_ECR_REPOSITORY..."
 docker tag $BASE_IMAGE $BASE_ECR_REPOSITORY
 if [ $? -ne 0 ]; then
@@ -222,4 +230,4 @@ while true; do
     sleep 10
 done
 
-echo "Script completed successfully!"
+echo "Building completed successfully!"

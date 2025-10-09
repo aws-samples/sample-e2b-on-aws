@@ -12,12 +12,11 @@ import (
 	"go.opentelemetry.io/otel/metric"
 	"go.uber.org/zap"
 
-	analyticscollector "github.com/e2b-dev/infra/packages/api/internal/analytics_collector"
 	"github.com/e2b-dev/infra/packages/api/internal/api"
 	"github.com/e2b-dev/infra/packages/api/internal/node"
-	"github.com/e2b-dev/infra/packages/shared/pkg/logs"
-	"github.com/e2b-dev/infra/packages/shared/pkg/meters"
+	sbxlogger "github.com/e2b-dev/infra/packages/shared/pkg/logger/sandbox"
 	"github.com/e2b-dev/infra/packages/shared/pkg/smap"
+	"github.com/e2b-dev/infra/packages/shared/pkg/telemetry"
 	"github.com/e2b-dev/infra/packages/shared/pkg/utils"
 )
 
@@ -25,16 +24,13 @@ const (
 	InstanceExpiration = time.Second * 15
 	// Should we auto pause the instance by default instead of killing it,
 	InstanceAutoPauseDefault = false
-	CacheSyncTime            = time.Minute
 )
 
-var (
-	ErrPausingInstanceNotFound = errors.New("pausing instance not found")
-)
+var ErrPausingInstanceNotFound = errors.New("pausing instance not found")
 
 func NewInstanceInfo(
-	Logger *logs.SandboxLogger,
 	Instance *api.Sandbox,
+	ExecutionID string,
 	TeamID *uuid.UUID,
 	BuildID *uuid.UUID,
 	Metadata map[string]string,
@@ -49,10 +45,12 @@ func NewInstanceInfo(
 	EnvdVersion string,
 	Node *node.NodeInfo,
 	AutoPause bool,
+	EnvdAccessToken *string,
+	BaseTemplateID string,
 ) *InstanceInfo {
 	instance := &InstanceInfo{
-		Logger:             Logger,
 		Instance:           Instance,
+		ExecutionID:        ExecutionID,
 		TeamID:             TeamID,
 		BuildID:            BuildID,
 		Metadata:           Metadata,
@@ -65,9 +63,11 @@ func NewInstanceInfo(
 		KernelVersion:      KernelVersion,
 		FirecrackerVersion: FirecrackerVersion,
 		EnvdVersion:        EnvdVersion,
+		EnvdAccessToken:    EnvdAccessToken,
 		Node:               Node,
 		AutoPause:          atomic.Bool{},
 		Pausing:            utils.NewSetOnce[*node.NodeInfo](),
+		BaseTemplateID:     BaseTemplateID,
 		mu:                 sync.RWMutex{},
 	}
 
@@ -77,10 +77,11 @@ func NewInstanceInfo(
 }
 
 type InstanceInfo struct {
-	Logger             *logs.SandboxLogger
 	Instance           *api.Sandbox
+	ExecutionID        string
 	TeamID             *uuid.UUID
 	BuildID            *uuid.UUID
+	BaseTemplateID     string
 	Metadata           map[string]string
 	MaxInstanceLength  time.Duration
 	StartTime          time.Time
@@ -91,10 +92,19 @@ type InstanceInfo struct {
 	KernelVersion      string
 	FirecrackerVersion string
 	EnvdVersion        string
+	EnvdAccessToken    *string
 	Node               *node.NodeInfo
 	AutoPause          atomic.Bool
 	Pausing            *utils.SetOnce[*node.NodeInfo]
 	mu                 sync.RWMutex
+}
+
+func (i *InstanceInfo) LoggerMetadata() sbxlogger.SandboxMetadata {
+	return sbxlogger.SandboxMetadata{
+		SandboxID:  i.Instance.SandboxID,
+		TemplateID: i.Instance.TemplateID,
+		TeamID:     i.TeamID.String(),
+	}
 }
 
 func (i *InstanceInfo) IsExpired() bool {
@@ -127,43 +137,38 @@ type InstanceCache struct {
 	pausing      *smap.Map[*InstanceInfo]
 
 	cache          *lifecycleCache[*InstanceInfo]
-	insertInstance func(data *InstanceInfo) error
-
-	logger *zap.SugaredLogger
+	insertInstance func(data *InstanceInfo, created bool) error
 
 	sandboxCounter metric.Int64UpDownCounter
 	createdCounter metric.Int64Counter
-	analytics      analyticscollector.AnalyticsCollectorClient
 
 	mu sync.Mutex
 }
 
 func NewCache(
 	ctx context.Context,
-	analytics analyticscollector.AnalyticsCollectorClient,
-	logger *zap.SugaredLogger,
-	insertInstance func(data *InstanceInfo) error,
+	meterProvider metric.MeterProvider,
+	insertInstance func(data *InstanceInfo, created bool) error,
 	deleteInstance func(data *InstanceInfo) error,
 ) *InstanceCache {
 	// We will need to either use Redis or Consul's KV for storing active sandboxes to keep everything in sync,
 	// right now we load them from Orchestrator
 	cache := newLifecycleCache[*InstanceInfo]()
 
-	sandboxCounter, err := meters.GetUpDownCounter(meters.SandboxCountMeterName)
+	meter := meterProvider.Meter("api.cache.sandbox")
+	sandboxCounter, err := telemetry.GetUpDownCounter(meter, telemetry.SandboxCountMeterName)
 	if err != nil {
-		logger.Errorw("error getting counter", "error", err)
+		zap.L().Error("error getting counter", zap.Error(err))
 	}
 
-	createdCounter, err := meters.GetCounter(meters.SandboxCreateMeterName)
+	createdCounter, err := telemetry.GetCounter(meter, telemetry.SandboxCreateMeterName)
 	if err != nil {
-		logger.Errorw("error getting counter", "error", err)
+		zap.L().Error("error getting counter", zap.Error(err))
 	}
 
 	instanceCache := &InstanceCache{
 		cache:          cache,
 		insertInstance: insertInstance,
-		logger:         logger,
-		analytics:      analytics,
 		sandboxCounter: sandboxCounter,
 		createdCounter: createdCounter,
 		reservations:   NewReservationCache(),
@@ -173,10 +178,10 @@ func NewCache(
 	cache.OnEviction(func(ctx context.Context, instanceInfo *InstanceInfo) {
 		err := deleteInstance(instanceInfo)
 		if err != nil {
-			logger.Errorf("Error deleting instance (%v)\n: %v", err)
+			zap.L().Error("Error deleting instance", zap.Error(err))
 		}
 
-		instanceCache.UpdateCounters(instanceInfo, -1, false)
+		instanceCache.UpdateCounters(ctx, instanceInfo, -1, false)
 	})
 
 	go cache.Start(ctx)
@@ -188,13 +193,13 @@ func (c *InstanceCache) Len() int {
 	return c.cache.Len()
 }
 
-func (c *InstanceCache) Set(key string, value *InstanceInfo) {
+func (c *InstanceCache) Set(key string, value *InstanceInfo, created bool) {
 	inserted := c.cache.SetIfAbsent(key, value)
 	if inserted {
 		go func() {
-			err := c.insertInstance(value)
+			err := c.insertInstance(value, created)
 			if err != nil {
-				fmt.Printf("error inserting instance: %v", err)
+				zap.L().Error("error inserting instance", zap.Error(err))
 			}
 		}()
 	}
@@ -212,8 +217,8 @@ func (c *InstanceCache) UnmarkAsPausing(instanceInfo *InstanceInfo) {
 			return false
 		}
 
-		// We depend of the startTime not changing to uniquely identify instance in the cache.
-		return v.Instance.SandboxID == instanceInfo.Instance.SandboxID && v.StartTime == instanceInfo.StartTime
+		// Make sure it's the same instance and not a sandbox which has been already resumed
+		return v.ExecutionID == instanceInfo.ExecutionID
 	})
 }
 
@@ -231,18 +236,18 @@ func (c *InstanceCache) WaitForPause(ctx context.Context, sandboxID string) (*no
 	return value, nil
 }
 
-func (c *InstanceInfo) PauseDone(err error) {
+func (i *InstanceInfo) PauseDone(err error) {
 	if err == nil {
-		err := c.Pausing.SetValue(c.Node)
+		err := i.Pausing.SetValue(i.Node)
 		if err != nil {
-			fmt.Printf("error setting PauseDone value: %v", err)
+			zap.L().Error("error setting PauseDone value", zap.Error(err))
 
 			return
 		}
 	} else {
-		err := c.Pausing.SetError(err)
+		err := i.Pausing.SetError(err)
 		if err != nil {
-			fmt.Printf("error setting PauseDone error: %v", err)
+			zap.L().Error("error setting PauseDone error", zap.Error(err))
 
 			return
 		}

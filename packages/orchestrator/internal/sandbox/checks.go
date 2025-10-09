@@ -2,89 +2,103 @@ package sandbox
 
 import (
 	"context"
-	"fmt"
-	"io"
-	"net/http"
+	"errors"
+	"sync/atomic"
 	"time"
 
-	"github.com/e2b-dev/infra/packages/shared/pkg/consts"
-	"github.com/e2b-dev/infra/packages/shared/pkg/utils"
-	"golang.org/x/mod/semver"
+	"go.opentelemetry.io/otel/trace"
+	"go.uber.org/zap"
+
+	sbxlogger "github.com/e2b-dev/infra/packages/shared/pkg/logger/sandbox"
 )
 
 const (
-	healthCheckInterval      = 20 * time.Second
-	metricsCheckInterval     = 60 * time.Second
-	minEnvdVersionForMetrcis = "0.1.5"
+	healthCheckInterval = 20 * time.Second
+	healthCheckTimeout  = 100 * time.Millisecond
 )
 
-func (s *Sandbox) logHeathAndUsage(ctx *utils.LockableCancelableContext) {
+type Checks struct {
+	sandbox *Sandbox
+
+	ctx       context.Context
+	cancelCtx context.CancelCauseFunc
+
+	healthy atomic.Bool
+
+	UseClickhouseMetrics bool
+}
+
+var ErrChecksStopped = errors.New("checks stopped")
+
+func NewChecks(ctx context.Context, tracer trace.Tracer, sandbox *Sandbox, useClickhouseMetrics bool) (*Checks, error) {
+	_, childSpan := tracer.Start(ctx, "checks-create")
+	defer childSpan.End()
+
+	// Create background context, passed ctx is from create/resume request and will be canceled after the request is processed.
+	ctx, cancel := context.WithCancelCause(context.Background())
+	h := &Checks{
+		sandbox:              sandbox,
+		ctx:                  ctx,
+		cancelCtx:            cancel,
+		healthy:              atomic.Bool{}, // defaults to `false`
+		UseClickhouseMetrics: useClickhouseMetrics,
+	}
+	// By default, the sandbox should be healthy, if the status change we report it.
+	h.healthy.Store(true)
+	return h, nil
+}
+
+func (c *Checks) Start() {
+	c.logHealth()
+}
+
+func (c *Checks) Stop() {
+	c.cancelCtx(ErrChecksStopped)
+}
+
+func (c *Checks) logHealth() {
 	healthTicker := time.NewTicker(healthCheckInterval)
-	metricsTicker := time.NewTicker(metricsCheckInterval)
 	defer func() {
 		healthTicker.Stop()
-		metricsTicker.Stop()
 	}()
 
-	// Get metrics on sandbox startup
-	go s.LogMetrics(ctx)
+	// Get metrics and health status on sandbox startup
+	go c.Healthcheck(false)
 
 	for {
 		select {
 		case <-healthTicker.C:
-			childCtx, cancel := context.WithTimeout(ctx, time.Second)
-
-			ctx.Lock()
-			s.Healthcheck(childCtx, false)
-			ctx.Unlock()
-
-			cancel()
-		case <-metricsTicker.C:
-			s.LogMetrics(ctx)
-		case <-ctx.Done():
+			c.Healthcheck(false)
+		case <-c.ctx.Done():
 			return
 		}
 	}
 }
 
-func (s *Sandbox) Healthcheck(ctx context.Context, alwaysReport bool) {
-	var err error
-	defer func() {
-		s.Logger.Healthcheck(err == nil, alwaysReport)
-	}()
-
-	address := fmt.Sprintf("http://%s:%d/health", s.Slot.HostIP(), consts.DefaultEnvdServerPort)
-
-	request, err := http.NewRequestWithContext(ctx, "GET", address, nil)
-	if err != nil {
+func (c *Checks) Healthcheck(alwaysReport bool) {
+	ok, err := c.GetHealth(healthCheckTimeout)
+	// Sandbox stopped
+	if errors.Is(err, ErrChecksStopped) {
 		return
 	}
 
-	response, err := httpClient.Do(request)
-	if err != nil {
-		return
-	}
-	defer response.Body.Close()
-
-	if response.StatusCode != http.StatusNoContent {
-		err = fmt.Errorf("unexpected status code: %d", response.StatusCode)
+	if !ok && c.healthy.CompareAndSwap(true, false) {
+		sbxlogger.E(c.sandbox).Healthcheck(sbxlogger.Fail)
+		sbxlogger.I(c.sandbox).Error("healthcheck failed", zap.Error(err))
 		return
 	}
 
-	_, err = io.Copy(io.Discard, response.Body)
-	if err != nil {
+	if ok && c.healthy.CompareAndSwap(false, true) {
+		sbxlogger.E(c.sandbox).Healthcheck(sbxlogger.Success)
 		return
 	}
-}
 
-func isGTEVersion(curVersion, minVersion string) bool {
-	if len(curVersion) > 0 && curVersion[0] != 'v' {
-		curVersion = "v" + curVersion
+	if alwaysReport {
+		if ok {
+			sbxlogger.E(c.sandbox).Healthcheck(sbxlogger.ReportSuccess)
+		} else {
+			sbxlogger.E(c.sandbox).Healthcheck(sbxlogger.ReportFail)
+			sbxlogger.I(c.sandbox).Error("control healthcheck failed", zap.Error(err))
+		}
 	}
-
-	if !semver.IsValid(curVersion) {
-		return false
-	}
-
-	return semver.Compare(curVersion, minVersion) >= 0
 }

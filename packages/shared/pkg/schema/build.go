@@ -32,9 +32,10 @@ func (EnvBuild) Fields() []ent.Field {
 		field.Time("updated_at").Default(time.Now),
 		field.Time("finished_at").Optional().Nillable(),
 		field.String("env_id").SchemaType(map[string]string{dialect.Postgres: "text"}).Optional().Nillable(),
-		field.Enum("status").Values("waiting", "building", "failed", "success", "uploaded").Default("waiting").SchemaType(map[string]string{dialect.Postgres: "text"}),
+		field.Enum("status").Values("waiting", "building", "snapshotting", "failed", "success", "uploaded").Default("waiting").SchemaType(map[string]string{dialect.Postgres: "text"}),
 		field.String("dockerfile").SchemaType(map[string]string{dialect.Postgres: "text"}).Optional().Nillable(),
 		field.String("start_cmd").SchemaType(map[string]string{dialect.Postgres: "text"}).Optional().Nillable(),
+		field.String("ready_cmd").SchemaType(map[string]string{dialect.Postgres: "text"}).Optional().Nillable(),
 		field.Int64("vcpu"),
 		field.Int64("ram_mb"),
 		field.Int64("free_disk_size_mb"),
@@ -42,6 +43,7 @@ func (EnvBuild) Fields() []ent.Field {
 		field.String("kernel_version").Default(DefaultKernelVersion).SchemaType(map[string]string{dialect.Postgres: "text"}),
 		field.String("firecracker_version").Default(DefaultFirecrackerVersion).SchemaType(map[string]string{dialect.Postgres: "text"}),
 		field.String("envd_version").SchemaType(map[string]string{dialect.Postgres: "text"}).Nillable().Optional(),
+		field.String("cluster_node_id").SchemaType(map[string]string{dialect.Postgres: "text"}).Optional().Nillable(),
 	}
 }
 

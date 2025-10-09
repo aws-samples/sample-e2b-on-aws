@@ -1,4 +1,4 @@
-AWSTemplateFormatVersion: '2010-09-09'
+AWSTemplateFormatVersion: "2010-09-09"
 Description: >-
   E2B Infrastructure CloudFormation Template - Deploys core infrastructure components for E2B platform
   including VPC, Terraform Bastion, IAM Roles, PostgreSQL Database, and S3 Buckets.
@@ -10,10 +10,6 @@ Metadata:
   AWS::CloudFormation::Interface:
     ParameterGroups:
       - Label:
-          default: Domain Configuration
-        Parameters:
-          - BaseDomain
-      - Label:
           default: VPC Configuration
         Parameters:
           - VpcBlock
@@ -22,25 +18,54 @@ Metadata:
           - PrivateSubnet1Block
           - PrivateSubnet2Block
       - Label:
-          default: Bastion Configuration
-        Parameters:
-          - KeyName
-      - Label:
           default: Security Configuration
         Parameters:
           - AllowRemoteSSHIPs
+      - Label:
+          default: E2B Environment
+        Parameters:
+          - Environment
+      - Label:
+          default: Architecture Configuration
+        Parameters:
+          - Architecture
+      - Label:
+          default: Domain Configuration
+        Parameters:
+          - BaseDomain
+      - Label:
+          default: Bastion Configuration
+        Parameters:
+          - KeyName
       - Label:
           default: Database Configuration
         Parameters:
           - DBInstanceIdentifier
           - DBName
+          - DBUsername
           - DBPassword
-          - DBUsername           
 
 # ===================================================================================================
 # Parameters - Input values required for the E2B infrastructure deployment
 # ===================================================================================================
 Parameters:
+  # Architecture Configuration - Choose CPU architecture
+  Environment:
+    Description: "E2B Environment"
+    Type: String
+    AllowedValues:
+      - prod
+      - dev
+    Default: prod
+
+  # Architecture Configuration - Choose CPU architecture
+  Architecture:
+    Description: "Choose between x86_64 (Intel/AMD compatible) and arm64 (AWS Graviton) processor architectures."
+    Type: String
+    AllowedValues:
+      - x86_64
+      - arm64
+
   # Domain Configuration - Settings for SSL certificate and DNS
   BaseDomain:
     Type: String
@@ -49,14 +74,13 @@ Parameters:
       Wildcard certificate will be issued for *.{BaseDomain}
     AllowedPattern: '^([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}$'
     ConstraintDescription: Must be a valid domain (e.g. sub.domain.com)
-    Default: domain.com
-  
+
   # VPC Configuration - Network address space for the entire infrastructure
   VpcBlock:
     Type: String
     Default: 10.0.0.0/16
     Description: The CIDR range for the VPC. Must be a valid private (RFC 1918) CIDR range with sufficient IP addresses for all components.
-  
+
   # Public Subnets - Network segments with internet access for load balancers and bastion hosts
   PublicSubnet1Block:
     Type: String
@@ -66,7 +90,7 @@ Parameters:
     Type: String
     Default: 10.0.16.0/20
     Description: CIDR block for public subnet in Availability Zone 2 (provides 4,096 IP addresses for internet-facing resources)
-  
+
   # Private Subnets - Isolated network segments for databases and application servers
   PrivateSubnet1Block:
     Type: String
@@ -76,44 +100,46 @@ Parameters:
     Type: String
     Default: 10.0.48.0/20
     Description: CIDR block for private subnet in Availability Zone 2 (provides 4,096 IP addresses for internal resources)
-  
+
   # Bastion Configuration - Settings for the deployment and management server
   KeyName:
     Description: EC2 Key Pair name for SSH access to the bastion host (deployment server)
     Type: AWS::EC2::KeyPair::KeyName
     ConstraintDescription: Must be the name of an existing EC2 KeyPair in this region.
-  
+
   # Security Configuration - Access control settings
   AllowRemoteSSHIPs:
     Description: IP address range allowed for SSH (port 22) access to the bastion host (CIDR format), if you want to allow all IPs, please set it to '0.0.0.0/0'
     Type: String
-    Default: '10.0.0.0/0'
+    Default: "10.0.0.0/8"
 
   # Database Configuration - PostgreSQL settings for E2B platform
   DBInstanceIdentifier:
     Type: String
-    Default: e2b-postgres-db
-    Description: Unique identifier for the PostgreSQL database instance
+    Default: e2b-aurora-db
+    Description: Unique identifier for the Aurora PostgreSQL database cluster
   DBName:
     Type: String
-    #Default: postgres
-    Description: Initial database name for E2B application data
+    Default: e2b
+    Description: Initial database name for E2B application data (must be characters with letters and numbers)
   DBUsername:
     Type: String
-    NoEcho: true 
+    NoEcho: true
     Description: Master username for PostgreSQL database (will not be displayed in console)
   DBPassword:
     Type: String
     NoEcho: true
     Description: Master password for PostgreSQL database (must be 8-30 characters with letters and numbers)
-    AllowedPattern: ^(?=.*[a-zA-Z])(?=.*\d)(?!.*\s).{8,30}$
+    AllowedPattern: ^(?=.*[a-zA-Z])(?=.*\d)[a-zA-Z0-9]{8,30}$
     ConstraintDescription: Password must be 8-30 characters and contain at least one letter and one number
-
 
 # ===================================================================================================
 # Conditions - Conditional logic for resource creation (none used in this template)
 # ===================================================================================================
-Conditions: {}
+Conditions:
+  IsX64: !Equals [!Ref Architecture, x86_64]
+  IsArm64: !Equals [!Ref Architecture, arm64]
+  IsProd: !Equals [!Ref Environment, prod]
 
 # ===================================================================================================
 # Resources - AWS resources to be provisioned for the E2B infrastructure
@@ -131,14 +157,14 @@ Resources:
       Tags:
         - Key: Name
           Value: !Sub "vpc-${AWS::StackName}"
-  
+
   InternetGateway:
     Type: AWS::EC2::InternetGateway
     Properties:
       Tags:
         - Key: Name
           Value: !Sub "${AWS::StackName}-igw"
-  
+
   VPCGatewayAttachment:
     Type: AWS::EC2::VPCGatewayAttachment
     Properties:
@@ -152,7 +178,7 @@ Resources:
       Comment: Public subnet in first availability zone for internet-facing resources
     Properties:
       AvailabilityZone: !Select
-        - '0'
+        - "0"
         - !GetAZs
           Ref: AWS::Region
       CidrBlock: !Ref PublicSubnet1Block
@@ -163,7 +189,7 @@ Resources:
           Value: !Sub ${AWS::StackName}-public-1
         - Key: kubernetes.io/role/elb
           Value: "1"
-  
+
   # Public Subnet in AZ2 - Network segment with direct internet access in second availability zone
   PublicSubnet2:
     Type: AWS::EC2::Subnet
@@ -171,7 +197,7 @@ Resources:
       Comment: Public subnet in second availability zone for internet-facing resources
     Properties:
       AvailabilityZone: !Select
-        - '1'
+        - "1"
         - !GetAZs
           Ref: AWS::Region
       CidrBlock: !Ref PublicSubnet2Block
@@ -182,7 +208,7 @@ Resources:
           Value: !Sub ${AWS::StackName}-public-2
         - Key: kubernetes.io/role/elb
           Value: "1"
-  
+
   # Private Subnet in AZ1 - Isolated network segment in first availability zone for backend services
   PrivateSubnet1:
     Type: AWS::EC2::Subnet
@@ -190,7 +216,7 @@ Resources:
       Comment: Private subnet in first availability zone for secure resources
     Properties:
       AvailabilityZone: !Select
-        - '0'
+        - "0"
         - !GetAZs
           Ref: AWS::Region
       CidrBlock: !Ref PrivateSubnet1Block
@@ -200,7 +226,7 @@ Resources:
           Value: !Sub ${AWS::StackName}-private-1
         - Key: kubernetes.io/role/internal-elb
           Value: "1"
-  
+
   # Private Subnet in AZ2 - Isolated network segment in second availability zone for backend services
   PrivateSubnet2:
     Type: AWS::EC2::Subnet
@@ -208,7 +234,7 @@ Resources:
       Comment: Private subnet in second availability zone for secure resources
     Properties:
       AvailabilityZone: !Select
-        - '1'
+        - "1"
         - !GetAZs
           Ref: AWS::Region
       CidrBlock: !Ref PrivateSubnet2Block
@@ -218,7 +244,7 @@ Resources:
           Value: !Sub ${AWS::StackName}-private-2
         - Key: kubernetes.io/role/internal-elb
           Value: "1"
-  
+
   # Route Table for Public Subnets - Defines routing rules for internet-accessible subnets
   PublicRouteTable:
     Type: AWS::EC2::RouteTable
@@ -227,7 +253,7 @@ Resources:
       Tags:
         - Key: Name
           Value: !Sub ${AWS::StackName}-public-route
-  
+
   # Route Table for Private Subnets - Defines routing rules for internal-only subnets
   PrivateRouteTable:
     Type: AWS::EC2::RouteTable
@@ -236,7 +262,7 @@ Resources:
       Tags:
         - Key: Name
           Value: !Sub ${AWS::StackName}-private-route
-  
+
   # Default Route to Internet Gateway - Enables outbound internet access for public subnets
   PublicRoute:
     DependsOn: VPCGatewayAttachment
@@ -252,25 +278,25 @@ Resources:
     Properties:
       SubnetId: !Ref PublicSubnet1
       RouteTableId: !Ref PublicRouteTable
-  
+
   PublicSubnet2RouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
       SubnetId: !Ref PublicSubnet2
       RouteTableId: !Ref PublicRouteTable
-  
+
   PrivateSubnet1RouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
       SubnetId: !Ref PrivateSubnet1
       RouteTableId: !Ref PrivateRouteTable
-  
+
   PrivateSubnet2RouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
       SubnetId: !Ref PrivateSubnet2
       RouteTableId: !Ref PrivateRouteTable
-  
+
   # S3 VPC Endpoint - Provides private access to S3 without traversing the public internet
   S3VPCEndpoint:
     Type: AWS::EC2::VPCEndpoint
@@ -292,12 +318,12 @@ Resources:
       VpcId: !Ref VPC
       SecurityGroupIngress:
         - IpProtocol: tcp
-          FromPort: '22'
-          ToPort: '22'
+          FromPort: "22"
+          ToPort: "22"
           CidrIp: !Ref AllowRemoteSSHIPs
       SecurityGroupEgress:
-        - IpProtocol: '-1'
-          CidrIp: '0.0.0.0/0'
+        - IpProtocol: "-1"
+          CidrIp: "0.0.0.0/0"
       Tags:
         - Key: Name
           Value: !Sub "${AWS::StackName}-bastion-sg"
@@ -312,13 +338,13 @@ Resources:
           ToPort: 5432
           CidrIp: !Ref VpcBlock
       SecurityGroupEgress:
-        - IpProtocol: '-1'
-          CidrIp: '0.0.0.0/0'
-      VpcId: !Ref VPC 
+        - IpProtocol: "-1"
+          CidrIp: "0.0.0.0/0"
+      VpcId: !Ref VPC
       Tags:
         - Key: Name
           Value: !Sub "${AWS::StackName}-db-sg"
-          
+
   RedisSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -329,9 +355,9 @@ Resources:
           ToPort: 6379
           CidrIp: !Ref VpcBlock
       SecurityGroupEgress:
-        - IpProtocol: '-1'
-          CidrIp: '0.0.0.0/0'
-      VpcId: !Ref VPC 
+        - IpProtocol: "-1"
+          CidrIp: "0.0.0.0/0"
+      VpcId: !Ref VPC
       Tags:
         - Key: Name
           Value: !Sub "${AWS::StackName}-redis-sg"
@@ -343,7 +369,7 @@ Resources:
     Type: AWS::IAM::Role
     Properties:
       AssumeRolePolicyDocument:
-        Version: '2012-10-17'
+        Version: "2012-10-17"
         Statement:
           - Effect: Allow
             Principal:
@@ -355,7 +381,7 @@ Resources:
         - arn:aws:iam::aws:policy/PowerUserAccess
         - arn:aws:iam::aws:policy/IAMFullAccess
       Description: IAM role granting EC2 instances permissions to manage E2B infrastructure resources
-  
+
   EC2InstanceProfile:
     Type: AWS::IAM::InstanceProfile
     Properties:
@@ -369,23 +395,23 @@ Resources:
   DBPasswordParameter:
     Type: AWS::SSM::Parameter
     Properties:
-      Name: !Sub "${AWS::StackName}-db-password"  
-      Type: String                              
+      Name: !Sub "e2b-${AWS::StackName}-db-password"
+      Type: String
       Value: !Ref DBPassword
       Description: PostgreSQL database password stored securely in AWS Systems Manager Parameter Store
-  
+
   # ------------------------------------------------------------------------------------------------
   # Certificate - SSL/TLS certificate for secure HTTPS communication
   # ------------------------------------------------------------------------------------------------
   WildcardCertificate:
     Type: AWS::CertificateManager::Certificate
     Properties:
-      DomainName: !Sub '*.${BaseDomain}'
+      DomainName: !Sub "*.${BaseDomain}"
       ValidationMethod: DNS
       DomainValidationOptions:
-        - DomainName: !Sub '*.${BaseDomain}'
-          ValidationDomain: !Ref BaseDomain 
-  
+        - DomainName: !Sub "*.${BaseDomain}"
+          ValidationDomain: !Ref BaseDomain
+
   # ------------------------------------------------------------------------------------------------
   # S3 Buckets - Object storage for Terraform state files and software artifacts
   # ------------------------------------------------------------------------------------------------
@@ -394,7 +420,7 @@ Resources:
     Properties:
       BucketName: !Sub "terraform-${AWS::StackName}-${AWS::Region}-${AWS::AccountId}"
       VersioningConfiguration:
-        Status: Enabled
+        Status: Suspended
       BucketEncryption:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault:
@@ -408,13 +434,13 @@ Resources:
       Tags:
         - Key: Name
           Value: !Sub "${AWS::StackName}-terraform-bucket"
-  
+
   SoftwareS3Bucket:
     Type: AWS::S3::Bucket
     Properties:
       BucketName: !Sub "software-${AWS::StackName}-${AWS::Region}-${AWS::AccountId}"
       VersioningConfiguration:
-        Status: Enabled
+        Status: Suspended
       BucketEncryption:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault:
@@ -443,39 +469,49 @@ Resources:
         - Key: Name
           Value: !Sub "${AWS::StackName}-postgres-subnet-group"
 
-  DBParameterGroup:
-    Type: AWS::RDS::DBParameterGroup
+  AuroraCluster:
+    Type: AWS::RDS::DBCluster
     Properties:
-      Description: "Parameter group defining PostgreSQL 16 configuration settings for E2B database"
-      Family: postgres16
-      Tags:
-        - Key: Name
-          Value: !Sub "${AWS::StackName}-postgres-param-group"
-
-  PostgreSQLDB:
-    Type: AWS::RDS::DBInstance
-    Properties:
-      Engine: postgres
+      Engine: aurora-postgresql
       EngineVersion: 16.8
-      DBInstanceIdentifier: !Ref DBInstanceIdentifier
-      DBParameterGroupName: !Ref DBParameterGroup
+      Port: 5432
+      DBClusterIdentifier:
+        Fn::Join:
+          - "-"
+          - - Ref: "AWS::StackName"
+            - Ref: "DBInstanceIdentifier"
+      DBClusterParameterGroupName: default.aurora-postgresql16
       DBSubnetGroupName: !Ref DBSubnetGroup
-      DBName: !Ref DBName
+      DatabaseName: !Ref DBName
       MasterUsername: !Ref DBUsername
       MasterUserPassword: !Ref DBPassword
-      AllocatedStorage: 20
-      StorageType: gp3
-      DBInstanceClass: db.t4g.micro
-      PubliclyAccessible: false
-      MultiAZ: true
+      ServerlessV2ScalingConfiguration:
+        MinCapacity: 0.5
+        MaxCapacity: 4
       StorageEncrypted: true
-      DeletionProtection: true
-      VPCSecurityGroups:
+      DeletionProtection: !If [IsProd, true, false]
+      VpcSecurityGroupIds:
         - !GetAtt DBSecurityGroup.GroupId
       Tags:
         - Key: Name
-          Value: !Sub "${AWS::StackName}-postgres"
-          
+          Value: !Sub "${AWS::StackName}-aurora"
+
+  AuroraInstance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      Engine: aurora-postgresql
+      DBInstanceIdentifier:
+        Fn::Join:
+          - "-"
+          - - Ref: "AWS::StackName"
+            - Ref: "DBInstanceIdentifier"
+      DBClusterIdentifier: !Ref AuroraCluster
+      DBInstanceClass: db.serverless
+      PubliclyAccessible: false
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-aurora-instance"
+
   # ------------------------------------------------------------------------------------------------
   # ElastiCache Redis - Redis cache for E2B platform
   # ------------------------------------------------------------------------------------------------
@@ -489,8 +525,8 @@ Resources:
       Tags:
         - Key: Name
           Value: !Sub "${AWS::StackName}-redis-subnet-group"
-          
-  RedisServerlessCache:
+
+  RedisServerless:
     Type: AWS::ElastiCache::ServerlessCache
     Properties:
       Engine: redis
@@ -510,20 +546,26 @@ Resources:
   BastionInstance:
     Type: AWS::EC2::Instance
     Metadata:
-      Comment: 'Terraform Bastion Host for deploying and managing E2B infrastructure components'
+      Comment: "Terraform Bastion Host for deploying and managing E2B infrastructure components"
     Properties:
-      InstanceType: m5.2xlarge
+      InstanceType: !If
+        - IsX64
+        - c7i.xlarge
+        - c7g.xlarge
       KeyName: !Ref KeyName
       IamInstanceProfile: !Ref EC2InstanceProfile
       SubnetId: !Ref PublicSubnet1
-      SourceDestCheck: 'false'
+      SourceDestCheck: false
       EbsOptimized: true
       Monitoring: true
-      ImageId: "{{resolve:ssm:/aws/service/canonical/ubuntu/server/22.04/stable/current/amd64/hvm/ebs-gp2/ami-id}}"
+      ImageId: !If
+        - IsX64
+        - "{{resolve:ssm:/aws/service/canonical/ubuntu/server/22.04/stable/current/amd64/hvm/ebs-gp2/ami-id}}"
+        - "{{resolve:ssm:/aws/service/canonical/ubuntu/server/22.04/stable/current/arm64/hvm/ebs-gp2/ami-id}}"
       BlockDeviceMappings:
-        - DeviceName: /dev/sda1  
+        - DeviceName: /dev/sda1
           Ebs:
-            VolumeSize: 100
+            VolumeSize: 40
             VolumeType: gp3
             Encrypted: true
       SecurityGroupIds:
@@ -533,64 +575,123 @@ Resources:
           Value: !Sub "${AWS::StackName}-bastion"
       UserData: !Base64
         Fn::Join:
-          - ''
+          - ""
           - - |
               #!/bin/bash -v
+              set -e
             - |
               # Update system packages to latest versions
-              apt update -y 
+              apt update -y
             - |
               # Install Go programming language for building E2B components
               snap install go --classic
             - |
               # Install essential development and deployment tools
-              apt install unzip docker.io make jq postgresql-client-common -y            
+              apt install unzip docker.io make jq postgresql-client-common -y
             - |
               # Install PostgreSQL client for database management
-              apt install postgresql-client -y           
+              apt install postgresql-client -y
             - |
               # Setup Docker buildx for multi-architecture container builds
-              mkdir -p /root/.docker/cli-plugins 
+              mkdir -p /root/.docker/cli-plugins
+            - !If
+              - IsX64
+              - |
+                wget -O /root/.docker/cli-plugins/docker-buildx https://github.com/docker/buildx/releases/download/v0.21.1/buildx-v0.21.1.linux-amd64
+                wget -O /opt/awscli.zip https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip
+                wget -O /opt/packer.zip https://releases.hashicorp.com/packer/1.12.0/packer_1.12.0_linux_amd64.zip
+                wget -O /opt/terraform.zip https://releases.hashicorp.com/terraform/1.5.7/terraform_1.5.7_linux_amd64.zip
+                wget -O /opt/nomad.zip https://releases.hashicorp.com/nomad/1.6.2/nomad_1.6.2_linux_amd64.zip
+              - |
+                wget -O /root/.docker/cli-plugins/docker-buildx https://github.com/docker/buildx/releases/download/v0.21.1/buildx-v0.21.1.linux-arm64
+                wget -O /opt/awscli.zip https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip
+                wget -O /opt/packer.zip https://releases.hashicorp.com/packer/1.12.0/packer_1.12.0_linux_arm64.zip
+                wget -O /opt/terraform.zip https://releases.hashicorp.com/terraform/1.5.7/terraform_1.5.7_linux_arm64.zip
+                wget -O /opt/nomad.zip https://releases.hashicorp.com/nomad/1.6.2/nomad_1.6.2_linux_arm64.zip
             - |
-              wget -O /root/.docker/cli-plugins/docker-buildx https://github.com/docker/buildx/releases/download/v0.21.1/buildx-v0.21.1.linux-amd64 
-            - |              
-              chmod +x /root/.docker/cli-plugins/docker-buildx                               
-            - |              
-              cd /opt 
-            - |  
+              chmod +x /root/.docker/cli-plugins/docker-buildx
+            - |
+              cd /opt
+            - |
               # Install AWS CLI for infrastructure management
-              wget https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip    
-            - |
-              unzip awscli-exe-linux-x86_64.zip
-            - |
-              rm awscli-exe-linux-x86_64.zip
-            - |
-              ./aws/install
-            - |
+              unzip awscli.zip && ./aws/install && rm awscli.zip
+            - !Sub |
               # Configure AWS CLI default region
-              !Sub "aws configure set region ${AWS::Region}"
+              aws configure set region ${AWS::Region}
             - |
-              # Install HashiCorp Packer for creating machine images
-              wget https://releases.hashicorp.com/packer/1.12.0/packer_1.12.0_linux_amd64.zip
-              unzip packer_1.12.0_linux_amd64.zip
-              mv packer /usr/local/bin/packer
-              rm packer_1.12.0_linux_amd64.zip
+              # Install HashiCorp Packer for creating machine images                
+              unzip packer.zip && mv packer /usr/local/bin/packer && rm packer.zip
             - |
               # Install HashiCorp Terraform for infrastructure as code
-              wget https://releases.hashicorp.com/terraform/1.5.7/terraform_1.5.7_linux_amd64.zip
-              unzip terraform_1.5.7_linux_amd64.zip
-              mv terraform /usr/local/bin/terraform
-              rm terraform_1.5.7_linux_amd64.zip
+              unzip terraform.zip && mv terraform /usr/local/bin/terraform && rm terraform.zip
             - |
               # Install HashiCorp Nomad for workload orchestration
-              wget https://releases.hashicorp.com/nomad/1.6.2/nomad_1.6.2_linux_amd64.zip
-              unzip nomad_1.6.2_linux_amd64.zip
-              mv nomad /usr/local/bin/
-              rm nomad_1.6.2_linux_amd64.zip         
+              unzip nomad.zip && mv nomad /usr/local/bin/ && rm nomad.zip
             - |
               # Create directory for E2B infrastructure code
               mkdir -p /opt/infra/ && cd /opt/infra/
-              git clone https://github.com/aws-samples/sample-e2b-on-aws.git
+              git clone https://github.com/aws-samples/sample-e2b-on-aws.git && cd sample-e2b-on-aws
+            - !Sub |
+              # Initialize Configuration
+              touch /tmp/e2b.log
+              echo "StackName=${AWS::StackName}" >> /tmp/e2b.log
+              BUILD=$(git rev-parse --short HEAD)
+              echo "BUILD=$BUILD" >> /tmp/e2b.log
+              while true; do
+                STACK_STATUS=$(aws cloudformation describe-stacks --stack-name ${AWS::StackName} --query "Stacks[0].StackStatus" --output text)
+                echo "$(date '+%Y-%m-%d %H:%M:%S') - Stack current state: $STACK_STATUS" >> /tmp/e2b.log
+                case $STACK_STATUS in
+                  CREATE_COMPLETE)
+                    echo "========================================" >> /tmp/e2b.log
+                    echo "Start to execute init.sh" >> /tmp/e2b.log
+                    echo "========================================" >> /tmp/e2b.log
+                    bash infra-iac/init.sh >> /tmp/e2b.log 2>&1
+                    echo "========================================" >> /tmp/e2b.log
+                    echo "Start to execute packer.sh" >> /tmp/e2b.log
+                    echo "========================================" >> /tmp/e2b.log
+                    HOME=/root bash -l infra-iac/packer/packer.sh >> /tmp/e2b.log 2>&1
+                    echo "========================================" >> /tmp/e2b.log
+                    echo "Start to execute terraform" >> /tmp/e2b.log
+                    echo "========================================" >> /tmp/e2b.log
+                    bash infra-iac/terraform/start.sh >> /tmp/e2b.log 2>&1
+                    echo "========================================" >> /tmp/e2b.log
+                    echo "Start to execute init-db.sh" >> /tmp/e2b.log
+                    echo "========================================" >> /tmp/e2b.log
+                    bash infra-iac/db/init-db.sh >> /tmp/e2b.log 2>&1
+                    echo "========================================" >> /tmp/e2b.log
+                    echo "Start to execute build.sh" >> /tmp/e2b.log
+                    echo "========================================" >> /tmp/e2b.log
+                    HOME=/root bash packages/build.sh >> /tmp/e2b.log 2>&1
+                    echo "========================================" >> /tmp/e2b.log
+                    echo "Start to execute nomad.sh" >> /tmp/e2b.log
+                    echo "========================================" >> /tmp/e2b.log
+                    source nomad/nomad.sh >> /tmp/e2b.log 2>&1
+                    echo "========================================" >> /tmp/e2b.log
+                    echo "Start to execute prepare.sh" >> /tmp/e2b.log
+                    echo "========================================" >> /tmp/e2b.log
+                    bash nomad/prepare.sh >> /tmp/e2b.log 2>&1
+                    echo "========================================" >> /tmp/e2b.log
+                    echo "Start to execute deploy.sh" >> /tmp/e2b.log
+                    echo "========================================" >> /tmp/e2b.log
+                    bash nomad/deploy.sh >> /tmp/e2b.log 2>&1
+                    echo "========================================" >> /tmp/e2b.log
+                    echo "Start to execute create_template.sh" >> /tmp/e2b.log
+                    echo "========================================" >> /tmp/e2b.log
+                    bash packages/create_template.sh >> /tmp/e2b.log 2>&1
+                    echo "========================================" >> /tmp/e2b.log
+                    echo "E2B Deploy Done!" >> /tmp/e2b.log
+                    echo "========================================" >> /tmp/e2b.log
+                    break
+                    ;;
+                  CREATE_FAILED|ROLLBACK_COMPLETE|ROLLBACK_FAILED|UPDATE_ROLLBACK_COMPLETE|UPDATE_ROLLBACK_FAILED|DELETE_FAILED)
+                    echo "exit with error cloudformation state: $STACK_STATUS" >> /tmp/e2b.log
+                    exit 1
+                    ;;
+                  *)
+                    sleep 10
+                    ;;
+                esac
+              done
 
 # ===================================================================================================
 # Outputs - Values exported after stack creation for reference by other stacks
@@ -600,7 +701,7 @@ Outputs:
   CFNAZ1:
     Description: First Availability Zone used for high availability deployment
     Value: !Select
-      - '0'
+      - "0"
       - !GetAZs
         Ref: AWS::Region
     Export:
@@ -609,7 +710,7 @@ Outputs:
   CFNAZ2:
     Description: Second Availability Zone used for high availability deployment
     Value: !Select
-      - '1'
+      - "1"
       - !GetAZs
         Ref: AWS::Region
     Export:
@@ -617,8 +718,12 @@ Outputs:
 
   # Database outputs
   DBEndpoint:
-    Description: PostgreSQL database connection endpoint address
-    Value: !GetAtt PostgreSQLDB.Endpoint.Address
+    Description: Aurora PostgreSQL database connection endpoint address
+    Value: !GetAtt AuroraCluster.Endpoint.Address
+
+  DBReaderEndpoint:
+    Description: Aurora PostgreSQL database reader endpoint address
+    Value: !GetAtt AuroraCluster.ReadEndpoint.Address
 
   # Stack information
   CFNSTACKNAME:
@@ -688,9 +793,9 @@ Outputs:
   # Database connection string
   CFNDBURL:
     Description: Complete PostgreSQL connection string for application configuration
-    Value: !Sub 
+    Value: !Sub
       - "postgresql://${DBUsername}:${DBPassword}@${DBEndpoint}/${DBName}"
-      - DBEndpoint: !GetAtt PostgreSQLDB.Endpoint.Address
+      - DBEndpoint: !GetAtt AuroraCluster.Endpoint.Address
     Export:
       Name: CFNDBURL
 
@@ -706,26 +811,49 @@ Outputs:
     Value: !Ref WildcardCertificate
     Export:
       Name: CFNCERTARN
-      
+
   # Redis outputs
-  RedisName:
+  REDISNAME:
     Description: Redis cache name
     Value: !Sub "${AWS::StackName}-redis"
     Export:
       Name: CFNREDISNAME
-      
-      
-  RedisConnectionString:
+
+  REDISENDPOINT:
     Description: Complete Redis connection string for application configuration
-    Value: !Sub "${AWS::StackName}-redis.serverless.${AWS::Region}.cache.amazonaws.com:6379"
+    Value: !GetAtt RedisServerless.Endpoint.Address
     Export:
       Name: CFNREDISURL
 
+  ENVIRONMENT:
+    Description: E2B Environment
+    Value: !Ref Environment
+    Export:
+      Name: CFNENVIRONMENT
+
+  ARCHITECTURE:
+    Description: E2B Cluster CPU Architecture
+    Value: !Ref Architecture
+    Export:
+      Name: CFNARCHITECTURE
+
+  REGION:
+    Description: E2B Cluster Deployment Region
+    Value: !Ref AWS::Region
+    Export:
+      Name: AWSREGION
+
+  STACKNAME:
+    Description: CloudFormation Stack Name
+    Value: !Ref AWS::StackName
+    Export:
+      Name: AWSSTACKNAME
+
   # Bastion Host information
-  BastionPublicDNS:
+  BASTIONPUBLICDNS:
     Description: Public DNS name of the Bastion Host for SSH access
     Value: !GetAtt BastionInstance.PublicDnsName
 
-  BastionPublicIP:
+  BASTIONPUBLICIP:
     Description: Public IP address of the Bastion Host for SSH access
     Value: !GetAtt BastionInstance.PublicIp

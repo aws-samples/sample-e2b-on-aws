@@ -1,36 +1,11 @@
 #!/bin/bash
 # ==================================================
-# AWS Metadata Operations
-# ==================================================
-get_metadata_token() {
-  curl -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600"
-}
-
-get_instance_metadata() {
-  local metadata_path=$1
-  curl -H "X-aws-ec2-metadata-token: $TOKEN" -s "http://169.254.169.254/latest/meta-data/${metadata_path}"
-}
-
-# ==================================================
 # Environment Configuration Section
 # ==================================================
 setup_environment() {
-  # Get basic metadata
-  export TOKEN=$(get_metadata_token)
-  export REGION=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/dynamic/instance-identity/document | jq -r .region)
-  export INSTANCE_ID=$(get_instance_metadata "instance-id")
-  echo 
-
-  # Configure AWS region
-  aws configure set region "$REGION"
-
   # Get CloudFormation stack ID
-  export STACK_ID=$(aws ec2 describe-tags \
-    --filters "Name=resource-id,Values=$INSTANCE_ID" \
-    "Name=key,Values=aws:cloudformation:stack-id" \
-    --query "Tags[0].Value" \
-    --output text)
-
+  STACK_ID=$(grep "^StackName=" /tmp/e2b.log | cut -d'=' -f2)
+  
   # Validate stack existence
   [[ -z "$STACK_ID" ]] && { echo "Error: Failed to get CloudFormation Stack ID"; exit 1; }
 
@@ -56,11 +31,12 @@ setup_environment() {
     echo "$key=${CFN_OUTPUTS[$key]}" >> /opt/config.properties
   done
 
+  REGION=$(aws configure get region)
   echo "AWSREGION=$REGION" >> /opt/config.properties
 
   # Verification output
   echo "=== Exported Variables ==="
-  printenv | grep -E '^CFN'
+  cat /opt/config.properties
 }
 
 # ==================================================

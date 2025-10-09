@@ -45,11 +45,10 @@ job "otel-collector" {
 
       config {
         network_mode = "host"
-        image        = "otel/opentelemetry-collector-contrib:0.99.0"
-
+        image        = "otel/opentelemetry-collector-contrib:0.130.0"
+        auth_soft_fail = true
         volumes = [
           "local/config:/config",
-          "/var/log/session-proxy:/var/log/session-proxy",
         ]
         args = [
           "--config=local/config/otel-collector-config.yaml",
@@ -76,6 +75,7 @@ receivers:
   otlp:
     protocols:
       grpc:
+        endpoint: 0.0.0.0:4317
         max_recv_msg_size_mib: 100
         read_buffer_size: 10943040
         max_concurrent_streams: 200
@@ -91,36 +91,46 @@ receivers:
             - targets: ['localhost:4646']
           params:
             format: ['prometheus']
-          consul_sd_configs:
-          - services: ['nomad-client', 'nomad', 'api', 'client-proxy', 'session-proxy', 'otel-collector', 'logs-collector', 'docker-reverse-proxy', 'loki', 'orchestrator', 'template-manager']
-            token: "${consul_http_token}"
-
-          relabel_configs:
-          - source_labels: ['__meta_consul_tags']
-            regex: '(.*)http(.*)'
-            action: keep
 
 processors:
   batch:
     timeout: 5s
-  filter:
+
+
+  # keep only metrics that are used
+  filter/otlp:
+    # https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/processor/filterprocessor
     metrics:
       include:
         match_type: regexp
-        # Exclude metrics that start with `http`, `go`, `rpc`, or `nomad` but aren't `nomad.client`
         metric_names:
+          - "orchestrator.*"
+          - "template.*"
+          - "api.*"
+          - "client_proxy.*"
+
+          - "otelcol.*"
+
+
+  filter/prometheus:
+    metrics:
+      include:
+        match_type: strict
+        metric_names:
+          - "nomad_client.host_cpu_total_percent"
           - "nomad_client_host_cpu_idle"
           - "nomad_client_host_disk_available"
           - "nomad_client_host_disk_size"
-          - "nomad_client_allocs_memory_usage"
-          - "nomad_client_allocs_cpu_usage"
           - "nomad_client_host_memory_available"
           - "nomad_client_host_memory_total"
-          - "nomad_client_unallocated_memory"
-          - "nomad_nomad_job_summary_running"
-          - "orchestrator.*"
-          - "api.*"
+          - "nomad_client_allocs_memory_usage"
+          - "nomad_client_allocs_memory_allocated"
+          - "nomad_client_allocs_cpu_total_percent"
+          - "nomad_client_allocs_cpu_allocated"
+
+
   metricstransform:
+    # https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/processor/metricstransformprocessor
     transforms:
       - include: "nomad_client_host_cpu_idle"
         match_type: strict
@@ -129,11 +139,53 @@ processors:
           - action: aggregate_labels
             aggregation_type: sum
             label_set: [instance, node_id, node_status, node_pool]
-  attributes/session-proxy:
-    actions:
-      - key: service.name
-        action: upsert
-        value: session-proxy
+
+  resourcedetection:
+    # https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/processor/resourcedetectionprocessor
+    detectors: [gcp]
+    override: true
+    gcp:
+      resource_attributes:
+        cloud.provider:
+          enabled: false
+        cloud.platform:
+          enabled: false
+        cloud.account.id:
+          enabled: false
+        cloud.availability_zone:
+          enabled: false
+        cloud.region:
+          enabled: false
+        host.type:
+          enabled: true
+        host.id:
+          enabled: true
+        gcp.gce.instance.name:
+          enabled: true
+        host.name:
+          enabled: true
+
+  transform/set-name:
+    metric_statements:
+      - delete_key(datapoint.attributes, "instance")
+      - delete_key(datapoint.attributes, "node_id")
+      - delete_key(datapoint.attributes, "node_scheduling_eligibility")
+      - delete_key(datapoint.attributes, "node_class")
+      - delete_key(datapoint.attributes, "node_status")
+      - delete_key(datapoint.attributes, "service_name")
+      - set(datapoint.attributes["service.instance.id"], resource.attributes["gcp.gce.instance.name"])
+
+  filter/rpc_duration_only:
+    metrics:
+      include:
+        match_type: regexp
+        # Include info about grpc server endpoint durations - used for monitoring request times
+        metric_names:
+          - "rpc.server.duration.*"
+  resource/remove_instance:
+    attributes:
+      - action: delete
+        key: service.instance.id
 extensions:
   basicauth/grafana_cloud:
     # https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/extension/basicauthextension
@@ -142,7 +194,7 @@ extensions:
       password: "${grafana_otel_collector_token}"
 
   health_check:
-
+    endpoint: 0.0.0.0:13133
 exporters:
   debug:
     verbosity: detailed
@@ -151,20 +203,38 @@ exporters:
     endpoint: "${grafana_otlp_url}"
     auth:
       authenticator: basicauth/grafana_cloud
-
 service:
   telemetry:
     logs:
       level: warn
+    metrics:
+      readers:
+        - periodic:
+            exporter:
+              otlp:
+                protocol: grpc
+                insecure: true
+                endpoint: localhost:4317
   extensions:
     - basicauth/grafana_cloud
     - health_check
   pipelines:
     metrics:
       receivers:
-        - prometheus
         - otlp
-      processors: [filter, batch, metricstransform]
+      processors: [filter/otlp, resourcedetection, transform/set-name, batch]
+      exporters:
+        - otlphttp/grafana_cloud
+    metrics/prometheus:
+      receivers:
+        - prometheus
+      processors: [filter/prometheus, metricstransform, resourcedetection, transform/set-name, batch]
+      exporters:
+        - otlphttp/grafana_cloud
+    metrics/rpc_only:
+      receivers:
+        - otlp
+      processors: [filter/rpc_duration_only, resource/remove_instance, resourcedetection, transform/set-name, batch]
       exporters:
         - otlphttp/grafana_cloud
     traces:
@@ -172,14 +242,13 @@ service:
         - otlp
       processors: [batch]
       exporters:
-        -  otlphttp/grafana_cloud
+        - otlphttp/grafana_cloud
     logs:
       receivers:
-      # - filelog/session-proxy
         - otlp
       processors: [batch]
       exporters:
-        -  otlphttp/grafana_cloud
+        - otlphttp/grafana_cloud
 EOF
 
         destination = "local/config/otel-collector-config.yaml"

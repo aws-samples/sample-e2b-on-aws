@@ -14,6 +14,3 @@ memory_mb = 512
 dockerfile = "e2b.Dockerfile"
 template_name = "base"
 template_id = "rki5dems9wqfm4r03t7g"
-cloud = "aws"
-region = "us-east-1"
-provider = "aws"
