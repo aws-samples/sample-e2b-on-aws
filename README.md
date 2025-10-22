@@ -47,12 +47,14 @@ This project is built based on version [0c35ed5c3b8492f96d1e0bbfb91fff96541a8c74
      - **Stack Name**: Enter a name for the stack, **must be lowercase**(e.g., `e2b-infra`)
      - **VPC Configuration**: Deployed new VPC environment configuration
      - **Environment Configuration**: Choose an Environment (Support dev and prod, prod has a more stringent resource protection mechanism)
-     - **Architecture Configuration**: Choose CPU architecture (Support x64 and Graviton)
+     - **Architecture Configuration**: Choose CPU architecture (Support x64 and [AWS Graviton](https://aws.amazon.com/cn/ec2/graviton/))
      - **Domain Configuration**: Enter a domain you own(e.g., `example.com`)
      - **EC2 Key Pair**: Select an existing key pair for SSH access
      - **AllowRemoteSSHIPs**: Adjust IP range for SSH access (default restricts to private networks for security)
      - **Database Settings**: Configure RDS parameters following password requirements(must be 8-30 characters with letters and numbers)
    - Complete all required fields and launch the stack
+
+   **Note:** You can refer to [AWS Graviton Technical Guide](https://github.com/aws/aws-graviton-getting-started) for detail best practice of Graviton-based EC2 instances.
 
 2. **Validate Domain Certificate**
    - Navigate to Amazon Certificate Manager (ACM)
