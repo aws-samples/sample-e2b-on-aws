@@ -574,7 +574,7 @@ Resources:
                     echo "========================================" >> /tmp/e2b.log
                     echo "Start to execute packer.sh" >> /tmp/e2b.log
                     echo "========================================" >> /tmp/e2b.log
-                    HOME=/root bash -l infra-iac/packer/packer.sh >> /tmp/e2b.log 2>&1
+                    # HOME=/root bash -l infra-iac/packer/packer.sh >> /tmp/e2b.log 2>&1
                     echo "========================================" >> /tmp/e2b.log
                     echo "Start to execute terraform" >> /tmp/e2b.log
                     echo "========================================" >> /tmp/e2b.log
