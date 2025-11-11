@@ -101,9 +101,9 @@ Parameters:
     Type: String
     Description: Specify whether public or private access to E2B
     AllowedValues:
-      - Public
-      - Private
-    Default: Public
+      - public
+      - private
+    Default: public
 
   # Bastion Configuration - Settings for the deployment and management server
   KeyName:
@@ -555,7 +555,7 @@ Resources:
               # Create directory for E2B infrastructure code
               mkdir -p /opt/infra/ && cd /opt/infra/
               git clone https://github.com/aws-samples/sample-e2b-on-aws.git && cd sample-e2b-on-aws
-              git checkout e2b-existing-vpc
+              git checkout existing-vpc
             - !Sub |
               # Initialize Configuration
               touch /tmp/e2b.log
