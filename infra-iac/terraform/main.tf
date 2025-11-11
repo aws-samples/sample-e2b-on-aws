@@ -428,7 +428,7 @@ resource "aws_launch_template" "server" {
   }
 
   network_interfaces {
-    associate_public_ip_address = true
+    associate_public_ip_address = false
     security_groups             = [aws_security_group.server_sg.id]
   }
 
@@ -462,7 +462,7 @@ resource "aws_launch_template" "server" {
 # Create server auto scaling group
 resource "aws_autoscaling_group" "server" {
   name                = "${var.prefix}-server-asg"
-  vpc_zone_identifier = var.VPC.public_subnets
+  vpc_zone_identifier = var.VPC.private_subnets
   desired_capacity    = local.clusters.server.desired_capacity
   max_size            = local.clusters.server.max_size
   min_size            = local.clusters.server.min_size
@@ -575,7 +575,7 @@ resource "aws_launch_template" "client" {
   }
 
   network_interfaces {
-    associate_public_ip_address = true
+    associate_public_ip_address = false
     security_groups             = [aws_security_group.client_sg.id]
   }
 
@@ -613,7 +613,7 @@ resource "aws_launch_template" "client" {
 # Create client auto scaling group
 resource "aws_autoscaling_group" "client" {
   name                = "${var.prefix}-client-asg"
-  vpc_zone_identifier = var.VPC.public_subnets
+  vpc_zone_identifier = var.VPC.private_subnets
   # desired_capacity    = var.client_asg_desired_capacity
   # max_size            = max(var.client_asg_max_size, var.client_asg_desired_capacity)
   # min_size            = var.client_asg_desired_capacity
@@ -712,27 +712,27 @@ resource "aws_security_group" "api_sg" {
   )
 }
 
-# Create public-facing Application Load Balancer
-resource "aws_lb" "publicalb" {
-  name               = "${var.prefix}-public-alb"
-  internal           = false
+# Create Application Load Balancer
+resource "aws_lb" "alb" {
+  name               = "${var.prefix}-alb"
+  internal           = var.publicaccess == "private" ? true : false
   load_balancer_type = "application"
-  security_groups    = [aws_security_group.public_alb_sg.id]
-  subnets            = var.VPC.public_subnets
+  security_groups    = [aws_security_group.alb_sg.id]
+  subnets            = var.publicaccess == "private" ? var.VPC.private_subnets : var.VPC.public_subnets
   enable_deletion_protection = var.environment == "prod" ? true : false
   
   tags = merge(
     local.common_tags,
     {
-      Name = "${var.prefix}-public-alb"
+      Name = "${var.prefix}-alb"
     }
   )
 }
 
-# Security group for public ALB
-resource "aws_security_group" "public_alb_sg" {
-  name        = "${var.prefix}-public-alb-sg"
-  description = "Security group for public ALB"
+# Security group for ALB
+resource "aws_security_group" "alb_sg" {
+  name        = "${var.prefix}-alb-sg"
+  description = "Security group for ALB"
   vpc_id      = var.VPC.id
 
   # HTTP
@@ -762,7 +762,7 @@ resource "aws_security_group" "public_alb_sg" {
   tags = merge(
     local.common_tags,
     {
-      Name = "${var.prefix}-public-alb-sg"
+      Name = "${var.prefix}-alb-sg"
     }
   )
 }
@@ -892,9 +892,9 @@ resource "aws_autoscaling_attachment" "docker-proxy" {
   lb_target_group_arn    = aws_lb_target_group.docker-proxy.arn
 }
 
-# Create HTTP listener for public ALB with default action to client-proxy
+# Create HTTP listener for ALB with default action to client-proxy
 resource "aws_lb_listener" "http" {
-  load_balancer_arn = aws_lb.publicalb.arn
+  load_balancer_arn = aws_lb.alb.arn
   port              = 443
   protocol          = "HTTPS"
   ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-2021-06"
@@ -905,9 +905,9 @@ resource "aws_lb_listener" "http" {
   }
 }
 
-# Create HTTPS listener for public ALB (commented out as it requires a certificate)
+# Create HTTPS listener for ALB (commented out as it requires a certificate)
 # resource "aws_lb_listener" "https" {
-#   load_balancer_arn = aws_lb.publicalb.arn
+#   load_balancer_arn = aws_lb.alb.arn
 #   port              = 443
 #   protocol          = "HTTPS"
 #   ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-2021-06"
@@ -994,7 +994,7 @@ resource "aws_launch_template" "api" {
   }
 
   network_interfaces {
-    associate_public_ip_address = true
+    associate_public_ip_address = false
     security_groups             = [aws_security_group.api_sg.id]
   }
 
@@ -1032,7 +1032,7 @@ resource "aws_launch_template" "api" {
 # Create API auto scaling group
 resource "aws_autoscaling_group" "api" {
   name                = "${var.prefix}-api-asg"
-  vpc_zone_identifier = var.VPC.public_subnets
+  vpc_zone_identifier = var.VPC.private_subnets
   # desired_capacity    = var.api_asg_desired_capacity
   # max_size            = var.api_asg_desired_capacity
   # min_size            = var.api_asg_desired_capacity
@@ -1142,7 +1142,7 @@ resource "aws_launch_template" "build" {
   }
 
   network_interfaces {
-    associate_public_ip_address = true
+    associate_public_ip_address = false
     security_groups             = [aws_security_group.build_sg.id]
   }
 
@@ -1180,7 +1180,7 @@ resource "aws_launch_template" "build" {
 # Create build auto scaling group
 resource "aws_autoscaling_group" "build" {
   name                = "${var.prefix}-build-asg"
-  vpc_zone_identifier = var.VPC.public_subnets
+  vpc_zone_identifier = var.VPC.private_subnets
   # desired_capacity    = var.build_asg_desired_capacity
   # max_size            = var.build_asg_desired_capacity
   # min_size            = var.build_asg_desired_capacity

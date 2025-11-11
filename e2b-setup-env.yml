@@ -17,6 +17,7 @@ Metadata:
           - PublicSubnet2Block
           - PrivateSubnet1Block
           - PrivateSubnet2Block
+          - PublicAccess
       - Label:
           default: Security Configuration
         Parameters:
@@ -49,7 +50,7 @@ Metadata:
 # Parameters - Input values required for the E2B infrastructure deployment
 # ===================================================================================================
 Parameters:
-  # Architecture Configuration - Choose CPU architecture
+  # E2B Environment Configuration
   Environment:
     Description: "E2B Environment"
     Type: String
@@ -100,6 +101,14 @@ Parameters:
     Type: String
     Default: 10.0.48.0/20
     Description: CIDR block for private subnet in Availability Zone 2 (provides 4,096 IP addresses for internal resources)
+
+  PublicAccess:
+    Type: String
+    Description: Specify whether public or private access to E2B
+    AllowedValues:
+      - Public
+      - Private
+    Default: Public
 
   # Bastion Configuration - Settings for the deployment and management server
   KeyName:
@@ -550,7 +559,7 @@ Resources:
     Properties:
       InstanceType: !If
         - IsX64
-        - c7i.xlarge
+        - c6i.xlarge
         - c7g.xlarge
       KeyName: !Ref KeyName
       IamInstanceProfile: !Ref EC2InstanceProfile
@@ -744,6 +753,13 @@ Outputs:
     Value: !Ref VpcBlock
     Export:
       Name: CFNVPCCIDR
+
+  # Public Access Configuration
+  CFNPUBLICACCESS:
+    Description: Public or Private access configuration
+    Value: !Ref PublicAccess
+    Export:
+      Name: CFNPUBLICACCESS
 
   # Subnet outputs
   CFNPRIVATESUBNET1:
