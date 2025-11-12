@@ -91,11 +91,11 @@ Parameters:
 
   ExistingPublicSubnet1Id:
     Type: AWS::EC2::Subnet::Id
-    Description: ID of existing public subnet in first availability zone
+    Description: ID of existing public subnet in first availability zone(not available in private access mode)
 
   ExistingPublicSubnet2Id:
     Type: AWS::EC2::Subnet::Id
-    Description: ID of existing public subnet in second availability zone
+    Description: ID of existing public subnet in second availability zone(not available in private access mode)
 
   PublicAccess:
     Type: String
