@@ -5,7 +5,7 @@ DOCKERFILE="FROM e2bdev/code-interpreter:latest"
 DOCKER_IMAGE="e2bdev/code-interpreter:latest"
 CREATE_TYPE="default"
 ECR_IMAGE=""
-START_COMMAND="/.jupyter/start-up.sh"
+START_COMMAND="/root/.jupyter/start-up.sh"
 READY_COMMAND=""
 
 # Parse command line arguments
