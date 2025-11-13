@@ -706,25 +706,6 @@ Resources:
 # Outputs - Values exported after stack creation for reference by other stacks
 # ===================================================================================================
 Outputs:
-  # Availability Zone outputs
-  CFNAZ1:
-    Description: First Availability Zone used for high availability deployment
-    Value: !Select
-      - "0"
-      - !GetAZs
-        Ref: AWS::Region
-    Export:
-      Name: CFNAZ1
-
-  CFNAZ2:
-    Description: Second Availability Zone used for high availability deployment
-    Value: !Select
-      - "1"
-      - !GetAZs
-        Ref: AWS::Region
-    Export:
-      Name: CFNAZ2
-
   # Database outputs
   DBEndpoint:
     Description: Aurora PostgreSQL database connection endpoint address
