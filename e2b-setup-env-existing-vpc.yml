@@ -311,7 +311,43 @@ Resources:
               - Sid: S3Access
                 Effect: Allow
                 Action:
-                  - s3:*
+                  - s3:CreateBucket
+                  - s3:DeleteBucket
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:ListBucket
+                  - s3:GetBucketLocation
+                  - s3:GetBucketVersioning
+                  - s3:PutBucketVersioning
+                  - s3:PutBucketPolicy
+                  - s3:GetBucketPolicy
+                  - s3:PutBucketTagging
+                  - s3:GetBucketTagging
+                  - s3:PutEncryptionConfiguration
+                  - s3:GetEncryptionConfiguration
+                  - s3:PutBucketPublicAccessBlock
+                  - s3:GetBucketPublicAccessBlock
+                  - s3:GetBucketAcl
+                  - s3:PutBucketAcl
+                  - s3:GetBucketCors
+                  - s3:PutBucketCors
+                  - s3:GetBucketWebsite
+                  - s3:PutBucketWebsite
+                  - s3:GetAccelerateConfiguration
+                  - s3:PutAccelerateConfiguration
+                  - s3:GetBucketRequestPayment
+                  - s3:PutBucketRequestPayment
+                  - s3:GetBucketLogging
+                  - s3:PutBucketLogging
+                  - s3:GetLifecycleConfiguration
+                  - s3:PutLifecycleConfiguration
+                  - s3:GetReplicationConfiguration
+                  - s3:PutReplicationConfiguration
+                  - s3:GetBucketObjectLockConfiguration
+                  - s3:PutBucketObjectLockConfiguration
+                  - s3:GetObjectTagging
+                  - s3:PutObjectTagging
                 Resource:
                   - "arn:aws:s3:::*e2b*"
                   - "arn:aws:s3:::*e2b*/*"
@@ -322,7 +358,15 @@ Resources:
               - Sid: SecretsManagerAccess
                 Effect: Allow
                 Action:
-                  - secretsmanager:*
+                  - secretsmanager:CreateSecret
+                  - secretsmanager:GetSecretValue
+                  - secretsmanager:PutSecretValue
+                  - secretsmanager:DeleteSecret
+                  - secretsmanager:DescribeSecret
+                  - secretsmanager:GetResourcePolicy
+                  - secretsmanager:TagResource
+                  - secretsmanager:UntagResource
+                  - secretsmanager:UpdateSecret
                 Resource: !Sub "arn:aws:secretsmanager:*:${AWS::AccountId}:secret:*e2b*"
               - Sid: EC2PackerAccess
                 Effect: Allow
@@ -425,10 +469,9 @@ Resources:
                   - iam:GetPolicyVersion
                   - iam:ListPolicies
                   - iam:ListPolicyVersions
+                  - iam:ListAttachedRolePolicies
                   - iam:AttachRolePolicy
                   - iam:DetachRolePolicy
-                  - iam:ListAttachedRolePolicies
-                  - iam:PassRole
                   - iam:PutRolePolicy
                   - iam:GetRolePolicy
                   - iam:DeleteRolePolicy
@@ -439,7 +482,33 @@ Resources:
                   - !Sub "arn:aws:iam::${AWS::AccountId}:role/*e2b*"
                   - !Sub "arn:aws:iam::${AWS::AccountId}:instance-profile/*e2b*"
                   - !Sub "arn:aws:iam::${AWS::AccountId}:policy/*e2b*"
-                  - "arn:aws:iam::aws:policy/*"
+              - Sid: IAMAttachAWSManagedPolicy
+                Effect: Allow
+                Action:
+                  - iam:AttachRolePolicy
+                  - iam:DetachRolePolicy
+                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/*e2b*"
+                Condition:
+                  ArnEquals:
+                    iam:PolicyARN:
+                      - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
+                      - arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
+                      - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+                      - arn:aws:iam::aws:policy/AmazonEC2FullAccess
+                      - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryFullAccess
+                      - arn:aws:iam::aws:policy/AmazonS3FullAccess
+                      - arn:aws:iam::aws:policy/SecretsManagerReadWrite
+                      - arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role
+              - Sid: IAMPassRole
+                Effect: Allow
+                Action:
+                  - iam:PassRole
+                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/*e2b*"
+                Condition:
+                  StringEquals:
+                    iam:PassedToService:
+                      - ec2.amazonaws.com
+                      - ecs-tasks.amazonaws.com
               - Sid: LogsAndMonitoring
                 Effect: Allow
                 Action:

@@ -387,9 +387,245 @@ Resources:
             Action:
               - sts:AssumeRole
       ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/PowerUserAccess
-        - arn:aws:iam::aws:policy/IAMFullAccess
-      Description: IAM role granting EC2 instances permissions to manage E2B infrastructure resources
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: E2BDeploymentPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: S3Access
+                Effect: Allow
+                Action:
+                  - s3:CreateBucket
+                  - s3:DeleteBucket
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:ListBucket
+                  - s3:GetBucketLocation
+                  - s3:GetBucketVersioning
+                  - s3:PutBucketVersioning
+                  - s3:PutBucketPolicy
+                  - s3:GetBucketPolicy
+                  - s3:PutBucketTagging
+                  - s3:GetBucketTagging
+                  - s3:PutEncryptionConfiguration
+                  - s3:GetEncryptionConfiguration
+                  - s3:PutBucketPublicAccessBlock
+                  - s3:GetBucketPublicAccessBlock
+                  - s3:GetBucketAcl
+                  - s3:PutBucketAcl
+                  - s3:GetBucketCors
+                  - s3:PutBucketCors
+                  - s3:GetBucketWebsite
+                  - s3:PutBucketWebsite
+                  - s3:GetAccelerateConfiguration
+                  - s3:PutAccelerateConfiguration
+                  - s3:GetBucketRequestPayment
+                  - s3:PutBucketRequestPayment
+                  - s3:GetBucketLogging
+                  - s3:PutBucketLogging
+                  - s3:GetLifecycleConfiguration
+                  - s3:PutLifecycleConfiguration
+                  - s3:GetReplicationConfiguration
+                  - s3:PutReplicationConfiguration
+                  - s3:GetBucketObjectLockConfiguration
+                  - s3:PutBucketObjectLockConfiguration
+                  - s3:GetObjectTagging
+                  - s3:PutObjectTagging
+                Resource:
+                  - "arn:aws:s3:::*e2b*"
+                  - "arn:aws:s3:::*e2b*/*"
+                  - "arn:aws:s3:::terraform-*"
+                  - "arn:aws:s3:::terraform-*/*"
+                  - "arn:aws:s3:::software-*"
+                  - "arn:aws:s3:::software-*/*"
+              - Sid: SecretsManagerAccess
+                Effect: Allow
+                Action:
+                  - secretsmanager:CreateSecret
+                  - secretsmanager:GetSecretValue
+                  - secretsmanager:PutSecretValue
+                  - secretsmanager:DeleteSecret
+                  - secretsmanager:DescribeSecret
+                  - secretsmanager:GetResourcePolicy
+                  - secretsmanager:TagResource
+                  - secretsmanager:UntagResource
+                  - secretsmanager:UpdateSecret
+                Resource: !Sub "arn:aws:secretsmanager:*:${AWS::AccountId}:secret:*e2b*"
+              - Sid: EC2PackerAccess
+                Effect: Allow
+                Action:
+                  - ec2:AttachVolume
+                  - ec2:AuthorizeSecurityGroupIngress
+                  - ec2:AuthorizeSecurityGroupEgress
+                  - ec2:CopyImage
+                  - ec2:CreateImage
+                  - ec2:CreateKeypair
+                  - ec2:CreateSecurityGroup
+                  - ec2:CreateSnapshot
+                  - ec2:CreateTags
+                  - ec2:CreateVolume
+                  - ec2:CreateLaunchTemplate
+                  - ec2:CreateLaunchTemplateVersion
+                  - ec2:CreateNetworkInterface
+                  - ec2:DeleteKeyPair
+                  - ec2:DeleteSecurityGroup
+                  - ec2:DeleteSnapshot
+                  - ec2:DeleteVolume
+                  - ec2:DeleteLaunchTemplate
+                  - ec2:DeleteNetworkInterface
+                  - ec2:DeregisterImage
+                  - ec2:DescribeImageAttribute
+                  - ec2:DescribeImages
+                  - ec2:DescribeInstances
+                  - ec2:DescribeInstanceStatus
+                  - ec2:DescribeRegions
+                  - ec2:DescribeSecurityGroups
+                  - ec2:DescribeSnapshots
+                  - ec2:DescribeSubnets
+                  - ec2:DescribeTags
+                  - ec2:DescribeVolumes
+                  - ec2:DescribeLaunchTemplates
+                  - ec2:DescribeLaunchTemplateVersions
+                  - ec2:DescribeVpcs
+                  - ec2:DescribeAvailabilityZones
+                  - ec2:DescribeKeyPairs
+                  - ec2:DescribeNetworkInterfaces
+                  - ec2:DetachVolume
+                  - ec2:GetPasswordData
+                  - ec2:ModifyImageAttribute
+                  - ec2:ModifyInstanceAttribute
+                  - ec2:ModifySnapshotAttribute
+                  - ec2:ModifyLaunchTemplate
+                  - ec2:RegisterImage
+                  - ec2:RunInstances
+                  - ec2:StopInstances
+                  - ec2:TerminateInstances
+                  - ec2:RevokeSecurityGroupIngress
+                  - ec2:RevokeSecurityGroupEgress
+                Resource: "*"
+              - Sid: AutoScalingAndELB
+                Effect: Allow
+                Action:
+                  - autoscaling:*
+                  - elasticloadbalancing:*
+                Resource: "*"
+              - Sid: ECRAccess
+                Effect: Allow
+                Action:
+                  - ecr:GetAuthorizationToken
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchGetImage
+                  - ecr:PutImage
+                  - ecr:InitiateLayerUpload
+                  - ecr:UploadLayerPart
+                  - ecr:CompleteLayerUpload
+                  - ecr:CreateRepository
+                  - ecr:DeleteRepository
+                  - ecr:DescribeRepositories
+                  - ecr:ListImages
+                  - ecr:DescribeImages
+                  - ecr:TagResource
+                Resource:
+                  - "*"
+                  - !Sub "arn:aws:ecr:*:${AWS::AccountId}:repository/e2b-*"
+              - Sid: IAMAccess
+                Effect: Allow
+                Action:
+                  - iam:CreateRole
+                  - iam:DeleteRole
+                  - iam:GetRole
+                  - iam:ListRoles
+                  - iam:UpdateRole
+                  - iam:TagRole
+                  - iam:UntagRole
+                  - iam:CreateInstanceProfile
+                  - iam:DeleteInstanceProfile
+                  - iam:GetInstanceProfile
+                  - iam:ListInstanceProfiles
+                  - iam:ListInstanceProfilesForRole
+                  - iam:AddRoleToInstanceProfile
+                  - iam:RemoveRoleFromInstanceProfile
+                  - iam:CreatePolicy
+                  - iam:DeletePolicy
+                  - iam:GetPolicy
+                  - iam:GetPolicyVersion
+                  - iam:ListPolicies
+                  - iam:ListPolicyVersions
+                  - iam:ListAttachedRolePolicies
+                  - iam:AttachRolePolicy
+                  - iam:DetachRolePolicy
+                  - iam:PutRolePolicy
+                  - iam:GetRolePolicy
+                  - iam:DeleteRolePolicy
+                  - iam:ListRolePolicies
+                  - iam:TagPolicy
+                  - iam:UntagPolicy
+                Resource:
+                  - !Sub "arn:aws:iam::${AWS::AccountId}:role/*e2b*"
+                  - !Sub "arn:aws:iam::${AWS::AccountId}:instance-profile/*e2b*"
+                  - !Sub "arn:aws:iam::${AWS::AccountId}:policy/*e2b*"
+              - Sid: IAMAttachAWSManagedPolicy
+                Effect: Allow
+                Action:
+                  - iam:AttachRolePolicy
+                  - iam:DetachRolePolicy
+                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/*e2b*"
+                Condition:
+                  ArnEquals:
+                    iam:PolicyARN:
+                      - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
+                      - arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
+                      - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+                      - arn:aws:iam::aws:policy/AmazonEC2FullAccess
+                      - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryFullAccess
+                      - arn:aws:iam::aws:policy/AmazonS3FullAccess
+                      - arn:aws:iam::aws:policy/SecretsManagerReadWrite
+                      - arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role
+              - Sid: IAMPassRole
+                Effect: Allow
+                Action:
+                  - iam:PassRole
+                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/*e2b*"
+                Condition:
+                  StringEquals:
+                    iam:PassedToService:
+                      - ec2.amazonaws.com
+                      - ecs-tasks.amazonaws.com
+              - Sid: LogsAndMonitoring
+                Effect: Allow
+                Action:
+                  - logs:*
+                  - cloudwatch:*
+                Resource: "*"
+              - Sid: ElastiCacheAccess
+                Effect: Allow
+                Action:
+                  - elasticache:DescribeCacheClusters
+                  - elasticache:DescribeServerlessCaches
+                Resource: "*"
+              - Sid: CloudFormation
+                Effect: Allow
+                Action:
+                  - cloudformation:DescribeStacks
+                  - cloudformation:ListStacks
+                Resource: "*"
+              - Sid: SSMAccess
+                Effect: Allow
+                Action:
+                  - ssm:GetParameter*
+                  - ssm:PutParameter
+                  - ssm:DeleteParameter
+                  - ssm:DescribeParameters
+                Resource: !Sub "arn:aws:ssm:*:${AWS::AccountId}:parameter/*e2b*"
+              - Sid: STSAccess
+                Effect: Allow
+                Action:
+                  - sts:GetCallerIdentity
+                Resource: "*"
+      Description: IAM role with complete permissions for E2B infrastructure deployment including Packer and Terraform
 
   EC2InstanceProfile:
     Type: AWS::IAM::InstanceProfile
