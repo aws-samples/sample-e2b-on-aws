@@ -593,7 +593,6 @@ Resources:
                   StringEquals:
                     iam:PassedToService:
                       - ec2.amazonaws.com
-                      - ecs-tasks.amazonaws.com
               - Sid: LogsAndMonitoring
                 Effect: Allow
                 Action:
