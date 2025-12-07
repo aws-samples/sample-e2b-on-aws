@@ -43,15 +43,25 @@ mkdir -p $kernels_dir
 fc_versions_dir="/fc-versions"
 mkdir -p $fc_versions_dir
 
+
+# 获取当前实例类型 (使用 IMDSv2)
+IMDS_TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" \
+    -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
+
+# 获取 IAM Role 名称 (使用 IMDSv2)
+IAM_ROLE=$(curl -s -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" \
+    http://169.254.169.254/latest/meta-data/iam/security-credentials/)
+echo "Detected IAM Role: $IAM_ROLE"
+
 # Install s3fs-fuse if not already installed
 if ! command -v s3fs &>/dev/null; then
     apt-get update && apt-get install -y s3fs
 fi
 
 # Mount S3 buckets using s3fs
-s3fs ${FC_ENV_PIPELINE_BUCKET_NAME} $envd_dir -o iam_role=auto,allow_other,ro,umask=0022
-s3fs ${FC_KERNELS_BUCKET_NAME} $kernels_dir -o iam_role=auto,allow_other,ro,umask=0022,use_cache=/tmp/s3fs_cache
-s3fs ${FC_VERSIONS_BUCKET_NAME} $fc_versions_dir -o iam_role=auto,allow_other,ro,umask=0022,use_cache=/tmp/s3fs_cache
+s3fs ${FC_ENV_PIPELINE_BUCKET_NAME} $envd_dir -o iam_role=$IAM_ROLE,allow_other,ro,umask=0022
+s3fs ${FC_KERNELS_BUCKET_NAME} $kernels_dir -o iam_role=$IAM_ROLE,allow_other,ro,umask=0022,use_cache=/tmp/s3fs_cache
+s3fs ${FC_VERSIONS_BUCKET_NAME} $fc_versions_dir -o iam_role=$IAM_ROLE,allow_other,ro,umask=0022,use_cache=/tmp/s3fs_cache
 
 # These variables are passed in via Terraform template interpolation
 aws s3 cp "s3://${SCRIPTS_BUCKET}/run-consul-${RUN_CONSUL_FILE_HASH}.sh" /opt/consul/bin/run-consul.sh
