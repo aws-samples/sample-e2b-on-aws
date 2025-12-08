@@ -51,7 +51,7 @@ locals {
   clusters = {
     # Server nodes run Consul and Nomad servers
     server = {
-      instance_type_x86    = var.environment == "prod" ? "m6i.xlarge" : "t3.xlarge"
+      instance_type_x86    = var.environment == "prod" ? "m5.xlarge" : "t3.xlarge"
       instance_type_arm    = var.environment == "prod" ? "m7g.xlarge" : "t4g.xlarge"
       desired_capacity = 3
       max_size         = 3
