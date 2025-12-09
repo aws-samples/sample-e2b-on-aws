@@ -630,7 +630,8 @@ Resources:
             - |
               # Create directory for E2B infrastructure code
               mkdir -p /opt/infra/ && cd /opt/infra/
-              git clone https://github.com/aws-samples/sample-e2b-on-aws.git && cd sample-e2b-on-aws
+              #git clone https://github.com/aws-samples/sample-e2b-on-aws.git && cd sample-e2b-on-aws
+              git clone https://github.com/stevensu1977/sample-e2b-on-aws.git && cd sample-e2b-on-aws
             - !Sub |
               # Initialize Configuration
               touch /tmp/e2b.log

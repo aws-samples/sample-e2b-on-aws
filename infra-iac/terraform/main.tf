@@ -51,7 +51,7 @@ locals {
   clusters = {
     # Server nodes run Consul and Nomad servers
     server = {
-      instance_type_x86    = var.environment == "prod" ? "m6i.xlarge" : "t3.xlarge"
+      instance_type_x86    = var.environment == "prod" ? "m5.xlarge" : "t3.xlarge"
       instance_type_arm    = var.environment == "prod" ? "m7g.xlarge" : "t4g.xlarge"
       desired_capacity = 3
       max_size         = 3
@@ -59,7 +59,7 @@ locals {
     }
     # Client nodes run workloads and containers
     client = {
-      instance_type_x86    = "c5.metal"
+      instance_type_x86    = "m5d.metal"
       instance_type_arm    = "c7g.metal"
       desired_capacity = 1
       max_size         = 5
@@ -416,6 +416,13 @@ resource "aws_launch_template" "server" {
     name = aws_iam_instance_profile.ec2_instance_profile.name
   }
 
+  metadata_options {
+    http_endpoint               = "enabled"
+    http_tokens                 = "required"
+    http_put_response_hop_limit = 1
+    instance_metadata_tags      = "enabled"
+  }
+
   block_device_mappings {
     device_name = "/dev/sda1"
 
@@ -547,7 +554,7 @@ resource "aws_launch_template" "client" {
 
   metadata_options {
     http_endpoint               = "enabled"
-    http_tokens                 = "optional"
+    http_tokens                 = "required"
     http_put_response_hop_limit = 1
     instance_metadata_tags      = "enabled"
   }
@@ -982,6 +989,13 @@ resource "aws_launch_template" "api" {
     name = aws_iam_instance_profile.ec2_instance_profile.name
   }
 
+  metadata_options {
+    http_endpoint               = "enabled"
+    http_tokens                 = "required"
+    http_put_response_hop_limit = 1
+    instance_metadata_tags      = "enabled"
+  }
+
   block_device_mappings {
     device_name = "/dev/sda1"
 
@@ -1128,6 +1142,13 @@ resource "aws_launch_template" "build" {
 
   iam_instance_profile {
     name = aws_iam_instance_profile.ec2_instance_profile.name
+  }
+
+  metadata_options {
+    http_endpoint               = "enabled"
+    http_tokens                 = "required"
+    http_put_response_hop_limit = 1
+    instance_metadata_tags      = "enabled"
   }
 
   block_device_mappings {

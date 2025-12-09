@@ -12,22 +12,134 @@ PS4='[\D{%Y-%m-%d %H:%M:%S}] '
 set -x
 
 sudo apt-get update
-sudo apt-get install -y amazon-ecr-credential-helper
+sudo apt-get install -y amazon-ecr-credential-helper nvme-cli
 
 # Send the log output from this script to user-data.log, syslog, and the console
 # Inspired by https://alestic.com/2010/12/ec2-user-data-output/
 exec > >(tee /var/log/user-data.log | logger -t user-data -s 2>/dev/console) 2>&1
 
 # Add cache disk for orchestrator and swapfile
-# For AWS EBS volumes, typically the device will be /dev/nvme1n1 or similar
-DISK="/dev/nvme1n1"
 MOUNT_POINT="/orchestrator"
 
-# Check for NVMe device (AWS uses NVMe)
-if [ ! -e "$DISK" ]; then
-    # Find the first attached EBS volume that's not the root volume
-    DISK=$(lsblk -o NAME,TYPE -n | grep -v 'part\|lvm' | grep -v "$(df -h / | tail -1 | awk '{print $1}' | sed 's/\/dev\///')" | head -1 | awk '{print "/dev/"$1}')
+# 获取当前实例类型 (使用 IMDSv2)
+IMDS_TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" \
+    -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
+INSTANCE_TYPE=$(curl -s -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" \
+    http://169.254.169.254/latest/meta-data/instance-type)
+echo "Detected instance type: $INSTANCE_TYPE"
+
+
+# 获取 IAM Role 名称 (使用 IMDSv2)
+IAM_ROLE=$(curl -s -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" \
+    http://169.254.169.254/latest/meta-data/iam/security-credentials/)
+echo "Detected IAM Role: $IAM_ROLE"
+
+
+
+# 使用 case 语句检查是否支持多盘 LVM
+USE_LVM=false
+case "$INSTANCE_TYPE" in
+    m5d.metal|r5d.metal|m5dn.metal|r5dn.metal|i3.metal|i3en.metal)
+        USE_LVM=true
+        ;;
+esac
+echo "USE_LVM=$USE_LVM"
+
+if [[ "$USE_LVM" == "true" ]]; then
+    echo "Instance type $INSTANCE_TYPE supports multiple local NVMe disks, using LVM..."
+
+    # 安装 LVM2 工具（如果未安装）
+    if ! command -v pvcreate &>/dev/null; then
+        apt-get update && apt-get install -y lvm2
+    fi
+
+    # 查找所有本地 NVMe 实例存储设备（排除 EBS 卷）
+    NVME_DEVICES=()
+    for dev in /dev/nvme*n1; do
+        if [[ -b "$dev" ]]; then
+            # 检查是否是实例存储（非 EBS）
+            # EBS 卷的序列号通常以 "vol" 开头
+            SERIAL=$(nvme id-ctrl "$dev" 2>/dev/null | grep -i "sn" | awk '{print $3}')
+
+            if [[ ! "$SERIAL" =~ ^vol ]]; then
+                # 确保不是根卷
+                ROOT_DEV=$(df / | tail -1 | awk '{print $1}' | sed 's/p[0-9]*$//' | sed 's/[0-9]*$//')
+                if [[ "$dev" != "$ROOT_DEV" ]]; then
+                    NVME_DEVICES+=("$dev")
+                    echo "Found local NVMe device: $dev"
+                fi
+            fi
+        fi
+    done
+
+    NVME_COUNT=$${#NVME_DEVICES[@]}
+    echo "Found $NVME_COUNT local NVMe devices"
+
+    if [[ $NVME_COUNT -gt 1 ]]; then
+        echo "Creating LVM volume group from $NVME_COUNT devices..."
+
+        VG_NAME="vg_orchestrator"
+        LV_NAME="lv_orchestrator"
+
+        # 清理可能存在的旧配置
+        if vgdisplay $VG_NAME &>/dev/null; then
+            echo "Removing existing volume group $VG_NAME..."
+            lvremove -f /dev/$VG_NAME/$LV_NAME 2>/dev/null || true
+            vgremove -f $VG_NAME 2>/dev/null || true
+        fi
+
+        # 清理设备上的旧签名
+        for dev in "$${NVME_DEVICES[@]}"; do
+            wipefs -a "$dev" 2>/dev/null || true
+            pvremove -f "$dev" 2>/dev/null || true
+        done
+
+        # Step 1: 创建物理卷 (PV)
+        echo "Creating physical volumes..."
+        for dev in "$${NVME_DEVICES[@]}"; do
+            pvcreate -f "$dev"
+            echo "  Created PV on $dev"
+        done
+
+        # Step 2: 创建卷组 (VG)
+        echo "Creating volume group $VG_NAME..."
+        vgcreate $VG_NAME "$${NVME_DEVICES[@]}"
+
+        # Step 3: 创建逻辑卷 (LV) - 使用 100% 可用空间，条带化以提高性能
+        echo "Creating logical volume $LV_NAME with striping..."
+        lvcreate -l 100%FREE -i $NVME_COUNT -I 256K -n $LV_NAME $VG_NAME
+
+        # 设置 DISK 变量为 LVM 设备
+        DISK="/dev/$VG_NAME/$LV_NAME"
+        echo "LVM logical volume created: $DISK"
+
+        # 显示 LVM 配置信息
+        echo "=== LVM Configuration ==="
+        pvs
+        vgs
+        lvs
+        echo "========================="
+
+    elif [[ $NVME_COUNT -eq 1 ]]; then
+        echo "Only 1 local NVMe device found, using it directly..."
+        DISK="$${NVME_DEVICES[0]}"
+    else
+        echo "No local NVMe devices found, falling back to EBS detection..."
+        DISK="/dev/nvme1n1"
+    fi
+
+else
+    echo "Instance type $INSTANCE_TYPE uses single disk mode..."
+    # For AWS EBS volumes, typically the device will be /dev/nvme1n1 or similar
+    DISK="/dev/nvme1n1"
+    # Check for NVMe device (AWS uses NVMe)
+    if [ ! -e "$DISK" ]; then
+        # Find the first attached EBS volume that's not the root volume
+        DISK=$(lsblk -o NAME,TYPE -n | grep -v 'part\|lvm' | grep -v "$(df -h / | tail -1 | awk '{print $1}' | sed 's/\/dev\///')" | head -1 | awk '{print "/dev/"$1}')
+    fi
 fi
+
+echo "Using disk: $DISK"
 
 # Step 1: Format the disk with XFS and standard block size
 sudo mkfs.xfs -f -b size=4096 $DISK
@@ -112,9 +224,10 @@ if ! command -v s3fs &>/dev/null; then
 fi
 
 # Mount S3 buckets using s3fs
-s3fs ${FC_ENV_PIPELINE_BUCKET_NAME} $envd_dir -o iam_role=auto,allow_other,ro,umask=0022
-s3fs ${FC_KERNELS_BUCKET_NAME} $kernels_dir -o iam_role=auto,allow_other,ro,umask=0022,use_cache=/tmp/s3fs_cache_kernels
-s3fs ${FC_VERSIONS_BUCKET_NAME} $fc_versions_dir -o iam_role=auto,allow_other,ro,umask=0022,use_cache=/tmp/s3fs_cache_versions
+# 使用显式 IAM role 名称挂载 s3fs (而不是 iam_role=auto)
+s3fs ${FC_ENV_PIPELINE_BUCKET_NAME} $envd_dir -o iam_role=$IAM_ROLE,allow_other,ro,umask=0022
+s3fs ${FC_KERNELS_BUCKET_NAME} $kernels_dir -o iam_role=$IAM_ROLE,allow_other,ro,umask=0022,use_cache=/tmp/s3fs_cache_kernels
+s3fs ${FC_VERSIONS_BUCKET_NAME} $fc_versions_dir -o iam_role=$IAM_ROLE,allow_other,ro,umask=0022,use_cache=/tmp/s3fs_cache_versions
 
 # These variables are passed in via Terraform template interpolation
 aws s3 cp "s3://${SCRIPTS_BUCKET}/run-consul-${RUN_CONSUL_FILE_HASH}.sh" /opt/consul/bin/run-consul.sh
