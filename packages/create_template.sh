@@ -223,11 +223,19 @@ while true; do
 
     if [ "$STATUS" != "building" ]; then
         echo "Build is no longer in 'building' state. Final status: $STATUS"
-        echo "Done!"
         break
     fi
 
     sleep 10
 done
 
-echo "Building completed successfully!"
+# Check final build status
+if [ "$STATUS" = "error" ] || [ "$STATUS" = "failed" ]; then
+    echo "Building failed with status: $STATUS"
+    exit 1
+elif [ "$STATUS" = "ready" ] || [ "$STATUS" = "success" ]; then
+    echo "Building completed successfully!"
+else
+    echo "Building finished with unknown status: $STATUS"
+    exit 1
+fi

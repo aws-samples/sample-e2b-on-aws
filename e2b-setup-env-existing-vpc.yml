@@ -1,7 +1,7 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >-
-  E2B Infrastructure CloudFormation Template - Deploys core infrastructure components for E2B platform
-  including VPC, Terraform Bastion, IAM Roles, PostgreSQL Database, and S3 Buckets.
+  E2B Infrastructure CloudFormation Template (Existing VPC) - Deploys core infrastructure components for E2B platform
+  using existing VPC including IAM Roles, PostgreSQL Database, and S3 Buckets.
 
 # ===================================================================================================
 # Metadata - Organizes template parameters into logical groups in the CloudFormation console
@@ -10,13 +10,13 @@ Metadata:
   AWS::CloudFormation::Interface:
     ParameterGroups:
       - Label:
-          default: VPC Configuration
+          default: Existing VPC Configuration
         Parameters:
-          - VpcBlock
-          - PublicSubnet1Block
-          - PublicSubnet2Block
-          - PrivateSubnet1Block
-          - PrivateSubnet2Block
+          - ExistingVpcId
+          - ExistingPrivateSubnet1Id
+          - ExistingPrivateSubnet2Id
+          - ExistingPublicSubnet1Id
+          - ExistingPublicSubnet2Id
           - PublicAccess
       - Label:
           default: Security Configuration
@@ -76,39 +76,34 @@ Parameters:
     AllowedPattern: '^([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}$'
     ConstraintDescription: Must be a valid domain (e.g. sub.domain.com)
 
-  # VPC Configuration - Network address space for the entire infrastructure
-  VpcBlock:
-    Type: String
-    Default: 10.0.0.0/16
-    Description: The CIDR range for the VPC. Must be a valid private (RFC 1918) CIDR range with sufficient IP addresses for all components.
+  # Existing VPC Configuration
+  ExistingVpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: ID of the existing VPC where E2B infrastructure will be deployed
 
-  # Public Subnets - Network segments with internet access for load balancers and bastion hosts
-  PublicSubnet1Block:
-    Type: String
-    Default: 10.0.0.0/20
-    Description: CIDR block for public subnet in Availability Zone 1 (provides 4,096 IP addresses for internet-facing resources)
-  PublicSubnet2Block:
-    Type: String
-    Default: 10.0.16.0/20
-    Description: CIDR block for public subnet in Availability Zone 2 (provides 4,096 IP addresses for internet-facing resources)
+  ExistingPrivateSubnet1Id:
+    Type: AWS::EC2::Subnet::Id
+    Description: ID of existing private subnet in first availability zone
 
-  # Private Subnets - Isolated network segments for databases and application servers
-  PrivateSubnet1Block:
-    Type: String
-    Default: 10.0.32.0/20
-    Description: CIDR block for private subnet in Availability Zone 1 (provides 4,096 IP addresses for internal resources)
-  PrivateSubnet2Block:
-    Type: String
-    Default: 10.0.48.0/20
-    Description: CIDR block for private subnet in Availability Zone 2 (provides 4,096 IP addresses for internal resources)
+  ExistingPrivateSubnet2Id:
+    Type: AWS::EC2::Subnet::Id
+    Description: ID of existing private subnet in second availability zone
+
+  ExistingPublicSubnet1Id:
+    Type: AWS::EC2::Subnet::Id
+    Description: ID of existing public subnet in first availability zone(not available in private access mode)
+
+  ExistingPublicSubnet2Id:
+    Type: AWS::EC2::Subnet::Id
+    Description: ID of existing public subnet in second availability zone(not available in private access mode)
 
   PublicAccess:
     Type: String
     Description: Specify whether public or private access to E2B
     AllowedValues:
-      - Public
-      - Private
-    Default: Public
+      - public
+      - private
+    Default: public
 
   # Bastion Configuration - Settings for the deployment and management server
   KeyName:
@@ -120,7 +115,7 @@ Parameters:
   AllowRemoteSSHIPs:
     Description: IP address range allowed for SSH (port 22) access to the bastion host (CIDR format), if you want to allow all IPs, please set it to '0.0.0.0/0'
     Type: String
-    Default: "10.0.0.0/8"
+    Default: "0.0.0.0/0"
 
   # Database Configuration - PostgreSQL settings for E2B platform
   DBInstanceIdentifier:
@@ -143,7 +138,7 @@ Parameters:
     ConstraintDescription: Password must be 8-30 characters and contain at least one letter and one number
 
 # ===================================================================================================
-# Conditions - Conditional logic for resource creation (none used in this template)
+# Conditions - Conditional logic for resource creation
 # ===================================================================================================
 Conditions:
   IsX64: !Equals [!Ref Architecture, x86_64]
@@ -155,167 +150,87 @@ Conditions:
 # ===================================================================================================
 Resources:
   # ------------------------------------------------------------------------------------------------
-  # VPC and Networking - Core network infrastructure for secure communication between components
+  # VPC CIDR Lookup - Custom resource to automatically retrieve VPC CIDR block
   # ------------------------------------------------------------------------------------------------
-  VPC:
-    Type: AWS::EC2::VPC
+  VpcLookupRole:
+    Type: AWS::IAM::Role
     Properties:
-      CidrBlock: !Ref VpcBlock
-      EnableDnsSupport: true
-      EnableDnsHostnames: true
-      Tags:
-        - Key: Name
-          Value: !Sub "vpc-${AWS::StackName}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: VpcDescribePolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ec2:DescribeVpcs
+                Resource: "*"
 
-  InternetGateway:
-    Type: AWS::EC2::InternetGateway
+  VpcLookupFunction:
+    Type: AWS::Lambda::Function
     Properties:
-      Tags:
-        - Key: Name
-          Value: !Sub "${AWS::StackName}-igw"
+      FunctionName: !Sub "${AWS::StackName}-vpc-lookup"
+      Runtime: python3.9
+      Handler: index.handler
+      Role: !GetAtt VpcLookupRole.Arn
+      Timeout: 60
+      Code:
+        ZipFile: |
+          import boto3
+          import json
+          import cfnresponse
 
-  VPCGatewayAttachment:
-    Type: AWS::EC2::VPCGatewayAttachment
+          def handler(event, context):
+              try:
+                  if event['RequestType'] == 'Delete':
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+                      return
+
+                  ec2 = boto3.client('ec2')
+                  vpc_id = event['ResourceProperties']['VpcId']
+
+                  response = ec2.describe_vpcs(VpcIds=[vpc_id])
+
+                  if not response['Vpcs']:
+                      raise Exception(f'VPC {vpc_id} not found')
+
+                  vpc = response['Vpcs'][0]
+                  cidr_block = vpc['CidrBlock']
+
+                  response_data = {'CidrBlock': cidr_block}
+                  cfnresponse.send(event, context, cfnresponse.SUCCESS, response_data)
+
+              except Exception as e:
+                  print(f'Error: {str(e)}')
+                  cfnresponse.send(event, context, cfnresponse.FAILED, {})
+
+  VpcCidrLookup:
+    Type: AWS::CloudFormation::CustomResource
     Properties:
-      InternetGatewayId: !Ref InternetGateway
-      VpcId: !Ref VPC
+      ServiceToken: !GetAtt VpcLookupFunction.Arn
+      VpcId: !Ref ExistingVpcId
 
-  # Public Subnet in AZ1 - Network segment with direct internet access in first availability zone
-  PublicSubnet1:
-    Type: AWS::EC2::Subnet
-    Metadata:
-      Comment: Public subnet in first availability zone for internet-facing resources
-    Properties:
-      AvailabilityZone: !Select
-        - "0"
-        - !GetAZs
-          Ref: AWS::Region
-      CidrBlock: !Ref PublicSubnet1Block
-      VpcId: !Ref VPC
-      MapPublicIpOnLaunch: true
-      Tags:
-        - Key: Name
-          Value: !Sub ${AWS::StackName}-public-1
-        - Key: kubernetes.io/role/elb
-          Value: "1"
-
-  # Public Subnet in AZ2 - Network segment with direct internet access in second availability zone
-  PublicSubnet2:
-    Type: AWS::EC2::Subnet
-    Metadata:
-      Comment: Public subnet in second availability zone for internet-facing resources
-    Properties:
-      AvailabilityZone: !Select
-        - "1"
-        - !GetAZs
-          Ref: AWS::Region
-      CidrBlock: !Ref PublicSubnet2Block
-      VpcId: !Ref VPC
-      MapPublicIpOnLaunch: true
-      Tags:
-        - Key: Name
-          Value: !Sub ${AWS::StackName}-public-2
-        - Key: kubernetes.io/role/elb
-          Value: "1"
-
-  # Private Subnet in AZ1 - Isolated network segment in first availability zone for backend services
-  PrivateSubnet1:
-    Type: AWS::EC2::Subnet
-    Metadata:
-      Comment: Private subnet in first availability zone for secure resources
-    Properties:
-      AvailabilityZone: !Select
-        - "0"
-        - !GetAZs
-          Ref: AWS::Region
-      CidrBlock: !Ref PrivateSubnet1Block
-      VpcId: !Ref VPC
-      Tags:
-        - Key: Name
-          Value: !Sub ${AWS::StackName}-private-1
-        - Key: kubernetes.io/role/internal-elb
-          Value: "1"
-
-  # Private Subnet in AZ2 - Isolated network segment in second availability zone for backend services
-  PrivateSubnet2:
-    Type: AWS::EC2::Subnet
-    Metadata:
-      Comment: Private subnet in second availability zone for secure resources
-    Properties:
-      AvailabilityZone: !Select
-        - "1"
-        - !GetAZs
-          Ref: AWS::Region
-      CidrBlock: !Ref PrivateSubnet2Block
-      VpcId: !Ref VPC
-      Tags:
-        - Key: Name
-          Value: !Sub ${AWS::StackName}-private-2
-        - Key: kubernetes.io/role/internal-elb
-          Value: "1"
-
-  # Route Table for Public Subnets - Defines routing rules for internet-accessible subnets
-  PublicRouteTable:
-    Type: AWS::EC2::RouteTable
-    Properties:
-      VpcId: !Ref VPC
-      Tags:
-        - Key: Name
-          Value: !Sub ${AWS::StackName}-public-route
-
-  # Route Table for Private Subnets - Defines routing rules for internal-only subnets
-  PrivateRouteTable:
-    Type: AWS::EC2::RouteTable
-    Properties:
-      VpcId: !Ref VPC
-      Tags:
-        - Key: Name
-          Value: !Sub ${AWS::StackName}-private-route
-
-  # Default Route to Internet Gateway - Enables outbound internet access for public subnets
-  PublicRoute:
-    DependsOn: VPCGatewayAttachment
-    Type: AWS::EC2::Route
-    Properties:
-      RouteTableId: !Ref PublicRouteTable
-      DestinationCidrBlock: 0.0.0.0/0
-      GatewayId: !Ref InternetGateway
-
-  # Associate Route Tables with Subnets - Links routing rules to appropriate network segments
-  PublicSubnet1RouteTableAssociation:
-    Type: AWS::EC2::SubnetRouteTableAssociation
-    Properties:
-      SubnetId: !Ref PublicSubnet1
-      RouteTableId: !Ref PublicRouteTable
-
-  PublicSubnet2RouteTableAssociation:
-    Type: AWS::EC2::SubnetRouteTableAssociation
-    Properties:
-      SubnetId: !Ref PublicSubnet2
-      RouteTableId: !Ref PublicRouteTable
-
-  PrivateSubnet1RouteTableAssociation:
-    Type: AWS::EC2::SubnetRouteTableAssociation
-    Properties:
-      SubnetId: !Ref PrivateSubnet1
-      RouteTableId: !Ref PrivateRouteTable
-
-  PrivateSubnet2RouteTableAssociation:
-    Type: AWS::EC2::SubnetRouteTableAssociation
-    Properties:
-      SubnetId: !Ref PrivateSubnet2
-      RouteTableId: !Ref PrivateRouteTable
-
-  # S3 VPC Endpoint - Provides private access to S3 without traversing the public internet
+  # ------------------------------------------------------------------------------------------------
+  # VPC Endpoint - Provides private access to S3 without traversing the public internet
+  # ------------------------------------------------------------------------------------------------
   S3VPCEndpoint:
     Type: AWS::EC2::VPCEndpoint
     Properties:
       ServiceName: !Sub "com.amazonaws.${AWS::Region}.s3"
-      VpcId: !Ref VPC
+      VpcId: !Ref ExistingVpcId
       VpcEndpointType: Gateway
-      RouteTableIds:
-        - !Ref PublicRouteTable
-        - !Ref PrivateRouteTable
+      # Note: You may need to specify existing route table IDs for your VPC
+      # RouteTableIds:
+      #   - existing-route-table-id-1
+      #   - existing-route-table-id-2
 
   # ------------------------------------------------------------------------------------------------
   # Security Groups - Network access control for different infrastructure tiers
@@ -324,7 +239,7 @@ Resources:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupDescription: Security group allowing SSH connections to the bastion host from specified IP ranges
-      VpcId: !Ref VPC
+      VpcId: !Ref ExistingVpcId
       SecurityGroupIngress:
         - IpProtocol: tcp
           FromPort: "22"
@@ -345,11 +260,11 @@ Resources:
         - IpProtocol: tcp
           FromPort: 5432
           ToPort: 5432
-          CidrIp: !Ref VpcBlock
+          CidrIp: !GetAtt VpcCidrLookup.CidrBlock
       SecurityGroupEgress:
         - IpProtocol: "-1"
           CidrIp: "0.0.0.0/0"
-      VpcId: !Ref VPC
+      VpcId: !Ref ExistingVpcId
       Tags:
         - Key: Name
           Value: !Sub "${AWS::StackName}-db-sg"
@@ -362,11 +277,11 @@ Resources:
         - IpProtocol: tcp
           FromPort: 6379
           ToPort: 6379
-          CidrIp: !Ref VpcBlock
+          CidrIp: !GetAtt VpcCidrLookup.CidrBlock
       SecurityGroupEgress:
         - IpProtocol: "-1"
           CidrIp: "0.0.0.0/0"
-      VpcId: !Ref VPC
+      VpcId: !Ref ExistingVpcId
       Tags:
         - Key: Name
           Value: !Sub "${AWS::StackName}-redis-sg"
@@ -708,8 +623,8 @@ Resources:
     Properties:
       DBSubnetGroupDescription: Subnet group defining which private subnets can host the PostgreSQL database
       SubnetIds:
-        - !Ref PrivateSubnet1
-        - !Ref PrivateSubnet2
+        - !Ref ExistingPrivateSubnet1Id
+        - !Ref ExistingPrivateSubnet2Id
       Tags:
         - Key: Name
           Value: !Sub "${AWS::StackName}-postgres-subnet-group"
@@ -765,8 +680,8 @@ Resources:
     Properties:
       Description: Subnet group for Redis cache
       SubnetIds:
-        - !Ref PrivateSubnet1
-        - !Ref PrivateSubnet2
+        - !Ref ExistingPrivateSubnet1Id
+        - !Ref ExistingPrivateSubnet2Id
       Tags:
         - Key: Name
           Value: !Sub "${AWS::StackName}-redis-subnet-group"
@@ -779,8 +694,8 @@ Resources:
       SecurityGroupIds:
         - !GetAtt RedisSecurityGroup.GroupId
       SubnetIds:
-        - !Ref PrivateSubnet1
-        - !Ref PrivateSubnet2
+        - !Ref ExistingPrivateSubnet1Id
+        - !Ref ExistingPrivateSubnet2Id
       Tags:
         - Key: Name
           Value: !Sub "${AWS::StackName}-redis"
@@ -799,7 +714,7 @@ Resources:
         - c7g.xlarge
       KeyName: !Ref KeyName
       IamInstanceProfile: !Ref EC2InstanceProfile
-      SubnetId: !Ref PublicSubnet1
+      SubnetId: !Ref ExistingPrivateSubnet1Id
       SourceDestCheck: false
       EbsOptimized: true
       Monitoring: true
@@ -864,7 +779,7 @@ Resources:
               # Configure AWS CLI default region
               aws configure set region ${AWS::Region}
             - |
-              # Install HashiCorp Packer for creating machine images                
+              # Install HashiCorp Packer for creating machine images
               unzip packer.zip && mv packer /usr/local/bin/packer && rm packer.zip
             - |
               # Install HashiCorp Terraform for infrastructure as code
@@ -875,8 +790,8 @@ Resources:
             - |
               # Create directory for E2B infrastructure code
               mkdir -p /opt/infra/ && cd /opt/infra/
-              #git clone https://github.com/aws-samples/sample-e2b-on-aws.git && cd sample-e2b-on-aws
-              git clone https://github.com/stevensu1977/sample-e2b-on-aws.git && cd sample-e2b-on-aws
+              git clone https://github.com/aws-samples/sample-e2b-on-aws.git && cd sample-e2b-on-aws
+              git checkout existing-vpc
             - !Sub |
               # Initialize Configuration
               touch /tmp/e2b.log
@@ -962,13 +877,13 @@ Outputs:
   # VPC outputs
   CFNVPCID:
     Description: VPC ID for the E2B infrastructure network
-    Value: !Ref VPC
+    Value: !Ref ExistingVpcId
     Export:
       Name: CFNVPCID
 
   CFNVPCCIDR:
-    Description: VPC CIDR Block defining the overall network address space
-    Value: !Ref VpcBlock
+    Description: VPC CIDR Block defining the overall network address space (automatically retrieved)
+    Value: !GetAtt VpcCidrLookup.CidrBlock
     Export:
       Name: CFNVPCCIDR
 
@@ -982,25 +897,25 @@ Outputs:
   # Subnet outputs
   CFNPRIVATESUBNET1:
     Description: Private Subnet ID in first availability zone for secure resources
-    Value: !Ref PrivateSubnet1
+    Value: !Ref ExistingPrivateSubnet1Id
     Export:
       Name: CFNPRIVATESUBNET1
 
   CFNPRIVATESUBNET2:
     Description: Private Subnet ID in second availability zone for secure resources
-    Value: !Ref PrivateSubnet2
+    Value: !Ref ExistingPrivateSubnet2Id
     Export:
       Name: CFNPRIVATESUBNET2
 
   CFNPUBLICSUBNET1:
     Description: Public Subnet ID in first availability zone for internet-facing resources
-    Value: !Ref PublicSubnet1
+    Value: !Ref ExistingPublicSubnet1Id
     Export:
       Name: CFNPUBLICSUBNET1
 
   CFNPUBLICSUBNET2:
     Description: Public Subnet ID in second availability zone for internet-facing resources
-    Value: !Ref PublicSubnet2
+    Value: !Ref ExistingPublicSubnet2Id
     Export:
       Name: CFNPUBLICSUBNET2
 
@@ -1084,10 +999,10 @@ Outputs:
       Name: AWSSTACKNAME
 
   # Bastion Host information
-  BASTIONPUBLICDNS:
-    Description: Public DNS name of the Bastion Host for SSH access
-    Value: !GetAtt BastionInstance.PublicDnsName
+  # BASTIONPUBLICDNS:
+  #   Description: Public DNS name of the Bastion Host for SSH access
+  #   Value: !GetAtt BastionInstance.PublicDnsName
 
-  BASTIONPUBLICIP:
-    Description: Public IP address of the Bastion Host for SSH access
-    Value: !GetAtt BastionInstance.PublicIp
+  # BASTIONPUBLICIP:
+  #   Description: Public IP address of the Bastion Host for SSH access
+  #   Value: !GetAtt BastionInstance.PublicIp

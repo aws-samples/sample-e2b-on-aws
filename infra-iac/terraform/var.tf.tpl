@@ -65,3 +65,9 @@ variable "architecture" {
   type        = string
   default     = "${CFNARCHITECTURE}"
 }
+
+variable "publicaccess" {
+  description = "Specify whether public or private access to E2B"
+  type        = string
+  default     = "${CFNPUBLICACCESS}"
+}
