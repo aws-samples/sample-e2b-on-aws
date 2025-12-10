@@ -66,7 +66,7 @@ if [ "$ARCHITECTURE" = "arm64" ]; then
     rm -rf release-${latest_version}-aarch64
 else
     # Download kernel
-	curl -L https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/$CI_VERSION/x86_64/vmlinux-$KERNEL_VERSION -o ${TEMP_DIR}/kernels/${KERNEL_FOLDER}/vmlinux.bin
+	curl -L https://storage.googleapis.com/e2b-prod-public-builds/kernels/vmlinux-6.1.102/vmlinux.bin -o ${TEMP_DIR}/kernels/${KERNEL_FOLDER}/vmlinux.bin
 	# Download firecracker
 	curl -L ${fc_url}/download/${FC_VERSION}/firecracker-${FC_VERSION}-x86_64.tgz | tar -xz
     mv release-${FC_VERSION}-x86_64/firecracker-${FC_VERSION}-x86_64 \
