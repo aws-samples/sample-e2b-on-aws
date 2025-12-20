@@ -38,18 +38,91 @@ aws s3 cp "s3://${SCRIPTS_BUCKET}/run-consul-${RUN_CONSUL_FILE_HASH}.sh" /opt/co
 aws s3 cp "s3://${SCRIPTS_BUCKET}/run-api-nomad-${RUN_NOMAD_FILE_HASH}.sh" /opt/nomad/bin/run-nomad.sh
 chmod +x /opt/consul/bin/run-consul.sh /opt/nomad/bin/run-nomad.sh
 
+# Create initial Docker configuration
 mkdir -p /root/docker
 touch /root/docker/config.json
-# export ECR_AUTH_TOKEN=$(aws ecr get-authorization-token --output text --query 'authorizationData[].authorizationToken')
-cat <<EOF >/root/docker/config.json
+
+# Initial ECR token setup (without restarting Nomad since it's not running yet)
+echo "[$(date)] Setting up initial ECR token..."
+new_token=$(aws ecr get-authorization-token --region "${AWS_REGION}" --output text --query 'authorizationData[].authorizationToken' 2>/dev/null)
+
+if [ -n "$new_token" ]; then
+    cat <<EOF >/root/docker/config.json
 {
     "auths": {
         "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com": {
-            "auth": "$(aws ecr get-authorization-token --output text --query 'authorizationData[].authorizationToken')"
+            "auth": "$new_token"
         }
     }
 }
 EOF
+    echo "[$(date)] Initial ECR token configured successfully"
+else
+    echo "[$(date)] Warning: Failed to get initial ECR token"
+fi
+
+# Create ECR token refresh script
+cat <<'REFRESH_SCRIPT' >/usr/local/bin/refresh-ecr-token.sh
+#!/bin/bash
+# ECR Token Refresh Script for API Node
+set -euo pipefail
+
+AWS_ACCOUNT_ID="${AWS_ACCOUNT_ID}"
+AWS_REGION="${AWS_REGION}"
+CONSUL_TOKEN="${CONSUL_TOKEN}"
+LOG_FILE="/var/log/ecr-token-refresh.log"
+
+# Log function
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a "$LOG_FILE"
+}
+
+log "Starting ECR token refresh..."
+
+# Get new ECR token
+new_token=$(aws ecr get-authorization-token --region "$AWS_REGION" --output text --query 'authorizationData[].authorizationToken' 2>/dev/null)
+
+if [ -n "$new_token" ]; then
+    # Update Docker config
+    cat <<EOF >/root/docker/config.json
+{
+    "auths": {
+        "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com": {
+            "auth": "$new_token"
+        }
+    }
+}
+EOF
+    log "ECR token refreshed successfully"
+    
+    # Restart Nomad to pick up new token
+    if pgrep -f nomad > /dev/null; then
+        log "Restarting Nomad service..."
+        pkill -f nomad
+        sleep 3
+        /opt/nomad/bin/run-nomad.sh --consul-token "$CONSUL_TOKEN" &
+        log "Nomad restarted successfully"
+    else
+        log "Nomad not running, skipping restart"
+    fi
+else
+    log "ERROR: Failed to get ECR token"
+    exit 1
+fi
+REFRESH_SCRIPT
+
+# Make refresh script executable
+chmod +x /usr/local/bin/refresh-ecr-token.sh
+
+# Add cron job to refresh ECR token every 10 hours
+cat <<CRON_JOB >/etc/cron.d/ecr-token-refresh
+# Refresh ECR token every 10 hours
+0 */10 * * * root /usr/local/bin/refresh-ecr-token.sh >> /var/log/ecr-token-refresh.log 2>&1
+CRON_JOB
+
+# Ensure cron service is running
+systemctl enable cron
+systemctl start cron
 
 mkdir -p /etc/systemd/resolved.conf.d/
 touch /etc/systemd/resolved.conf.d/consul.conf
