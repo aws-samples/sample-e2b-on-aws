@@ -451,7 +451,12 @@ resource "aws_launch_template" "server" {
       local.common_tags,
       {
         Name        = "server-cluster",
-        ec2-e2b-key = "ec2-e2b-value"
+        ec2-e2b-key = "ec2-e2b-value",
+        team        = "GENAI",
+        service     = "GENAI",
+        owner       = "GENAI",
+        cost_center = "GENAI",
+        component   = "GENAI"
       }
     )
   }
@@ -602,7 +607,12 @@ resource "aws_launch_template" "client" {
       local.common_tags,
       {
         Name        = "client-cluster",
-        ec2-e2b-key = "ec2-e2b-value"
+        ec2-e2b-key = "ec2-e2b-value",
+        team        = "GENAI",
+        service     = "GENAI",
+        owner       = "GENAI",
+        cost_center = "GENAI",
+        component   = "GENAI"
       }
     )
   }
@@ -1021,7 +1031,12 @@ resource "aws_launch_template" "api" {
       local.common_tags,
       {
         Name        = "api-cluster",
-        ec2-e2b-key = "ec2-e2b-value"
+        ec2-e2b-key = "ec2-e2b-value",
+        team        = "GENAI",
+        service     = "GENAI",
+        owner       = "GENAI",
+        cost_center = "GENAI",
+        component   = "GENAI"
       }
     )
   }
@@ -1169,7 +1184,12 @@ resource "aws_launch_template" "build" {
       local.common_tags,
       {
         Name        = "build-cluster",
-        ec2-e2b-key = "ec2-e2b-value"
+        ec2-e2b-key = "ec2-e2b-value",
+        team        = "GENAI",
+        service     = "GENAI",
+        owner       = "GENAI",
+        cost_center = "GENAI",
+        component   = "GENAI"
       }
     )
   }
