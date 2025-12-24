@@ -43,7 +43,6 @@ locals {
   common_tags = {
     Environment = var.environment
     Project     = "E2B"
-    Owner       = "AWS"
     ManagedBy   = "Terraform"
   }
   
