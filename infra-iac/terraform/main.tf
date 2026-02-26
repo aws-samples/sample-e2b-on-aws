@@ -43,7 +43,6 @@ locals {
   common_tags = {
     Environment = var.environment
     Project     = "E2B"
-    Owner       = "AWS"
     ManagedBy   = "Terraform"
   }
   
@@ -416,6 +415,13 @@ resource "aws_launch_template" "server" {
     name = aws_iam_instance_profile.ec2_instance_profile.name
   }
 
+  metadata_options {
+    http_endpoint               = "enabled"
+    http_tokens                 = "required"
+    http_put_response_hop_limit = 1
+    instance_metadata_tags      = "enabled"
+  }
+
   block_device_mappings {
     device_name = "/dev/sda1"
 
@@ -451,7 +457,12 @@ resource "aws_launch_template" "server" {
       local.common_tags,
       {
         Name        = "server-cluster",
-        ec2-e2b-key = "ec2-e2b-value"
+        ec2-e2b-key = "ec2-e2b-value",
+        team        = "GENAI",
+        service     = "GENAI",
+        owner       = "GENAI",
+        cost_center = "GENAI",
+        component   = "GENAI"
       }
     )
   }
@@ -547,7 +558,7 @@ resource "aws_launch_template" "client" {
 
   metadata_options {
     http_endpoint               = "enabled"
-    http_tokens                 = "optional"
+    http_tokens                 = "required"
     http_put_response_hop_limit = 1
     instance_metadata_tags      = "enabled"
   }
@@ -602,7 +613,12 @@ resource "aws_launch_template" "client" {
       local.common_tags,
       {
         Name        = "client-cluster",
-        ec2-e2b-key = "ec2-e2b-value"
+        ec2-e2b-key = "ec2-e2b-value",
+        team        = "GENAI",
+        service     = "GENAI",
+        owner       = "GENAI",
+        cost_center = "GENAI",
+        component   = "GENAI"
       }
     )
   }
@@ -982,6 +998,13 @@ resource "aws_launch_template" "api" {
     name = aws_iam_instance_profile.ec2_instance_profile.name
   }
 
+  metadata_options {
+    http_endpoint               = "enabled"
+    http_tokens                 = "required"
+    http_put_response_hop_limit = 1
+    instance_metadata_tags      = "enabled"
+  }
+
   block_device_mappings {
     device_name = "/dev/sda1"
 
@@ -1021,7 +1044,12 @@ resource "aws_launch_template" "api" {
       local.common_tags,
       {
         Name        = "api-cluster",
-        ec2-e2b-key = "ec2-e2b-value"
+        ec2-e2b-key = "ec2-e2b-value",
+        team        = "GENAI",
+        service     = "GENAI",
+        owner       = "GENAI",
+        cost_center = "GENAI",
+        component   = "GENAI"
       }
     )
   }
@@ -1130,6 +1158,13 @@ resource "aws_launch_template" "build" {
     name = aws_iam_instance_profile.ec2_instance_profile.name
   }
 
+  metadata_options {
+    http_endpoint               = "enabled"
+    http_tokens                 = "required"
+    http_put_response_hop_limit = 1
+    instance_metadata_tags      = "enabled"
+  }
+
   block_device_mappings {
     device_name = "/dev/sda1"
 
@@ -1169,7 +1204,12 @@ resource "aws_launch_template" "build" {
       local.common_tags,
       {
         Name        = "build-cluster",
-        ec2-e2b-key = "ec2-e2b-value"
+        ec2-e2b-key = "ec2-e2b-value",
+        team        = "GENAI",
+        service     = "GENAI",
+        owner       = "GENAI",
+        cost_center = "GENAI",
+        component   = "GENAI"
       }
     )
   }
