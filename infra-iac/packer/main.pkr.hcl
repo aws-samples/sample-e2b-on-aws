@@ -46,10 +46,25 @@ build {
 
   provisioner "shell" {
     inline = [
-      "sudo apt-get clean",
-      "sudo apt-get update -y",
-      "sudo apt-get upgrade -y",
-      "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl git"
+      "echo 'Waiting for apt locks to be released...'",
+      "cloud-init status --wait || true",
+      "while sudo fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do echo 'Waiting for dpkg lock...'; sleep 5; done",
+      "while sudo fuser /var/lib/apt/lists/lock >/dev/null 2>&1; do echo 'Waiting for apt lock...'; sleep 5; done",
+      "sudo systemctl stop apt-daily.service apt-daily-upgrade.service unattended-upgrades.service || true",
+      "sudo systemctl disable apt-daily.timer apt-daily-upgrade.timer || true"
+    ]
+  }
+
+  provisioner "shell" {
+    environment_vars = [
+      "DEBIAN_FRONTEND=noninteractive",
+      "DEBCONF_NONINTERACTIVE_SEEN=true"
+    ]
+    inline = [
+      "sudo -E apt-get clean",
+      "sudo -E apt-get update -y",
+      "sudo -E apt-get upgrade -y",
+      "sudo -E apt-get install -y ca-certificates curl git"
     ]
   }
   
@@ -84,26 +99,34 @@ build {
   }
 
   provisioner "shell" {
+    environment_vars = [
+      "DEBIAN_FRONTEND=noninteractive",
+      "DEBCONF_NONINTERACTIVE_SEEN=true"
+    ]
     inline = [
-      "sudo apt-get update",
-      "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y unzip jq net-tools qemu-utils make build-essential openssh-client openssh-server", # TODO: openssh-server is updated to prevent security vulnerabilities
+      "sudo -E apt-get update",
+      "sudo -E apt-get install -y unzip jq net-tools qemu-utils make build-essential openssh-client openssh-server", # TODO: openssh-server is updated to prevent security vulnerabilities
     ]
   }
   
   provisioner "shell" {
+    environment_vars = [
+      "DEBIAN_FRONTEND=noninteractive",
+      "DEBCONF_NONINTERACTIVE_SEEN=true"
+    ]
     only = ["amazon-ebs.orch"]
     inline = [
-      "sudo apt-get update && sudo apt-get upgrade -y",
+      "sudo -E apt-get update && sudo -E apt-get upgrade -y",
       "if [ \"${var.architecture}\" = \"x86_64\" ]; then",
       "  sudo curl 'https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip' -o 'awscliv2.zip'",
       "else",
       "  sudo curl 'https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip' -o 'awscliv2.zip'",
       "fi",
-      "sudo apt-get install -y zip",
+      "sudo -E apt-get install -y zip",
       "sudo unzip awscliv2.zip",
       "sudo ./aws/install",
-      "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y s3fs-fuse || echo 'Failed to install s3fs-fuse'",
-      "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y s3fs || echo 'Failed to install s3fs'"
+      "sudo -E apt-get install -y s3fs-fuse || echo 'Failed to install s3fs-fuse'",
+      "sudo -E apt-get install -y s3fs || echo 'Failed to install s3fs'"
     ]
   }
 
@@ -145,6 +168,10 @@ build {
   }
   
   provisioner "shell" {
+    environment_vars = [
+      "DEBIAN_FRONTEND=noninteractive",
+      "DEBCONF_NONINTERACTIVE_SEEN=true"
+    ]    
     only = ["amazon-ebs.orch"]
     inline = [
       "sudo mkdir -p /opt/aws/amazon-cloudwatch-agent/bin/",
@@ -153,7 +180,7 @@ build {
       "else",
       "  sudo wget https://amazoncloudwatch-agent.s3.amazonaws.com/ubuntu/arm64/latest/amazon-cloudwatch-agent.deb -O /tmp/amazon-cloudwatch-agent.deb",
       "fi",
-      "sudo dpkg -i /tmp/amazon-cloudwatch-agent.deb || sudo DEBIAN_FRONTEND=noninteractive apt-get install -f -y",
+      "sudo dpkg -i /tmp/amazon-cloudwatch-agent.deb || sudo -E apt-get install -f -y",
       "sudo systemctl enable amazon-cloudwatch-agent"
     ]
   }
