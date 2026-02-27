@@ -19,6 +19,11 @@ terraform {
       source  = "hashicorp/random"
       version = "3.5.1"
     }
+    # Null provider for running local-exec provisioners
+    null = {
+      source  = "hashicorp/null"
+      version = "3.2.2"
+    }
   }
 }
 
@@ -59,8 +64,8 @@ locals {
     }
     # Client nodes run workloads and containers
     client = {
-      instance_type_x86    = "c5.metal"
-      instance_type_arm    = "c7g.metal"
+      instance_type_x86    = var.client_instance_type
+      instance_type_arm    = var.client_instance_type
       desired_capacity = 1
       max_size         = 5
       min_size         = 0
@@ -75,8 +80,8 @@ locals {
     }
     # Build nodes for environment building (currently not active)
     build = {
-      instance_type_x86    = var.environment == "prod" ? "m6i.xlarge" : "t3.xlarge"
-      instance_type_arm    = var.environment == "prod" ? "m7g.xlarge" : "t4g.xlarge"
+      instance_type_x86    = var.client_instance_type
+      instance_type_arm    = var.client_instance_type
       desired_capacity = 0
       max_size         = 0
       min_size         = 0
@@ -608,6 +613,24 @@ resource "aws_launch_template" "client" {
   }
 
   depends_on = [aws_s3_object.setup_config_objects]
+}
+
+# Create a new launch template version with NestedVirtualization enabled via AWS CLI
+# Terraform AWS provider does not support the NestedVirtualization parameter in cpu_options
+resource "null_resource" "client_nested_virtualization" {
+  triggers = {
+    launch_template_id      = aws_launch_template.client.id
+    launch_template_version = aws_launch_template.client.latest_version
+  }
+
+  provisioner "local-exec" {
+    command = <<-EOT
+      aws ec2 create-launch-template-version \
+        --launch-template-id ${aws_launch_template.client.id} \
+        --source-version ${aws_launch_template.client.latest_version} \
+        --launch-template-data '{"CpuOptions":{"NestedVirtualization":"enabled"}}'
+    EOT
+  }
 }
 
 # Create client auto scaling group

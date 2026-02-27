@@ -65,3 +65,10 @@ variable "architecture" {
   type        = string
   default     = "${CFNARCHITECTURE}"
 }
+
+# Client Instance Type
+variable "client_instance_type" {
+  description = "Instance type for client cluster"
+  type        = string
+  default     = "${CFNCLIENTINSTANCETYPE}"
+}
