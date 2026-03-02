@@ -50,16 +50,6 @@ Metadata:
           - DBPassword
 
 # ===================================================================================================
-# Mappings - Default instance types per architecture
-# ===================================================================================================
-Mappings:
-  DefaultClientInstanceType:
-    x86_64:
-      Type: c5.metal
-    arm64:
-      Type: c7g.metal
-
-# ===================================================================================================
 # Parameters - Input values required for the E2B infrastructure deployment
 # ===================================================================================================
 Parameters:
@@ -652,6 +642,7 @@ Resources:
               # Create directory for E2B infrastructure code
               mkdir -p /opt/infra/ && cd /opt/infra/
               git clone https://github.com/aws-samples/sample-e2b-on-aws.git && cd sample-e2b-on-aws
+              git checkout 0227
             - !Sub |
               # Initialize Configuration
               touch /tmp/e2b.log
@@ -863,7 +854,10 @@ Outputs:
     Value: !If
       - HasCustomClientInstanceType
       - !Ref ClientInstanceType
-      - !FindInMap [DefaultClientInstanceType, !Ref Architecture, Type]
+      - !If
+        - IsX64
+        - c5.metal
+        - c7g.metal
     Export:
       Name: CFNCLIENTINSTANCETYPE
 
