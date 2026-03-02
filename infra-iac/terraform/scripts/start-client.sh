@@ -14,7 +14,6 @@ set -x
   while sudo fuser /var/lib/apt/lists/lock >/dev/null 2>&1 || \
         sudo fuser /var/lib/dpkg/lock >/dev/null 2>&1 || \
         sudo fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
-    log "apt 被其他进程占用，等待 5 秒..."
     sleep 5
   done
 
