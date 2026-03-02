@@ -15,6 +15,13 @@ set -x
 # Inspired by https://alestic.com/2010/12/ec2-user-data-output/
 exec > >(tee /var/log/user-data.log | logger -t user-data -s 2>/dev/console) 2>&1
 
+  while sudo fuser /var/lib/apt/lists/lock >/dev/null 2>&1 || \
+        sudo fuser /var/lib/dpkg/lock >/dev/null 2>&1 || \
+        sudo fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
+    log "apt 被其他进程占用，等待 5 秒..."
+    sleep 5
+  done
+
 sudo apt-get update
 sudo apt-get install -y amazon-ecr-credential-helper
 
