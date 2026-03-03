@@ -12,6 +12,8 @@ source "amazon-ebs" "orch" {
   ami_name      = "e2b-ubuntu-ami-${formatdate("YYYY-MM-DD-hh-mm-ss", timestamp())}"
   instance_type = var.architecture == "x86_64" ? "t3.xlarge" : "t4g.xlarge"
   region        = var.aws_region
+  vpc_id        = var.vpc_id
+  subnet_id     = var.subnet_id
 
   source_ami_filter {
      filters = {
@@ -24,18 +26,44 @@ source "amazon-ebs" "orch" {
     owners = ["amazon"] // 或实际拥有此 AMI 的 AWS 账户 ID
     most_recent = true
   }
-  
+
   ssh_username = "ubuntu"
-  
+
   # Enable nested virtualization
   ami_virtualization_type = "hvm"
-  
-  # Use EBS for the root volume
+
+  # Force IMDSv2
+  metadata_options {
+    http_endpoint               = "enabled"
+    http_tokens                 = "required"
+    http_put_response_hop_limit = 1
+  }
+
+  # Tags for the temporary instance and AMI
+  tags = {
+    team        = "GenAI"
+    service     = "GenAI"
+    owner       = "GenAI"
+    cost_center = "GenAI"
+    component   = "GenAI"
+  }
+
+  # Tags for the temporary instance only
+  run_tags = {
+    team        = "GenAI"
+    service     = "GenAI"
+    owner       = "GenAI"
+    cost_center = "GenAI"
+    component   = "GenAI"
+  }
+
+  # Use EBS for the root volume with encryption
   launch_block_device_mappings {
     device_name           = "/dev/sda1"
     volume_size           = 10
     volume_type           = "gp3"
     delete_on_termination = true
+    encrypted             = true
   }
 }
 

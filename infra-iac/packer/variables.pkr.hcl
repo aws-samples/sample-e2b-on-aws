@@ -36,6 +36,16 @@ variable "image_family" {
   default = "e2b-orch"
 }
 
+variable "vpc_id" {
+  type    = string
+  default = ""
+}
+
+variable "subnet_id" {
+  type    = string
+  default = ""
+}
+
 variable "consul_version" {
   type    = string
   default = "1.16.2"

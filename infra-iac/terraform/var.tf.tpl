@@ -72,3 +72,9 @@ variable "client_instance_type" {
   type        = string
   default     = "${CFNCLIENTINSTANCETYPE}"
 }
+
+variable "publicaccess" {
+  description = "Specify whether public or private access to E2B"
+  type        = string
+  default     = "${CFNPUBLICACCESS}"
+}
