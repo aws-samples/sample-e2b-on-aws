@@ -625,6 +625,8 @@ resource "aws_launch_template" "client" {
 # Create a new launch template version with NestedVirtualization enabled via AWS CLI
 # Terraform AWS provider does not support the NestedVirtualization parameter in cpu_options
 resource "null_resource" "client_nested_virtualization" {
+  count = endswith(var.client_instance_type, ".metal") ? 0 : 1
+
   triggers = {
     launch_template_id      = aws_launch_template.client.id
     launch_template_version = aws_launch_template.client.latest_version
