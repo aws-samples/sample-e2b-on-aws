@@ -718,6 +718,10 @@ Resources:
         - c6i.xlarge
         - c7g.xlarge
       KeyName: !Ref KeyName
+      MetadataOptions:
+        HttpTokens: required
+        HttpPutResponseHopLimit: 1
+        HttpEndpoint: enabled
       IamInstanceProfile: !Ref EC2InstanceProfile
       SubnetId: !Ref ExistingPrivateSubnet1Id
       SourceDestCheck: false
