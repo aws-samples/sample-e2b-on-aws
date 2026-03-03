@@ -38,6 +38,7 @@ Metadata:
           default: Domain Configuration
         Parameters:
           - BaseDomain
+          - ExistingCertificateArn
       - Label:
           default: Bastion Configuration
         Parameters:
@@ -85,6 +86,12 @@ Parameters:
       Wildcard certificate will be issued for *.{BaseDomain}
     AllowedPattern: '^([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}$'
     ConstraintDescription: Must be a valid domain (e.g. sub.domain.com)
+
+  ExistingCertificateArn:
+    Type: String
+    Description: ARN of an existing ACM certificate for *.{BaseDomain}
+    AllowedPattern: '^arn:aws:acm:[a-z0-9-]+:\d{12}:certificate/[a-f0-9-]+$'
+    ConstraintDescription: Must be a valid ACM certificate ARN
 
   # Existing VPC Configuration
   ExistingVpcId:
@@ -571,18 +578,6 @@ Resources:
       Description: PostgreSQL database password stored securely in AWS Systems Manager Parameter Store
 
   # ------------------------------------------------------------------------------------------------
-  # Certificate - SSL/TLS certificate for secure HTTPS communication
-  # ------------------------------------------------------------------------------------------------
-  WildcardCertificate:
-    Type: AWS::CertificateManager::Certificate
-    Properties:
-      DomainName: !Sub "*.${BaseDomain}"
-      ValidationMethod: DNS
-      DomainValidationOptions:
-        - DomainName: !Sub "*.${BaseDomain}"
-          ValidationDomain: !Ref BaseDomain
-
-  # ------------------------------------------------------------------------------------------------
   # S3 Buckets - Object storage for Terraform state files and software artifacts
   # ------------------------------------------------------------------------------------------------
   TerraformS3Bucket:
@@ -977,7 +972,7 @@ Outputs:
 
   CFNCERTARN:
     Description: SSL Certificate ARN for HTTPS endpoints
-    Value: !Ref WildcardCertificate
+    Value: !Ref ExistingCertificateArn
     Export:
       Name: CFNCERTARN
 
