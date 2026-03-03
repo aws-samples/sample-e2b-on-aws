@@ -31,6 +31,10 @@ Metadata:
         Parameters:
           - Architecture
       - Label:
+          default: Client Cluster Configuration
+        Parameters:
+          - ClientInstanceType
+      - Label:
           default: Domain Configuration
         Parameters:
           - BaseDomain
@@ -66,6 +70,12 @@ Parameters:
     AllowedValues:
       - x86_64
       - arm64
+
+  # Client Cluster Configuration - Instance type for client nodes
+  ClientInstanceType:
+    Description: "Instance type for client cluster nodes (must support nested virtualization, e.g. *.metal). Leave empty to use architecture default (x86: c5.metal, arm64: c7g.metal)."
+    Type: String
+    Default: ""
 
   # Domain Configuration - Settings for SSL certificate and DNS
   BaseDomain:
@@ -144,6 +154,7 @@ Conditions:
   IsX64: !Equals [!Ref Architecture, x86_64]
   IsArm64: !Equals [!Ref Architecture, arm64]
   IsProd: !Equals [!Ref Environment, prod]
+  HasCustomClientInstanceType: !Not [!Equals [!Ref ClientInstanceType, ""]]
 
 # ===================================================================================================
 # Resources - AWS resources to be provisioned for the E2B infrastructure
@@ -732,6 +743,16 @@ Resources:
       Tags:
         - Key: Name
           Value: !Sub "${AWS::StackName}-bastion"
+        - Key: team
+          Value: GenAI
+        - Key: service
+          Value: GenAI
+        - Key: owner
+          Value: GenAI
+        - Key: cost_center
+          Value: GenAI
+        - Key: component
+          Value: GenAI
       UserData: !Base64
         Fn::Join:
           - ""
@@ -790,7 +811,7 @@ Resources:
               # Create directory for E2B infrastructure code
               mkdir -p /opt/infra/ && cd /opt/infra/
               git clone https://github.com/aws-samples/sample-e2b-on-aws.git && cd sample-e2b-on-aws
-              git checkout existing-vpc
+              git checkout 0303
             - !Sub |
               # Initialize Configuration
               touch /tmp/e2b.log
@@ -984,6 +1005,18 @@ Outputs:
     Value: !Ref Architecture
     Export:
       Name: CFNARCHITECTURE
+
+  CLIENTINSTANCETYPE:
+    Description: Instance type for client cluster
+    Value: !If
+      - HasCustomClientInstanceType
+      - !Ref ClientInstanceType
+      - !If
+        - IsX64
+        - c5.metal
+        - c7g.metal
+    Export:
+      Name: CFNCLIENTINSTANCETYPE
 
   REGION:
     Description: E2B Cluster Deployment Region
