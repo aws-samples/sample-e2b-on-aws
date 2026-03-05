@@ -61,7 +61,8 @@ build {
       "while sudo fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do echo 'Waiting for dpkg lock...'; sleep 5; done",
       "while sudo fuser /var/lib/apt/lists/lock >/dev/null 2>&1; do echo 'Waiting for apt lock...'; sleep 5; done",
       "sudo systemctl stop apt-daily.service apt-daily-upgrade.service unattended-upgrades.service || true",
-      "sudo systemctl disable apt-daily.timer apt-daily-upgrade.timer || true"
+      "sudo systemctl disable apt-daily.timer apt-daily-upgrade.timer || true",
+      "sudo systemctl mask apt-daily.service apt-daily-upgrade.service unattended-upgrades.service || true"
     ]
   }
 

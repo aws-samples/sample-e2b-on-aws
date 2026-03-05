@@ -17,8 +17,8 @@ set -x
     sleep 5
   done
 
-sudo apt-get update
-sudo apt-get install -y amazon-ecr-credential-helper nvme-cli
+sudo apt-get -o DPkg::Lock::Timeout=300 update
+sudo apt-get -o DPkg::Lock::Timeout=300 install -y amazon-ecr-credential-helper nvme-cli
 
 # Send the log output from this script to user-data.log, syslog, and the console
 # Inspired by https://alestic.com/2010/12/ec2-user-data-output/
@@ -56,7 +56,7 @@ if [[ "$USE_LVM" == "true" ]]; then
 
     # 安装 LVM2 工具（如果未安装）
     if ! command -v pvcreate &>/dev/null; then
-        apt-get update && apt-get install -y lvm2
+        apt-get -o DPkg::Lock::Timeout=300 update && apt-get -o DPkg::Lock::Timeout=300 install -y lvm2
     fi
 
     # 查找所有本地 NVMe 实例存储设备（排除 EBS 卷）
@@ -226,7 +226,7 @@ mkdir -p $fc_versions_dir
 
 # Install s3fs-fuse if not already installed
 if ! command -v s3fs &>/dev/null; then
-    apt-get update && apt-get install -y s3fs
+    apt-get -o DPkg::Lock::Timeout=300 update && apt-get -o DPkg::Lock::Timeout=300 install -y s3fs
 fi
 
 # Mount S3 buckets using s3fs

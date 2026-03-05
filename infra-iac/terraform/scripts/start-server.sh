@@ -18,8 +18,8 @@ export GOMAXPROCS='nproc'
     sleep 5
   done
 
-sudo apt-get update
-sudo apt-get install -y amazon-ecr-credential-helper
+sudo apt-get -o DPkg::Lock::Timeout=300 update
+sudo apt-get -o DPkg::Lock::Timeout=300 install -y amazon-ecr-credential-helper
 
 aws s3 cp "s3://${SCRIPTS_BUCKET}/run-consul-${RUN_CONSUL_FILE_HASH}.sh" /opt/consul/bin/run-consul.sh
 aws s3 cp "s3://${SCRIPTS_BUCKET}/run-nomad-${RUN_NOMAD_FILE_HASH}.sh" /opt/nomad/bin/run-nomad.sh
