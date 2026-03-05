@@ -2,13 +2,10 @@ package handlers
 
 import (
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"strings"
-	"time"
 
-	"github.com/e2b-dev/infra/packages/docker-reverse-proxy/internal/auth"
 	"github.com/e2b-dev/infra/packages/docker-reverse-proxy/internal/cache"
 	"github.com/e2b-dev/infra/packages/docker-reverse-proxy/internal/constants"
 	"github.com/e2b-dev/infra/packages/docker-reverse-proxy/internal/utils"
@@ -98,54 +95,13 @@ func handleGCPProxy(a *APIStore, w http.ResponseWriter, req *http.Request, path 
 
 func handleAWSProxy(a *APIStore, w http.ResponseWriter, req *http.Request, path string, token *cache.AccessTokenData) {
 	templateID := token.TemplateID
-	
-	// 确保 ECR 仓库存在
-	err := auth.EnsureECRRepositoryExists(templateID)
-	if err != nil {
-		log.Printf("[ERROR] Error ensuring ECR repository exists: %v", err)
-		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte(fmt.Sprintf("Failed to ensure ECR repository exists: %v", err)))
-		return
-	}
 
 	log.Printf("[INFO] AWS Proxy - Request: %s %s", req.Method, req.URL.Path)
-	
+
 	// 使用缓存中的令牌，而不是每次都获取新的令牌
 	req.Header.Set("Authorization", fmt.Sprintf("Basic %s", token.DockerToken))
 	log.Printf("[DEBUG] AWS Proxy - Set Basic auth header for AWS ECR using cached token")
-	
-	// 测试认证是否有效
-	testClient := &http.Client{
-		Timeout: 5 * time.Second,
-	}
-	
-	// 获取 AWS 注册表主机
-	registryHost, err := constants.GetAWSRegistryHost()
-	if err != nil {
-		log.Printf("[ERROR] Failed to get AWS registry host: %v", err)
-	} else {
-		testReq, _ := http.NewRequest("GET", fmt.Sprintf("https://%s/v2/", registryHost), nil)
-		testReq.Header.Set("Authorization", fmt.Sprintf("Basic %s", token.DockerToken))
-		testResp, testErr := testClient.Do(testReq)
-		if testErr != nil {
-			log.Printf("[ERROR] AWS ECR Auth Test - Failed to connect: %v", testErr)
-		} else {
-			defer testResp.Body.Close()
-			log.Printf("[INFO] AWS ECR Auth Test - Status: %d", testResp.StatusCode)
-			if testResp.StatusCode == http.StatusOK {
-				log.Printf("[INFO] AWS ECR Auth Test - Basic auth successful")
-			} else if testResp.StatusCode == http.StatusUnauthorized {
-				log.Printf("[ERROR] AWS ECR Auth Test - Basic auth failed (Unauthorized)")
-				respBody, _ := io.ReadAll(testResp.Body)
-				log.Printf("[ERROR] AWS ECR Auth Test - Response: %s", string(respBody))
-			} else {
-				log.Printf("[WARN] AWS ECR Auth Test - Unexpected status code")
-				respBody, _ := io.ReadAll(testResp.Body)
-				log.Printf("[WARN] AWS ECR Auth Test - Response: %s", string(respBody))
-			}
-		}
-	}
-	
+
 	// 客户端请求路径前缀
 	repoPrefix := "/v2/e2b/custom-envs/"
 	

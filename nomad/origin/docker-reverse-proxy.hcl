@@ -1,6 +1,6 @@
 job "docker-reverse-proxy" {
   datacenters = ["${aws_az1}", "${aws_az2}"]
-  node_pool = "default"
+  node_pool = "api"
   priority = 85
 
   group "docker-reverse-proxy" {
@@ -13,12 +13,13 @@ job "docker-reverse-proxy" {
     service {
       name = "docker-reverse-proxy"
       port = "docker-reverse-proxy"
+      task = "start"
 
       check {
         type     = "http"
         name     = "health"
         path     = "/health"
-        interval = "20s"
+        interval = "5s"
         timeout  = "5s"
         port     = "docker-reverse-proxy"
       }
@@ -45,6 +46,7 @@ job "docker-reverse-proxy" {
         CLOUD_PROVIDER             =   "aws"
         POSTGRES_CONNECTION_STRING = "${CFNDBURL}"
         DOMAIN_NAME                = "${CFNDOMAIN}"
+        AWS_REGION                 = "${AWSREGION}"
         AWS_ECR_REPOSITORY_NAME    = "e2bdev/base"
         LOG_LEVEL                  = "debug"
       }

@@ -39,24 +39,6 @@ source "amazon-ebs" "orch" {
     http_put_response_hop_limit = 1
   }
 
-  # Tags for the temporary instance and AMI
-  tags = {
-    team        = "GenAI"
-    service     = "GenAI"
-    owner       = "GenAI"
-    cost_center = "GenAI"
-    component   = "GenAI"
-  }
-
-  # Tags for the temporary instance only
-  run_tags = {
-    team        = "GenAI"
-    service     = "GenAI"
-    owner       = "GenAI"
-    cost_center = "GenAI"
-    component   = "GenAI"
-  }
-
   # Use EBS for the root volume with encryption
   launch_block_device_mappings {
     device_name           = "/dev/sda1"

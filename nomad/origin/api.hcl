@@ -49,6 +49,8 @@ job "api" {
         ORCHESTRATOR_PORT             = 5008
         TEMPLATE_MANAGER_HOST         = "template-manager.service.consul:5009"
         AWS_ENABLED                   = "true"
+        AWS_DOCKER_REPOSITORY_NAME    = "e2bdev/base"
+        AWS_REGION                   = "${AWSREGION}"
         POSTGRES_CONNECTION_STRING    = "${CFNDBURL}"
         SUPABASE_JWT_SECRETS          = "${CFNDBURL}"
         CLICKHOUSE_CONNECTION_STRING   = ""
@@ -74,6 +76,7 @@ job "api" {
         SANDBOX_ACCESS_TOKEN_HASH_SEED = "${admin_token}"
         # This is here just because it is required in some part of our code which is transitively imported
         TEMPLATE_BUCKET_NAME          = "skip"
+        BUILD_CONTEXT_BUCKET_NAME     = "${BUCKET_DOCKER_CONTEXTS}"
       }
 
       config {
@@ -82,6 +85,9 @@ job "api" {
         ports        = ["api"]
         args         = [
           "--port", "50001",
+        ]
+        volumes = [
+          "/var/run/docker.sock:/var/run/docker.sock",
         ]
       }
     }

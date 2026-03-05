@@ -917,9 +917,9 @@ resource "aws_lb_target_group" "docker-proxy" {
   tags = local.common_tags
 }
 
-# Attach client ASG to Docker proxy target group
+# Attach api ASG to Docker proxy target group
 resource "aws_autoscaling_attachment" "docker-proxy" {
-  autoscaling_group_name = aws_autoscaling_group.client.name
+  autoscaling_group_name = aws_autoscaling_group.api.name
   lb_target_group_arn    = aws_lb_target_group.docker-proxy.arn
 }
 

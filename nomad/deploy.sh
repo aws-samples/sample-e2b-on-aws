@@ -10,7 +10,7 @@ declare -A jobs_minimal=(
     ["orchestrator"]="deploy/orchestrator-deploy.hcl"
     ["client-proxy"]="deploy/edge-deploy.hcl"
     ["template-manager"]="deploy/template-manager-deploy.hcl"
-    # ["docker-reverse-proxy"]="deploy/docker-reverse-proxy-deploy.hcl"
+    ["docker-reverse-proxy"]="deploy/docker-reverse-proxy-deploy.hcl"
 )
 
 declare -A jobs_all=(
@@ -23,7 +23,7 @@ declare -A jobs_all=(
     ["client-proxy"]="deploy/edge-deploy.hcl"
     ["session-proxy"]="deploy/session-proxy-deploy.hcl"
     ["template-manager"]="deploy/template-manager-deploy.hcl"
-    # ["docker-reverse-proxy"]="deploy/docker-reverse-proxy-deploy.hcl"
+    ["docker-reverse-proxy"]="deploy/docker-reverse-proxy-deploy.hcl"
 )
 
 # Set default jobs array to jobs_all for help and listing functions

@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	// "strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -114,6 +115,66 @@ func NewGinServer(ctx context.Context, tel *telemetry.Client, logger *zap.Logger
 		"system",
 	}
 	r.Use(cors.New(config))
+
+	// v2 routes are not in the OpenAPI spec, so register them before the validator.
+	// v2 uses X-API-Key header (API Key auth) instead of Authorization: Bearer (Access Token auth).
+	v2Auth := auth.CreateGinAPIKeyMiddleware(apiStore.GetTeamFromAPIKey)
+	r.POST("/v2/templates", v2Auth, apiStore.PostV2Templates)
+	r.POST("/v2/templates/:templateID/builds/:buildID", v2Auth, apiStore.PostV2TemplatesTemplateIDBuildsBuildID)
+	r.GET("/v2/templates/:templateID/builds/:buildID/status", v2Auth, apiStore.GetV2TemplatesTemplateIDBuildsBuildIDStatus)
+	r.GET("/v2/templates/:templateID/files/:hash", v2Auth, apiStore.GetV2TemplatesTemplateIDFilesHash)
+
+	// Bridge: forward X-API-Key requests on v1 paths to v2 handlers.
+	// Python SDK 2.1.0 uses v1 paths with X-API-Key header, but the v1 OpenAPI spec
+	// only defines AccessTokenAuth/Supabase1TokenAuth for those paths.
+	// NOTE: Cannot call v2Auth(c) directly because it calls c.Next() which would
+	// resume the middleware chain and trigger the OpenAPI validator.
+	v1BridgeAuth := func(c *gin.Context) bool {
+		apiKey := strings.TrimSpace(c.GetHeader("X-API-Key"))
+		if apiKey == "" || !strings.HasPrefix(apiKey, "e2b_") {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, api.Error{
+				Code:    http.StatusUnauthorized,
+				Message: "Invalid API key format",
+			})
+			return false
+		}
+		teamInfo, apiErr := apiStore.GetTeamFromAPIKey(c.Request.Context(), apiKey)
+		if apiErr != nil {
+			c.AbortWithStatusJSON(apiErr.Code, api.Error{
+				Code:    int32(apiErr.Code),
+				Message: apiErr.ClientMsg,
+			})
+			return false
+		}
+		c.Set(auth.TeamContextKey, teamInfo)
+		return true
+	}
+
+	// Register v1 files route directly with API Key auth (not in OpenAPI spec).
+	// SDK calls GET /templates/{templateID}/files/{hash} with X-API-Key header.
+	r.GET("/templates/:templateID/files/:hash", func(c *gin.Context) {
+		if !v1BridgeAuth(c) {
+			return
+		}
+		apiStore.GetV2TemplatesTemplateIDFilesHash(c)
+	})
+
+	// Bridge: forward X-API-Key requests on v1 build-status path to v2 handler.
+	// This middleware intercepts before the OpenAPI validator runs.
+	// NOTE: /templates/:templateID/builds/:buildID/status IS in the OpenAPI spec,
+	// so we use middleware to intercept X-API-Key requests before the validator.
+	r.Use(func(c *gin.Context) {
+		if c.GetHeader("X-API-Key") != "" &&
+			c.Request.Method == http.MethodGet &&
+			c.FullPath() == "/templates/:templateID/builds/:buildID/status" {
+			if v1BridgeAuth(c) {
+				apiStore.GetV2TemplatesTemplateIDBuildsBuildIDStatus(c)
+				c.Abort()
+			}
+			return
+		}
+		c.Next()
+	})
 
 	// Create a team API Key auth validator
 	AuthenticationFunc := auth.CreateAuthenticationFunc(

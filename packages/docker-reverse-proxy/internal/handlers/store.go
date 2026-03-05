@@ -63,6 +63,28 @@ func NewStore() *APIStore {
 
 	// Custom ModifyResponse function
 	proxy.ModifyResponse = func(resp *http.Response) error {
+		// 重写 ECR 返回的 Location header，确保 Docker client 继续通过 proxy
+		if loc := resp.Header.Get("Location"); loc != "" {
+			registryHost, err := constants.GetAWSRegistryHost()
+			if err == nil && constants.CurrentCloudProvider == constants.AWS {
+				baseRepo := strings.Trim(constants.AWSECRRepository, "/")
+				ecrPrefix := "/v2/" + baseRepo + "/"
+				proxyPrefix := "/v2/e2b/custom-envs/"
+
+				newLoc := loc
+				// 去掉 ECR 主机名（变成相对路径）
+				ecrSchemeHost := "https://" + registryHost
+				newLoc = strings.TrimPrefix(newLoc, ecrSchemeHost)
+				// ECR 路径转回 proxy 路径
+				newLoc = strings.Replace(newLoc, ecrPrefix, proxyPrefix, 1)
+
+				if newLoc != loc {
+					resp.Header.Set("Location", newLoc)
+					log.Printf("[DEBUG] ModifyResponse - Rewrote Location: %s -> %s", loc, newLoc)
+				}
+			}
+		}
+
 		// 记录所有响应，特别关注错误响应
 		if resp.StatusCode >= 400 {
 			log.Printf("[ERROR] Proxy Response - Status: %d, URL: %s, Method: %s", 
