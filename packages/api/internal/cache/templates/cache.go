@@ -136,9 +136,10 @@ func (c *TemplateCache) Invalidate(templateID string) {
 }
 
 type TemplateBuildInfo struct {
-	TeamID      uuid.UUID
-	TemplateID  string
-	BuildStatus envbuild.Status
+	TeamID        uuid.UUID
+	TemplateID    string
+	BuildStatus   envbuild.Status
+	FailureReason string
 
 	ClusterID     *uuid.UUID
 	ClusterNodeID *string
@@ -183,6 +184,7 @@ func (c *TemplatesBuildCache) SetStatus(buildID uuid.UUID, status envbuild.Statu
 	)
 
 	item.Value().BuildStatus = status
+	item.Value().FailureReason = reason
 }
 
 func (c *TemplatesBuildCache) Get(ctx context.Context, buildID uuid.UUID, templateID string) (*TemplateBuildInfo, error) {

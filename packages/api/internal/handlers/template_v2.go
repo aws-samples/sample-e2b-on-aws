@@ -633,26 +633,76 @@ func (a *APIStore) PostV2TemplatesTemplateIDBuildsBuildID(c *gin.Context) {
 				zap.String("templateID", templateID),
 				zap.String("buildID", buildIDStr))
 		} else if hasFromImage && !hasSteps {
-			// Existing flow: CopyImage (directly copy an existing image to ECR)
-			zap.L().Info("Starting image copy for v2 build",
-				zap.String("templateID", templateID),
-				zap.String("buildID", buildIDStr),
-				zap.String("fromImage", *body.FromImage))
-			if copyErr := awsRegistry.CopyImage(buildContext, *body.FromImage, templateID, buildUUID.String()); copyErr != nil {
-				zap.L().Error("Failed to copy image for v2 build",
+			fromImage := *body.FromImage
+			if artifacts_registry.IsDockerfileContent(fromImage) {
+				// New flow: Build Docker image from inline Dockerfile content
+				zap.L().Info("Starting Dockerfile content build for v2 build",
+					zap.String("templateID", templateID),
+					zap.String("buildID", buildIDStr))
+
+				contextDir, cleanup, writeErr := artifacts_registry.WriteDockerfileToDir(fromImage, templateID)
+				if writeErr != nil {
+					zap.L().Error("Failed to write Dockerfile content to temp dir",
+						zap.String("templateID", templateID),
+						zap.String("buildID", buildIDStr),
+						zap.Error(writeErr))
+					_ = a.templateManager.SetStatus(buildContext, templateID, buildUUID,
+						envbuild.StatusFailed, fmt.Sprintf("failed to prepare Dockerfile: %s", writeErr))
+					a.templateCache.Invalidate(templateID)
+					return
+				}
+				defer cleanup()
+
+				if buildImgErr := awsRegistry.BuildAndPushImage(buildContext, contextDir, templateID, buildUUID.String()); buildImgErr != nil {
+					zap.L().Error("Failed to build and push Docker image from Dockerfile content",
+						zap.String("templateID", templateID),
+						zap.String("buildID", buildIDStr),
+						zap.Error(buildImgErr))
+					_ = a.templateManager.SetStatus(buildContext, templateID, buildUUID,
+						envbuild.StatusFailed, fmt.Sprintf("failed to build Docker image: %s", buildImgErr))
+					a.templateCache.Invalidate(templateID)
+					return
+				}
+
+				zap.L().Info("Completed Docker build from Dockerfile content",
+					zap.String("templateID", templateID),
+					zap.String("buildID", buildIDStr))
+			} else {
+				// Check if it looks like a Dockerfile path — common mistake
+				if artifacts_registry.IsDockerfilePath(fromImage) {
+					errMsg := fmt.Sprintf(
+						"fromImage '%s' appears to be a Dockerfile path. "+
+							"Please pass the Dockerfile content (starting with FROM) instead of the filename. "+
+							"Example: Template().from_image(open('%s').read())", fromImage, fromImage)
+					zap.L().Warn("Detected Dockerfile path instead of content or image reference",
+						zap.String("templateID", templateID),
+						zap.String("fromImage", fromImage))
+					_ = a.templateManager.SetStatus(buildContext, templateID, buildUUID,
+						envbuild.StatusFailed, errMsg)
+					a.templateCache.Invalidate(templateID)
+					return
+				}
+				// Existing flow: CopyImage (directly copy an existing image to ECR)
+				zap.L().Info("Starting image copy for v2 build",
 					zap.String("templateID", templateID),
 					zap.String("buildID", buildIDStr),
-					zap.String("fromImage", *body.FromImage),
-					zap.Error(copyErr))
-				_ = a.templateManager.SetStatus(buildContext, templateID, buildUUID,
-					envbuild.StatusFailed, fmt.Sprintf("failed to copy image '%s': %s", *body.FromImage, copyErr))
-				a.templateCache.Invalidate(templateID)
-				return
+					zap.String("fromImage", fromImage))
+				if copyErr := awsRegistry.CopyImage(buildContext, fromImage, templateID, buildUUID.String()); copyErr != nil {
+					zap.L().Error("Failed to copy image for v2 build",
+						zap.String("templateID", templateID),
+						zap.String("buildID", buildIDStr),
+						zap.String("fromImage", fromImage),
+						zap.Error(copyErr))
+					_ = a.templateManager.SetStatus(buildContext, templateID, buildUUID,
+						envbuild.StatusFailed, fmt.Sprintf("failed to copy image '%s': %s", fromImage, copyErr))
+					a.templateCache.Invalidate(templateID)
+					return
+				}
+				zap.L().Info("Completed image copy for v2 build",
+					zap.String("templateID", templateID),
+					zap.String("buildID", buildIDStr),
+					zap.String("fromImage", fromImage))
 			}
-			zap.L().Info("Completed image copy for v2 build",
-				zap.String("templateID", templateID),
-				zap.String("buildID", buildIDStr),
-				zap.String("fromImage", *body.FromImage))
 		}
 		// else: no fromImage, no steps — go directly to CreateTemplate (use default base image)
 
@@ -919,7 +969,9 @@ func (a *APIStore) GetV2TemplatesTemplateIDBuildsBuildIDStatus(c *gin.Context) {
 	// Add reason for error status
 	if buildInfo.BuildStatus == envbuild.StatusFailed {
 		reason := "Build failed"
-		if len(logs) > 0 {
+		if buildInfo.FailureReason != "" {
+			reason = buildInfo.FailureReason
+		} else if len(logs) > 0 {
 			reason = logs[len(logs)-1]
 		}
 		result.Reason = &BuildStatusReasonV2{
