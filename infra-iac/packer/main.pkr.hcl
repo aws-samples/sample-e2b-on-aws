@@ -74,12 +74,15 @@ build {
 
   provisioner "shell" {
     inline = [
-      "echo 'Waiting for apt locks to be released...'",
+      "echo 'Waiting for cloud-init to finish...'",
       "cloud-init status --wait || true",
-      "while sudo fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do echo 'Waiting for dpkg lock...'; sleep 5; done",
-      "while sudo fuser /var/lib/apt/lists/lock >/dev/null 2>&1; do echo 'Waiting for apt lock...'; sleep 5; done",
+      "echo 'Stopping auto-update services...'",
       "sudo systemctl stop apt-daily.service apt-daily-upgrade.service unattended-upgrades.service || true",
-      "sudo systemctl disable apt-daily.timer apt-daily-upgrade.timer || true"
+      "sudo systemctl kill apt-daily.service apt-daily-upgrade.service unattended-upgrades.service || true",
+      "sudo systemctl disable apt-daily.timer apt-daily-upgrade.timer || true",
+      "echo 'Waiting for apt/dpkg locks to be released...'",
+      "for i in $(seq 1 60); do if sudo fuser /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock >/dev/null 2>&1; then echo \"Lock held, waiting... ($i/60)\"; sleep 5; else echo 'Locks released.'; break; fi; done",
+      "sleep 2"
     ]
   }
 
