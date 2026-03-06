@@ -21,51 +21,6 @@ import (
 	"github.com/e2b-dev/infra/packages/shared/pkg/storage"
 )
 
-// IsDockerfilePath checks if the string looks like a Dockerfile filename/path
-// rather than Docker image reference or Dockerfile content.
-func IsDockerfilePath(s string) bool {
-	s = strings.TrimSpace(s)
-	base := filepath.Base(s)
-	lower := strings.ToLower(base)
-	return lower == "dockerfile" || strings.HasPrefix(lower, "dockerfile.") ||
-		strings.HasSuffix(lower, ".dockerfile")
-}
-
-// IsDockerfileContent checks if the given string looks like Dockerfile content
-// rather than a Docker image reference. It returns true if the string starts
-// with a FROM instruction (after stripping leading blank lines and comments).
-func IsDockerfileContent(s string) bool {
-	for _, line := range strings.Split(s, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
-			continue
-		}
-		return strings.HasPrefix(strings.ToUpper(trimmed), "FROM ")
-	}
-	return false
-}
-
-// WriteDockerfileToDir writes Dockerfile content to a temporary directory
-// and returns the directory path and a cleanup function.
-func WriteDockerfileToDir(content string, templateID string) (string, func(), error) {
-	contextDir, err := os.MkdirTemp("", fmt.Sprintf("dockerfile-ctx-%s-*", templateID))
-	if err != nil {
-		return "", nil, fmt.Errorf("failed to create temp directory: %w", err)
-	}
-
-	cleanup := func() {
-		os.RemoveAll(contextDir)
-	}
-
-	dockerfilePath := filepath.Join(contextDir, "Dockerfile")
-	if err := os.WriteFile(dockerfilePath, []byte(content), 0644); err != nil {
-		cleanup()
-		return "", nil, fmt.Errorf("failed to write Dockerfile: %w", err)
-	}
-
-	return contextDir, cleanup, nil
-}
-
 // TemplateBuildStep represents a single build step from the SDK.
 type TemplateBuildStep struct {
 	Type      string   `json:"type"`
