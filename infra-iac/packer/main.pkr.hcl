@@ -15,6 +15,8 @@ source "amazon-ebs" "orch" {
   vpc_id        = var.vpc_id
   subnet_id     = var.subnet_id
 
+  source_ami = var.custom_ami_id != "" ? var.custom_ami_id : null
+
   source_ami_filter {
      filters = {
        name = var.architecture == "x86_64" ? "ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*" : "ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-arm64-server-*"

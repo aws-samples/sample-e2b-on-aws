@@ -9,6 +9,7 @@ if [ -f "$CONFIG_FILE" ]; then
     # Parse the config file and extract AWSREGION
     AWSREGION=$(grep "^AWSREGION=" "$CONFIG_FILE" | cut -d'=' -f2)
     ARCHITECTURE=$(grep "^CFNARCHITECTURE=" "$CONFIG_FILE" | cut -d'=' -f2)
+    CUSTOM_AMI_ID=$(grep "^CFNCUSTOMAMI=" "$CONFIG_FILE" | cut -d'=' -f2)
 fi
 
 # Get Region from params or env or config file
@@ -54,4 +55,9 @@ VPC_ID=$(grep "^CFNVPCID=" "$CONFIG_FILE" | cut -d'=' -f2)
 SUBNET_ID=$(grep "^CFNPRIVATESUBNET1=" "$CONFIG_FILE" | cut -d'=' -f2)
 echo "Using VPC: ${VPC_ID}"
 echo "Using Subnet: ${SUBNET_ID}"
-packer build -only=amazon-ebs.orch -var "aws_region=${AWS_REGION}" -var "architecture=${ARCHITECTURE}" -var "vpc_id=${VPC_ID}" -var "subnet_id=${SUBNET_ID}" .
+PACKER_VARS="-var aws_region=${AWS_REGION} -var architecture=${ARCHITECTURE} -var vpc_id=${VPC_ID} -var subnet_id=${SUBNET_ID}"
+if [ -n "${CUSTOM_AMI_ID}" ]; then
+    echo "Using custom AMI: ${CUSTOM_AMI_ID}"
+    PACKER_VARS="${PACKER_VARS} -var custom_ami_id=${CUSTOM_AMI_ID}"
+fi
+packer build -only=amazon-ebs.orch ${PACKER_VARS} .

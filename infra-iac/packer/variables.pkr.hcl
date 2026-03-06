@@ -46,6 +46,12 @@ variable "subnet_id" {
   default = ""
 }
 
+variable "custom_ami_id" {
+  type        = string
+  default     = ""
+  description = "Custom AMI ID to use as the base image. Leave empty to use the default Ubuntu 22.04 AMI."
+}
+
 variable "consul_version" {
   type    = string
   default = "1.16.2"

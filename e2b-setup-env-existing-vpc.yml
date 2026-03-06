@@ -43,6 +43,7 @@ Metadata:
           default: Bastion Configuration
         Parameters:
           - KeyName
+          - CustomAmiId
       - Label:
           default: Database Configuration
         Parameters:
@@ -123,6 +124,13 @@ Parameters:
     Default: public
 
   # Bastion Configuration - Settings for the deployment and management server
+  CustomAmiId:
+    Type: String
+    Default: ""
+    Description: >-
+      Custom AMI ID for the bastion host and Packer base image.
+      Leave empty to use the default Ubuntu 22.04 official AMI.
+
   KeyName:
     Description: EC2 Key Pair name for SSH access to the bastion host (deployment server)
     Type: AWS::EC2::KeyPair::KeyName
@@ -162,6 +170,7 @@ Conditions:
   IsArm64: !Equals [!Ref Architecture, arm64]
   IsProd: !Equals [!Ref Environment, prod]
   HasCustomClientInstanceType: !Not [!Equals [!Ref ClientInstanceType, ""]]
+  HasCustomAmi: !Not [!Equals [!Ref CustomAmiId, ""]]
 
 # ===================================================================================================
 # Resources - AWS resources to be provisioned for the E2B infrastructure
@@ -728,9 +737,12 @@ Resources:
       EbsOptimized: true
       Monitoring: true
       ImageId: !If
-        - IsX64
-        - "{{resolve:ssm:/aws/service/canonical/ubuntu/server/22.04/stable/current/amd64/hvm/ebs-gp2/ami-id}}"
-        - "{{resolve:ssm:/aws/service/canonical/ubuntu/server/22.04/stable/current/arm64/hvm/ebs-gp2/ami-id}}"
+        - HasCustomAmi
+        - !Ref CustomAmiId
+        - !If
+          - IsX64
+          - "{{resolve:ssm:/aws/service/canonical/ubuntu/server/22.04/stable/current/amd64/hvm/ebs-gp2/ami-id}}"
+          - "{{resolve:ssm:/aws/service/canonical/ubuntu/server/22.04/stable/current/arm64/hvm/ebs-gp2/ami-id}}"
       BlockDeviceMappings:
         - DeviceName: /dev/sda1
           Ebs:
@@ -1016,6 +1028,12 @@ Outputs:
         - c7g.metal
     Export:
       Name: CFNCLIENTINSTANCETYPE
+
+  CFNCUSTOMAMI:
+    Description: Custom AMI ID (empty if using default)
+    Value: !Ref CustomAmiId
+    Export:
+      Name: CFNCUSTOMAMI
 
   REGION:
     Description: E2B Cluster Deployment Region
