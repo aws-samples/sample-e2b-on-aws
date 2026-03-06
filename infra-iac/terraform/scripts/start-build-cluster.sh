@@ -55,7 +55,7 @@ echo "Detected IAM Role: $IAM_ROLE"
 
 # Install s3fs-fuse if not already installed
 if ! command -v s3fs &>/dev/null; then
-    apt-get update && apt-get install -y s3fs
+    apt-get -o DPkg::Lock::Timeout=300 update && apt-get -o DPkg::Lock::Timeout=300 install -y s3fs
 fi
 
 # Mount S3 buckets using s3fs

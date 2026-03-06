@@ -34,6 +34,7 @@ import (
 	"github.com/e2b-dev/infra/packages/shared/pkg/db"
 	"github.com/e2b-dev/infra/packages/shared/pkg/env"
 	"github.com/e2b-dev/infra/packages/shared/pkg/models"
+	"github.com/e2b-dev/infra/packages/shared/pkg/storage"
 	"github.com/e2b-dev/infra/packages/shared/pkg/telemetry"
 )
 
@@ -68,6 +69,7 @@ type APIStore struct {
 	// but for now this is good
 	readMetricsFromClickHouse string
 	clustersPool              *edge.Pool
+	buildContextPresign       *storage.S3PresignService
 }
 
 func NewAPIStore(ctx context.Context, tel *telemetry.Client) *APIStore {
@@ -176,6 +178,21 @@ func NewAPIStore(ctx context.Context, tel *telemetry.Client) *APIStore {
 		zap.L().Fatal("initializing edge clusters pool failed", zap.Error(err))
 	}
 
+	// Initialize build context presign service (optional — only needed for SDK steps with COPY)
+	var buildContextPresign *storage.S3PresignService
+	if bucketName := os.Getenv("BUILD_CONTEXT_BUCKET_NAME"); bucketName != "" {
+		var presignErr error
+		buildContextPresign, presignErr = storage.NewS3PresignService(ctx, bucketName)
+		if presignErr != nil {
+			zap.L().Warn("Failed to initialize build context presign service, steps with COPY will be unavailable",
+				zap.Error(presignErr))
+		} else {
+			zap.L().Info("Initialized build context presign service", zap.String("bucket", bucketName))
+		}
+	} else {
+		zap.L().Info("BUILD_CONTEXT_BUCKET_NAME not set, build context file upload disabled")
+	}
+
 	templateBuildsCache := templatecache.NewTemplateBuildCache(dbClient)
 	templateManager, err := template_manager.New(ctx, tracer, tel.TracerProvider, tel.MeterProvider, dbClient, sqlcDB, clustersPool, lokiClient, templateBuildsCache)
 	if err != nil {
@@ -203,6 +220,7 @@ func NewAPIStore(ctx context.Context, tel *telemetry.Client) *APIStore {
 		envdAccessTokenGenerator:  accessTokenGenerator,
 		readMetricsFromClickHouse: readMetricsFromClickHouse,
 		clustersPool:              clustersPool,
+		buildContextPresign:       buildContextPresign,
 	}
 
 	// Wait till there's at least one, otherwise we can't create sandboxes yet

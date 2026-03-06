@@ -31,7 +31,10 @@ RUN --mount=type=cache,target=/root/.cache/go-build make build
 
 RUN chmod +x /build/api/bin/api
 
-FROM alpine:3.17
+FROM alpine:3.20
+
+# Install Docker CLI (communicates with host Docker daemon via mounted docker.sock)
+RUN apk add --no-cache docker-cli
 
 COPY --from=builder /build/api/bin/api .
 

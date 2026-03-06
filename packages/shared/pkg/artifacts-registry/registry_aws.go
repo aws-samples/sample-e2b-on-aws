@@ -105,6 +105,104 @@ func (g *AWSArtifactsRegistry) GetImage(ctx context.Context, templateId string, 
 	return img, nil
 }
 
+// CopyImage copies an image from sourceRef (full ECR URI) to the standard
+// build location {baseRepo}/{templateId}:{buildId}.
+// This enables v2 SDK builds where the user pre-pushes images to ECR.
+func (g *AWSArtifactsRegistry) CopyImage(ctx context.Context, sourceRef string, templateId string, buildId string) error {
+	// Resolve short image names (e.g. "e2bdev/desktop") to full ECR URI
+	sourceRef, err := g.resolveSourceRef(ctx, sourceRef)
+	if err != nil {
+		return fmt.Errorf("failed to resolve source reference: %w", err)
+	}
+
+	// 1. Parse source reference
+	src, err := name.ParseReference(sourceRef)
+	if err != nil {
+		return fmt.Errorf("failed to parse source image reference '%s': %w", sourceRef, err)
+	}
+
+	// 2. Get ECR auth
+	auth, err := g.getAuthToken(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get ECR auth token: %w", err)
+	}
+
+	// 3. Fetch source image
+	img, err := remote.Image(src, remote.WithAuth(auth))
+	if err != nil {
+		return fmt.Errorf("failed to fetch source image '%s': %w", sourceRef, err)
+	}
+
+	// 4. Ensure target ECR repository exists
+	targetRepoName := fmt.Sprintf("%s/%s", g.repositoryName, templateId)
+	if err := g.ensureRepository(ctx, targetRepoName); err != nil {
+		return fmt.Errorf("failed to ensure target repository: %w", err)
+	}
+
+	// 5. Get target reference using existing GetTag logic
+	targetTag, err := g.GetTag(ctx, templateId, buildId)
+	if err != nil {
+		return fmt.Errorf("failed to get target tag: %w", err)
+	}
+
+	dst, err := name.ParseReference(targetTag)
+	if err != nil {
+		return fmt.Errorf("failed to parse target reference '%s': %w", targetTag, err)
+	}
+
+	// 6. Write image to target
+	if err := remote.Write(dst, img, remote.WithAuth(auth)); err != nil {
+		return fmt.Errorf("failed to write image to '%s': %w", targetTag, err)
+	}
+
+	return nil
+}
+
+// ensureRepository creates the ECR repository if it doesn't exist.
+func (g *AWSArtifactsRegistry) ensureRepository(ctx context.Context, repoName string) error {
+	_, err := g.client.DescribeRepositories(ctx, &ecr.DescribeRepositoriesInput{
+		RepositoryNames: []string{repoName},
+	})
+	if err != nil {
+		// Repository not found → create it
+		mutability := types.ImageTagMutabilityMutable
+		_, err = g.client.CreateRepository(ctx, &ecr.CreateRepositoryInput{
+			RepositoryName:     &repoName,
+			ImageTagMutability: mutability,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to create ECR repository %s: %w", repoName, err)
+		}
+	}
+	return nil
+}
+
+// resolveSourceRef resolves a short image name (e.g. "e2bdev/desktop") to a full
+// ECR URI by prepending the registry domain. If the reference already contains a
+// registry domain (detected by a "." in the first path component), it is returned as-is.
+func (g *AWSArtifactsRegistry) resolveSourceRef(ctx context.Context, sourceRef string) (string, error) {
+	parts := strings.SplitN(sourceRef, "/", 2)
+	if strings.Contains(parts[0], ".") {
+		// Already has a registry domain
+		return sourceRef, nil
+	}
+
+	// Get ECR registry URL from auth token
+	res, err := g.client.GetAuthorizationToken(ctx, &ecr.GetAuthorizationTokenInput{})
+	if err != nil {
+		return "", fmt.Errorf("failed to get ECR registry URL: %w", err)
+	}
+	if len(res.AuthorizationData) == 0 || res.AuthorizationData[0].ProxyEndpoint == nil {
+		return "", fmt.Errorf("no ECR proxy endpoint found")
+	}
+
+	// ProxyEndpoint is "https://918380168589.dkr.ecr.us-west-2.amazonaws.com"
+	registryURL := strings.TrimPrefix(*res.AuthorizationData[0].ProxyEndpoint, "https://")
+	registryURL = strings.TrimPrefix(registryURL, "http://")
+
+	return fmt.Sprintf("%s/%s", registryURL, sourceRef), nil
+}
+
 func (g *AWSArtifactsRegistry) getAuthToken(ctx context.Context) (*authn.Basic, error) {
 	res, err := g.client.GetAuthorizationToken(ctx, &ecr.GetAuthorizationTokenInput{})
 	if err != nil {

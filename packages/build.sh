@@ -24,11 +24,11 @@ make build-and-upload-aws
 echo "client-proxy module build and upload completed successfully"
 
 # Build and upload docker-reverse-proxy module
-# echo "=== Building and uploading docker-reverse-proxy module ==="
-# cd "$PROJECT_ROOT/docker-reverse-proxy" || { echo "docker-reverse-proxy directory not found"; exit 1; }
-# echo "Current directory: $(pwd)"
-# make build-and-upload-aws
-# echo "docker-reverse-proxy module build and upload completed successfully"
+echo "=== Building and uploading docker-reverse-proxy module ==="
+cd "$PROJECT_ROOT/docker-reverse-proxy" || { echo "docker-reverse-proxy directory not found"; exit 1; }
+echo "Current directory: $(pwd)"
+make build-and-upload-aws
+echo "docker-reverse-proxy module build and upload completed successfully"
 
 # Build and upload orchestrator module
 echo "=== Building and uploading orchestrator module ==="
