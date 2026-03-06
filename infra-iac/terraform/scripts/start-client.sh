@@ -195,6 +195,9 @@ net.ipv4.tcp_max_syn_backlog = 65535
 # Increase the maximum number of memory map areas
 vm.max_map_count=1048576
 
+# Reserve static service ports from being used as ephemeral ports
+net.ipv4.ip_local_reserved_ports = 44313,50001
+
 EOF
 sudo sysctl -p
 

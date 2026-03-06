@@ -62,9 +62,11 @@ build {
       "sudo systemctl stop apt-daily.service apt-daily-upgrade.service unattended-upgrades.service || true",
       "sudo systemctl kill apt-daily.service apt-daily-upgrade.service unattended-upgrades.service || true",
       "sudo systemctl disable apt-daily.timer apt-daily-upgrade.timer || true",
+      "sudo systemctl mask apt-daily.service apt-daily-upgrade.service unattended-upgrades.service || true",
+      "sudo killall -9 apt-get apt dpkg unattended-upgr 2>/dev/null || true",
       "echo 'Waiting for apt/dpkg locks to be released...'",
-      "for i in $(seq 1 60); do if sudo fuser /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock >/dev/null 2>&1; then echo \"Lock held, waiting... ($i/60)\"; sleep 5; else echo 'Locks released.'; break; fi; done",
-      "sleep 2"
+      "for i in $(seq 1 60); do if sudo fuser /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock /var/cache/apt/archives/lock >/dev/null 2>&1; then echo \"Lock held, waiting... ($i/60)\"; sleep 5; else echo 'Locks released.'; break; fi; done",
+      "sleep 5"
     ]
   }
 
@@ -74,6 +76,7 @@ build {
       "DEBCONF_NONINTERACTIVE_SEEN=true"
     ]
     inline = [
+      "for i in $(seq 1 30); do if sudo fuser /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock /var/cache/apt/archives/lock >/dev/null 2>&1; then echo \"Apt lock held, waiting... ($i/30)\"; sleep 5; else break; fi; done",
       "sudo -E apt-get clean",
       "sudo -E apt-get update -y",
       "sudo -E apt-get upgrade -y",
