@@ -48,6 +48,7 @@ source "amazon-ebs" "orch" {
     owner       = "GenAI"
     cost_center = "GenAI"
     component   = "GenAI"
+    Image-Type  = "GoldenImage"
   }
 
   # Tags for the temporary instance only
