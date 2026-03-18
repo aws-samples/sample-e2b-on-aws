@@ -26,6 +26,7 @@ Metadata:
           default: Architecture Configuration
         Parameters:
           - Architecture
+          - ClientInstanceType
       - Label:
           default: Domain Configuration
         Parameters:
@@ -67,6 +68,12 @@ Parameters:
     AllowedValues:
       - x86_64
       - arm64
+
+  # Client Cluster Configuration - Instance type for client nodes
+  ClientInstanceType:
+    Description: "Instance type for client cluster nodes (must support nested virtualization, e.g. *.metal). Leave empty to use architecture default (x86: c5.metal, arm64: c7g.metal)."
+    Type: String
+    Default: ""
 
   # Domain Configuration - Settings for DNS
   BaseDomain:
@@ -138,6 +145,13 @@ Parameters:
     Type: String
     Default: ""
     Description: "(Optional) URL of a custom bash script to execute on EC2 instances after E2B services start. Supports S3 URLs (s3://bucket/script.sh) and HTTPS URLs."
+
+# ===================================================================================================
+# Conditions - Conditional logic for resource creation
+# ===================================================================================================
+Conditions:
+  IsX64: !Equals [!Ref Architecture, x86_64]
+  HasCustomClientInstanceType: !Not [!Equals [!Ref ClientInstanceType, ""]]
 
 # ===================================================================================================
 # Resources - AWS resources to be provisioned for the E2B infrastructure
@@ -587,6 +601,18 @@ Outputs:
     Value: !Ref ExistingRedisEndpoint
     Export:
       Name: CFNREDISURL
+
+  CLIENTINSTANCETYPE:
+    Description: Instance type for client cluster
+    Value: !If
+      - HasCustomClientInstanceType
+      - !Ref ClientInstanceType
+      - !If
+        - IsX64
+        - c5.metal
+        - c7g.metal
+    Export:
+      Name: CFNCLIENTINSTANCETYPE
 
   ENVIRONMENT:
     Description: E2B Environment

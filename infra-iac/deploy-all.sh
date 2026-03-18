@@ -5,7 +5,7 @@ cd "$SCRIPT_DIR/.."
 
 STACK_NAME="${1:?Usage: $0 <CloudFormation-StackName>}"
 touch /tmp/e2b.log
-echo "StackName=$STACK_NAME" >> /tmp/e2b.log
+echo "StackName=$STACK_NAME" > /tmp/e2b.log
 BUILD=$(git rev-parse --short HEAD)
 echo "BUILD=$BUILD" >> /tmp/e2b.log
 

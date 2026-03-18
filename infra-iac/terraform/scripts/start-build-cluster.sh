@@ -49,7 +49,8 @@ mkdir -p $fc_versions_dir
 
 
 # Mount S3 buckets using mountpoint-s3
-mount-s3 ${E2B_BUCKET} $envd_dir --prefix fc-env-pipeline/ --read-only --allow-other
+mkdir -p /tmp/mp_cache_envd /tmp/mp_cache_kernels /tmp/mp_cache_versions
+mount-s3 ${E2B_BUCKET} $envd_dir --prefix fc-env-pipeline/ --read-only --allow-other --cache /tmp/mp_cache_envd
 mount-s3 ${E2B_BUCKET} $kernels_dir --prefix fc-kernels/ --read-only --allow-other --cache /tmp/mp_cache_kernels
 mount-s3 ${E2B_BUCKET} $fc_versions_dir --prefix fc-versions/ --read-only --allow-other --cache /tmp/mp_cache_versions
 
