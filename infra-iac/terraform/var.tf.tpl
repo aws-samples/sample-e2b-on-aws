@@ -78,3 +78,21 @@ variable "publicaccess" {
   type        = string
   default     = "${CFNPUBLICACCESS}"
 }
+
+variable "custom_script_url" {
+  description = "URL of a custom bash script to execute on EC2 instances after E2B services start"
+  type        = string
+  default     = "${CFNCustomScriptUrl}"
+}
+
+variable "e2b_bucket" {
+  description = "Unified E2B S3 bucket name (created by CloudFormation)"
+  type        = string
+  default     = "${CFNTERRAFORMBUCKET}"
+}
+
+variable "loki_bucket" {
+  description = "Loki storage S3 bucket name (passed from CloudFormation)"
+  type        = string
+  default     = "${CFNLOKIBUCKET}"
+}

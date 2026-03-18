@@ -42,6 +42,7 @@ locals {
     "scripts/run-nomad.sh"               = substr(filesha256("${path.module}/scripts/run-nomad.sh"), 0, 5)
     "scripts/run-api-nomad.sh"           = substr(filesha256("${path.module}/scripts/run-api-nomad.sh"), 0, 5)
     "scripts/run-build-cluster-nomad.sh" = substr(filesha256("${path.module}/scripts/run-build-cluster-nomad.sh"), 0, 5)
+    "scripts/run-custom-script.sh"       = substr(filesha256("${path.module}/scripts/run-custom-script.sh"), 0, 5)
   }
 
   # Define common resource tags to be applied to all resources
@@ -109,58 +110,7 @@ data "aws_ami" "e2b" {
 # S3 BUCKETS
 # =========================================================
 
-# Bucket for Loki log storage
-resource "aws_s3_bucket" "loki_storage_bucket" {
-  bucket = "${var.prefix}-loki-storage-${local.account_id}"
-  force_destroy = var.environment == "prod" ? false : true
-  tags = local.common_tags
-}
 
-# Bucket for Docker contexts used by environments
-resource "aws_s3_bucket" "envs_docker_context" {
-  bucket = "${var.prefix}-envs-docker-context-${local.account_id}"
-  force_destroy = var.environment == "prod" ? false : true
-  tags = local.common_tags
-}
-
-# Bucket for cluster setup scripts and configuration
-resource "aws_s3_bucket" "setup_bucket" {
-  bucket = "${var.prefix}-cluster-setup-${local.account_id}"
-  force_destroy = var.environment == "prod" ? false : true
-  tags = local.common_tags
-}
-
-# Bucket for Firecracker kernels
-resource "aws_s3_bucket" "fc_kernels_bucket" {
-  bucket = "${var.prefix}-fc-kernels-${local.account_id}"
-  force_destroy = var.environment == "prod" ? false : true
-  tags = local.common_tags
-}
-
-# Bucket for Firecracker versions
-resource "aws_s3_bucket" "fc_versions_bucket" {
-  bucket = "${var.prefix}-fc-versions-${local.account_id}"
-  force_destroy = var.environment == "prod" ? false : true
-  tags = local.common_tags
-}
-
-# Bucket for Firecracker environment pipeline artifacts
-resource "aws_s3_bucket" "fc_env_pipeline_bucket" {
-  bucket = "${var.prefix}-fc-env-pipeline-${local.account_id}"
-  tags = local.common_tags
-}
-
-# Bucket for Firecracker templates
-resource "aws_s3_bucket" "fc_template_bucket" {
-  bucket = "${var.prefix}-fc-template-${local.account_id}"
-  tags = local.common_tags
-}
-
-# Bucket for Docker contexts
-resource "aws_s3_bucket" "docker_contexts_bucket" {
-  bucket = "${var.prefix}-docker-contexts-${local.account_id}"
-  tags = local.common_tags
-}
 
 
 # =========================================================
@@ -350,14 +300,15 @@ variable "setup_files" {
     "scripts/run-api-nomad.sh"           = "run-api-nomad",
     "scripts/run-build-cluster-nomad.sh" = "run-build-cluster-nomad",
     "scripts/run-consul.sh"              = "run-consul"
+    "scripts/run-custom-script.sh"       = "run-custom-script"
   }
 }
 
 # Upload setup scripts to S3
 resource "aws_s3_object" "setup_config_objects" {
   for_each = var.setup_files
-  bucket   = aws_s3_bucket.setup_bucket.bucket
-  key      = "${each.value}-${local.file_hash[each.key]}.sh"
+  bucket   = var.e2b_bucket
+  key      = "cluster-setup/${each.value}-${local.file_hash[each.key]}.sh"
   source   = "${path.module}/${each.key}"
   etag     = filemd5("${path.module}/${each.key}")
 }
@@ -446,14 +397,16 @@ resource "aws_launch_template" "server" {
   user_data = base64encode(templatefile("${path.module}/scripts/start-server.sh", {
     NUM_SERVERS                  = 3
     CLUSTER_TAG_NAME             = "server-cluster"
-    SCRIPTS_BUCKET               = aws_s3_bucket.setup_bucket.bucket
+    E2B_BUCKET                   = var.e2b_bucket
     NOMAD_TOKEN                  = aws_secretsmanager_secret_version.nomad_acl_token.secret_string
     CONSUL_TOKEN                 = aws_secretsmanager_secret_version.consul_acl_token.secret_string
     RUN_CONSUL_FILE_HASH         = local.file_hash["scripts/run-consul.sh"]
     RUN_NOMAD_FILE_HASH          = local.file_hash["scripts/run-nomad.sh"]
-    CONSUL_GOSSIP_ENCRYPTION_KEY = aws_secretsmanager_secret_version.consul_gossip_encryption_key.secret_string
-    AWS_REGION                   = local.aws_region
-    AWS_ACCOUNT_ID               = local.account_id
+    CONSUL_GOSSIP_ENCRYPTION_KEY     = aws_secretsmanager_secret_version.consul_gossip_encryption_key.secret_string
+    AWS_REGION                       = local.aws_region
+    AWS_ACCOUNT_ID                   = local.account_id
+    RUN_CUSTOM_SCRIPT_FILE_HASH     = local.file_hash["scripts/run-custom-script.sh"]
+    CUSTOM_SCRIPT_URL                = var.custom_script_url
   }))
 
   tag_specifications {
@@ -592,19 +545,17 @@ resource "aws_launch_template" "client" {
 
   user_data = base64encode(templatefile("${path.module}/scripts/start-client.sh", {
     CLUSTER_TAG_NAME             = "client-cluster"
-    SCRIPTS_BUCKET               = aws_s3_bucket.setup_bucket.bucket
-    FC_KERNELS_BUCKET_NAME       = aws_s3_bucket.fc_kernels_bucket.bucket
-    FC_VERSIONS_BUCKET_NAME      = aws_s3_bucket.fc_versions_bucket.bucket
-    FC_ENV_PIPELINE_BUCKET_NAME  = aws_s3_bucket.fc_env_pipeline_bucket.bucket
-    DOCKER_CONTEXTS_BUCKET_NAME  = aws_s3_bucket.docker_contexts_bucket.bucket
+    E2B_BUCKET                   = var.e2b_bucket
     AWS_REGION                   = local.aws_region
     AWS_ACCOUNT_ID               = local.account_id
     NOMAD_TOKEN                  = aws_secretsmanager_secret_version.nomad_acl_token.secret_string
     CONSUL_TOKEN                 = aws_secretsmanager_secret_version.consul_acl_token.secret_string
     RUN_CONSUL_FILE_HASH         = local.file_hash["scripts/run-consul.sh"]
     RUN_NOMAD_FILE_HASH          = local.file_hash["scripts/run-nomad.sh"]
-    CONSUL_GOSSIP_ENCRYPTION_KEY = aws_secretsmanager_secret_version.consul_gossip_encryption_key.secret_string
-    CONSUL_DNS_REQUEST_TOKEN     = aws_secretsmanager_secret_version.consul_dns_request_token.secret_string
+    CONSUL_GOSSIP_ENCRYPTION_KEY     = aws_secretsmanager_secret_version.consul_gossip_encryption_key.secret_string
+    CONSUL_DNS_REQUEST_TOKEN         = aws_secretsmanager_secret_version.consul_dns_request_token.secret_string
+    RUN_CUSTOM_SCRIPT_FILE_HASH     = local.file_hash["scripts/run-custom-script.sh"]
+    CUSTOM_SCRIPT_URL                = var.custom_script_url
   }))
 
   tag_specifications {
@@ -1038,19 +989,17 @@ resource "aws_launch_template" "api" {
 
   user_data = base64encode(templatefile("${path.module}/scripts/start-api.sh", {
     CLUSTER_TAG_NAME             = "api-cluster"
-    SCRIPTS_BUCKET               = aws_s3_bucket.setup_bucket.bucket
-    FC_KERNELS_BUCKET_NAME       = aws_s3_bucket.fc_kernels_bucket.bucket
-    FC_VERSIONS_BUCKET_NAME      = aws_s3_bucket.fc_versions_bucket.bucket
-    FC_ENV_PIPELINE_BUCKET_NAME  = aws_s3_bucket.fc_env_pipeline_bucket.bucket
-    DOCKER_CONTEXTS_BUCKET_NAME  = aws_s3_bucket.docker_contexts_bucket.bucket
+    E2B_BUCKET                   = var.e2b_bucket
     AWS_REGION                   = local.aws_region
     AWS_ACCOUNT_ID               = local.account_id
     NOMAD_TOKEN                  = aws_secretsmanager_secret_version.nomad_acl_token.secret_string
     CONSUL_TOKEN                 = aws_secretsmanager_secret_version.consul_acl_token.secret_string
     RUN_CONSUL_FILE_HASH         = local.file_hash["scripts/run-consul.sh"]
     RUN_NOMAD_FILE_HASH          = local.file_hash["scripts/run-api-nomad.sh"]
-    CONSUL_GOSSIP_ENCRYPTION_KEY = aws_secretsmanager_secret_version.consul_gossip_encryption_key.secret_string
-    CONSUL_DNS_REQUEST_TOKEN     = aws_secretsmanager_secret_version.consul_dns_request_token.secret_string
+    CONSUL_GOSSIP_ENCRYPTION_KEY     = aws_secretsmanager_secret_version.consul_gossip_encryption_key.secret_string
+    CONSUL_DNS_REQUEST_TOKEN         = aws_secretsmanager_secret_version.consul_dns_request_token.secret_string
+    RUN_CUSTOM_SCRIPT_FILE_HASH     = local.file_hash["scripts/run-custom-script.sh"]
+    CUSTOM_SCRIPT_URL                = var.custom_script_url
   }))
 
   tag_specifications {
@@ -1193,19 +1142,17 @@ resource "aws_launch_template" "build" {
 
   user_data = base64encode(templatefile("${path.module}/scripts/start-build-cluster.sh", {
     CLUSTER_TAG_NAME             = "build-cluster"
-    SCRIPTS_BUCKET               = aws_s3_bucket.setup_bucket.bucket
-    FC_KERNELS_BUCKET_NAME       = aws_s3_bucket.fc_kernels_bucket.bucket
-    FC_VERSIONS_BUCKET_NAME      = aws_s3_bucket.fc_versions_bucket.bucket
-    FC_ENV_PIPELINE_BUCKET_NAME  = aws_s3_bucket.fc_env_pipeline_bucket.bucket
-    DOCKER_CONTEXTS_BUCKET_NAME  = aws_s3_bucket.docker_contexts_bucket.bucket
+    E2B_BUCKET                   = var.e2b_bucket
     AWS_REGION                   = local.aws_region
     AWS_ACCOUNT_ID               = local.account_id
     NOMAD_TOKEN                  = aws_secretsmanager_secret_version.nomad_acl_token.secret_string
     CONSUL_TOKEN                 = aws_secretsmanager_secret_version.consul_acl_token.secret_string
     RUN_CONSUL_FILE_HASH         = local.file_hash["scripts/run-consul.sh"]
     RUN_NOMAD_FILE_HASH          = local.file_hash["scripts/run-build-cluster-nomad.sh"]
-    CONSUL_GOSSIP_ENCRYPTION_KEY = aws_secretsmanager_secret_version.consul_gossip_encryption_key.secret_string
-    CONSUL_DNS_REQUEST_TOKEN     = aws_secretsmanager_secret_version.consul_dns_request_token.secret_string
+    CONSUL_GOSSIP_ENCRYPTION_KEY     = aws_secretsmanager_secret_version.consul_gossip_encryption_key.secret_string
+    CONSUL_DNS_REQUEST_TOKEN         = aws_secretsmanager_secret_version.consul_dns_request_token.secret_string
+    RUN_CUSTOM_SCRIPT_FILE_HASH     = local.file_hash["scripts/run-custom-script.sh"]
+    CUSTOM_SCRIPT_URL                = var.custom_script_url
   }))
 
   tag_specifications {

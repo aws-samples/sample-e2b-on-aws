@@ -21,10 +21,15 @@ export GOMAXPROCS='nproc'
 sudo apt-get -o DPkg::Lock::Timeout=300 update
 sudo apt-get -o DPkg::Lock::Timeout=300 install -y amazon-ecr-credential-helper
 
-aws s3 cp "s3://${SCRIPTS_BUCKET}/run-consul-${RUN_CONSUL_FILE_HASH}.sh" /opt/consul/bin/run-consul.sh
-aws s3 cp "s3://${SCRIPTS_BUCKET}/run-nomad-${RUN_NOMAD_FILE_HASH}.sh" /opt/nomad/bin/run-nomad.sh
+aws s3 cp "s3://${E2B_BUCKET}/cluster-setup/run-consul-${RUN_CONSUL_FILE_HASH}.sh" /opt/consul/bin/run-consul.sh
+aws s3 cp "s3://${E2B_BUCKET}/cluster-setup/run-nomad-${RUN_NOMAD_FILE_HASH}.sh" /opt/nomad/bin/run-nomad.sh
 
 chmod +x /opt/consul/bin/run-consul.sh /opt/nomad/bin/run-nomad.sh
 
 /opt/consul/bin/run-consul.sh --server --cluster-tag-name "${CLUSTER_TAG_NAME}" --consul-token "${CONSUL_TOKEN}" --enable-gossip-encryption --gossip-encryption-key "${CONSUL_GOSSIP_ENCRYPTION_KEY}"
 /opt/nomad/bin/run-nomad.sh --server --num-servers "${NUM_SERVERS}" --consul-token "${CONSUL_TOKEN}" --nomad-token "${NOMAD_TOKEN}"
+
+# Download and execute custom script if provided
+aws s3 cp "s3://${E2B_BUCKET}/cluster-setup/run-custom-script-${RUN_CUSTOM_SCRIPT_FILE_HASH}.sh" /opt/run-custom-script.sh
+chmod +x /opt/run-custom-script.sh
+(/opt/run-custom-script.sh "${CUSTOM_SCRIPT_URL}") || true

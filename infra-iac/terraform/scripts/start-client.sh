@@ -35,12 +35,6 @@ INSTANCE_TYPE=$(curl -s -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" \
 echo "Detected instance type: $INSTANCE_TYPE"
 
 
-# 获取 IAM Role 名称 (使用 IMDSv2)
-IAM_ROLE=$(curl -s -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" \
-    http://169.254.169.254/latest/meta-data/iam/security-credentials/)
-echo "Detected IAM Role: $IAM_ROLE"
-
-
 
 # 使用 case 语句检查是否支持多盘 LVM
 USE_LVM=false
@@ -227,20 +221,14 @@ mkdir -p $kernels_dir
 fc_versions_dir="/fc-versions"
 mkdir -p $fc_versions_dir
 
-# Install s3fs-fuse if not already installed
-if ! command -v s3fs &>/dev/null; then
-    apt-get -o DPkg::Lock::Timeout=300 update && apt-get -o DPkg::Lock::Timeout=300 install -y s3fs
-fi
-
-# Mount S3 buckets using s3fs
-# 使用显式 IAM role 名称挂载 s3fs (而不是 iam_role=auto)
-s3fs ${FC_ENV_PIPELINE_BUCKET_NAME} $envd_dir -o iam_role=$IAM_ROLE,allow_other,ro,umask=0022
-s3fs ${FC_KERNELS_BUCKET_NAME} $kernels_dir -o iam_role=$IAM_ROLE,allow_other,ro,umask=0022,use_cache=/tmp/s3fs_cache_kernels
-s3fs ${FC_VERSIONS_BUCKET_NAME} $fc_versions_dir -o iam_role=$IAM_ROLE,allow_other,ro,umask=0022,use_cache=/tmp/s3fs_cache_versions
+# Mount S3 buckets using mountpoint-s3
+mount-s3 ${E2B_BUCKET} $envd_dir --prefix fc-env-pipeline/ --read-only --allow-other
+mount-s3 ${E2B_BUCKET} $kernels_dir --prefix fc-kernels/ --read-only --allow-other --cache /tmp/mp_cache_kernels
+mount-s3 ${E2B_BUCKET} $fc_versions_dir --prefix fc-versions/ --read-only --allow-other --cache /tmp/mp_cache_versions
 
 # These variables are passed in via Terraform template interpolation
-aws s3 cp "s3://${SCRIPTS_BUCKET}/run-consul-${RUN_CONSUL_FILE_HASH}.sh" /opt/consul/bin/run-consul.sh
-aws s3 cp "s3://${SCRIPTS_BUCKET}/run-nomad-${RUN_NOMAD_FILE_HASH}.sh" /opt/nomad/bin/run-nomad.sh
+aws s3 cp "s3://${E2B_BUCKET}/cluster-setup/run-consul-${RUN_CONSUL_FILE_HASH}.sh" /opt/consul/bin/run-consul.sh
+aws s3 cp "s3://${E2B_BUCKET}/cluster-setup/run-nomad-${RUN_NOMAD_FILE_HASH}.sh" /opt/nomad/bin/run-nomad.sh
 
 chmod +x /opt/consul/bin/run-consul.sh /opt/nomad/bin/run-nomad.sh
 
@@ -356,3 +344,8 @@ echo '_sbx_ssh() {
 }
 
 alias sbx-ssh=_sbx_ssh' >>/etc/profile
+
+# Download and execute custom script if provided
+aws s3 cp "s3://${E2B_BUCKET}/cluster-setup/run-custom-script-${RUN_CUSTOM_SCRIPT_FILE_HASH}.sh" /opt/run-custom-script.sh
+chmod +x /opt/run-custom-script.sh
+(/opt/run-custom-script.sh "${CUSTOM_SCRIPT_URL}") || true

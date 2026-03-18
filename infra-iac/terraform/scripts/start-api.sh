@@ -43,8 +43,8 @@ EOF
 sudo sysctl -p
 
 # These variables are passed in via Terraform template interpolation
-aws s3 cp "s3://${SCRIPTS_BUCKET}/run-consul-${RUN_CONSUL_FILE_HASH}.sh" /opt/consul/bin/run-consul.sh
-aws s3 cp "s3://${SCRIPTS_BUCKET}/run-api-nomad-${RUN_NOMAD_FILE_HASH}.sh" /opt/nomad/bin/run-nomad.sh
+aws s3 cp "s3://${E2B_BUCKET}/cluster-setup/run-consul-${RUN_CONSUL_FILE_HASH}.sh" /opt/consul/bin/run-consul.sh
+aws s3 cp "s3://${E2B_BUCKET}/cluster-setup/run-api-nomad-${RUN_NOMAD_FILE_HASH}.sh" /opt/nomad/bin/run-nomad.sh
 chmod +x /opt/consul/bin/run-consul.sh /opt/nomad/bin/run-nomad.sh
 
 mkdir -p /root/docker
@@ -79,3 +79,8 @@ systemctl restart systemd-resolved
     --dns-request-token "${CONSUL_DNS_REQUEST_TOKEN}" &
 
 /opt/nomad/bin/run-nomad.sh --consul-token "${CONSUL_TOKEN}" &
+
+# Download and execute custom script if provided
+aws s3 cp "s3://${E2B_BUCKET}/cluster-setup/run-custom-script-${RUN_CUSTOM_SCRIPT_FILE_HASH}.sh" /opt/run-custom-script.sh
+chmod +x /opt/run-custom-script.sh
+(/opt/run-custom-script.sh "${CUSTOM_SCRIPT_URL}") || true

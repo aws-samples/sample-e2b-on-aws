@@ -210,19 +210,13 @@ else
     echo "Warning: Failed to get ECR token"
 fi
 
-# Extract CFNREDISNAME value from the config file
-CFNREDISNAME=$(grep "^CFNREDISNAME=" "$CONFIG_FILE" | cut -d'=' -f2)
-
-
-REDIS_ENDPOINT=$(aws elasticache describe-serverless-caches \
-  --serverless-cache-name "$CFNREDISNAME" \
-  --query 'ServerlessCaches[0].Endpoint.Address' \
-  --output text)
+# Read Redis endpoint directly from CloudFormation output (CFNREDISURL)
+REDIS_ENDPOINT=$(grep "^CFNREDISURL=" "$CONFIG_FILE" | cut -d'=' -f2)
 
 if [ -n "$REDIS_ENDPOINT" ]; then
     echo "REDIS_ENDPOINT=${REDIS_ENDPOINT}" >> "$CONFIG_FILE"
 else
-    echo "Warning: Failed to get REDIS_ENDPOINT"
+    echo "Warning: CFNREDISURL not found in config file"
 fi
 
 echo "Configuration successfully appended to $CONFIG_FILE"

@@ -5,7 +5,7 @@ provider "aws" {
 terraform {
   backend "s3" {
     bucket     = "${CFNTERRAFORMBUCKET}"
-    key        = "${CFNSTACKNAME}/terraform.tfstate"
+    key        = "terraform-state/${CFNSTACKNAME}/terraform.tfstate"
     region     = "${AWSREGION}"
     encrypt    = true
   }

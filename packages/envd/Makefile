@@ -43,9 +43,9 @@ start-docker:
 
 build-and-upload:
 	make build
-	$(eval BUCKET_FC_ENV_PIPELINE := $(shell grep BUCKET_FC_ENV_PIPELINE /opt/config.properties | cut -d'=' -f2))
-	@echo "Using bucket: $(BUCKET_FC_ENV_PIPELINE)"
-	aws s3 cp bin/envd s3://$(BUCKET_FC_ENV_PIPELINE)/envd
+	$(eval BUCKET_E2B := $(shell grep BUCKET_E2B /opt/config.properties | cut -d'=' -f2))
+	@echo "Using bucket: $(BUCKET_E2B)"
+	aws s3 cp bin/envd s3://$(BUCKET_E2B)/fc-env-pipeline/envd
 
 .PHONY: generate
 generate:

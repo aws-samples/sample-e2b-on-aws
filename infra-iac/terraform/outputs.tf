@@ -1,42 +1,12 @@
 # S3 Buckets
 output "loki_storage_bucket_name" {
   description = "The name of the S3 bucket for Loki storage"
-  value       = aws_s3_bucket.loki_storage_bucket.bucket
+  value       = var.loki_bucket
 }
 
-output "envs_docker_context_bucket_name" {
-  description = "The name of the S3 bucket for Docker contexts"
-  value       = aws_s3_bucket.envs_docker_context.bucket
-}
-
-output "setup_bucket_name" {
-  description = "The name of the S3 bucket for cluster setup files"
-  value       = aws_s3_bucket.setup_bucket.bucket
-}
-
-output "fc_kernels_bucket_name" {
-  description = "The name of the S3 bucket for FC kernels"
-  value       = aws_s3_bucket.fc_kernels_bucket.bucket
-}
-
-output "fc_versions_bucket_name" {
-  description = "The name of the S3 bucket for FC versions"
-  value       = aws_s3_bucket.fc_versions_bucket.bucket
-}
-
-output "fc_env_pipeline_bucket_name" {
-  description = "The name of the S3 bucket for FC environment pipeline"
-  value       = aws_s3_bucket.fc_env_pipeline_bucket.bucket
-}
-
-output "fc_template_bucket_name" {
-  description = "The name of the S3 bucket for FC templates"
-  value       = aws_s3_bucket.fc_template_bucket.bucket
-}
-
-output "docker_contexts_bucket_name" {
-  description = "The name of the S3 bucket for Docker contexts"
-  value       = aws_s3_bucket.docker_contexts_bucket.bucket
+output "e2b_bucket_name" {
+  description = "The name of the unified E2B S3 bucket"
+  value       = var.e2b_bucket
 }
 
 # Secrets Manager Secrets
