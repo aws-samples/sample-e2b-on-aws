@@ -45,6 +45,7 @@ func (a *APIStore) GetSandboxesSandboxID(c *gin.Context, id string) {
 			StartedAt:       info.StartTime,
 			CpuCount:        api.CPUCount(info.VCpu),
 			MemoryMB:        api.MemoryMB(info.RamMB),
+			DiskSizeMB:      info.TotalDiskSizeMB,
 			EndAt:           info.GetEndTime(),
 			State:           api.Running,
 			EnvdVersion:     &info.EnvdVersion,
@@ -83,6 +84,11 @@ func (a *APIStore) GetSandboxesSandboxID(c *gin.Context, id string) {
 		sbxAccessToken = &key
 	}
 
+	diskSizeMB := lastSnapshot.EnvBuild.FreeDiskSizeMb
+	if lastSnapshot.EnvBuild.TotalDiskSizeMb != nil {
+		diskSizeMB = *lastSnapshot.EnvBuild.TotalDiskSizeMb
+	}
+
 	sandbox := api.SandboxDetail{
 		ClientID:        "00000000", // for backwards compatibility we need to return a client id
 		TemplateID:      lastSnapshot.Snapshot.EnvID,
@@ -90,6 +96,7 @@ func (a *APIStore) GetSandboxesSandboxID(c *gin.Context, id string) {
 		StartedAt:       lastSnapshot.Snapshot.SandboxStartedAt.Time,
 		CpuCount:        cpuCount,
 		MemoryMB:        memoryMB,
+		DiskSizeMB:      diskSizeMB,
 		EndAt:           info.GetEndTime(),
 		State:           api.Paused,
 		EnvdVersion:     lastSnapshot.EnvBuild.EnvdVersion,

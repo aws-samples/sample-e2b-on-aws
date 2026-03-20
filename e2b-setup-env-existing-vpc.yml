@@ -28,6 +28,10 @@ Metadata:
           - Architecture
           - ClientInstanceType
       - Label:
+          default: Client Cluster Configuration
+        Parameters:
+          - ClientInstanceType
+      - Label:
           default: Domain Configuration
         Parameters:
           - BaseDomain
@@ -75,7 +79,7 @@ Parameters:
     Type: String
     Default: ""
 
-  # Domain Configuration - Settings for DNS
+  # Domain Configuration - Settings for SSL certificate and DNS
   BaseDomain:
     Type: String
     Description: >-
@@ -151,6 +155,8 @@ Parameters:
 # ===================================================================================================
 Conditions:
   IsX64: !Equals [!Ref Architecture, x86_64]
+  IsArm64: !Equals [!Ref Architecture, arm64]
+  IsProd: !Equals [!Ref Environment, prod]
   HasCustomClientInstanceType: !Not [!Equals [!Ref ClientInstanceType, ""]]
 
 # ===================================================================================================
@@ -625,6 +631,18 @@ Outputs:
     Value: !Ref Architecture
     Export:
       Name: CFNARCHITECTURE
+
+  CLIENTINSTANCETYPE:
+    Description: Instance type for client cluster
+    Value: !If
+      - HasCustomClientInstanceType
+      - !Ref ClientInstanceType
+      - !If
+        - IsX64
+        - c5.metal
+        - c7g.metal
+    Export:
+      Name: CFNCLIENTINSTANCETYPE
 
   REGION:
     Description: E2B Cluster Deployment Region

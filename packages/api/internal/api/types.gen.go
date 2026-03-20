@@ -301,6 +301,9 @@ type SandboxDetail struct {
 	// CpuCount CPU cores for the sandbox
 	CpuCount CPUCount `json:"cpuCount"`
 
+	// DiskSizeMB Disk size for the sandbox in MB
+	DiskSizeMB int64 `json:"diskSizeMB"`
+
 	// EndAt Time when the sandbox will expire
 	EndAt time.Time `json:"endAt"`
 
