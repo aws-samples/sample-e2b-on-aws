@@ -31,6 +31,10 @@ Metadata:
         Parameters:
           - Architecture
       - Label:
+          default: Client Cluster Configuration
+        Parameters:
+          - ClientInstanceType
+      - Label:
           default: Domain Configuration
         Parameters:
           - BaseDomain
@@ -66,6 +70,12 @@ Parameters:
     AllowedValues:
       - x86_64
       - arm64
+
+  # Client Cluster Configuration - Instance type for client nodes
+  ClientInstanceType:
+    Description: "Instance type for client cluster nodes (must support nested virtualization, e.g. *.metal). Leave empty to use architecture default (x86: c5.metal, arm64: c7g.metal)."
+    Type: String
+    Default: ""
 
   # Domain Configuration - Settings for SSL certificate and DNS
   BaseDomain:
@@ -144,6 +154,7 @@ Conditions:
   IsX64: !Equals [!Ref Architecture, x86_64]
   IsArm64: !Equals [!Ref Architecture, arm64]
   IsProd: !Equals [!Ref Environment, prod]
+  HasCustomClientInstanceType: !Not [!Equals [!Ref ClientInstanceType, ""]]
 
 # ===================================================================================================
 # Resources - AWS resources to be provisioned for the E2B infrastructure
@@ -986,6 +997,18 @@ Outputs:
     Value: !Ref Architecture
     Export:
       Name: CFNARCHITECTURE
+
+  CLIENTINSTANCETYPE:
+    Description: Instance type for client cluster
+    Value: !If
+      - HasCustomClientInstanceType
+      - !Ref ClientInstanceType
+      - !If
+        - IsX64
+        - c5.metal
+        - c7g.metal
+    Export:
+      Name: CFNCLIENTINSTANCETYPE
 
   REGION:
     Description: E2B Cluster Deployment Region

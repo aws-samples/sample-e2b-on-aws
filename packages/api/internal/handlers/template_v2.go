@@ -310,9 +310,33 @@ func (a *APIStore) PostV2Templates(c *gin.Context) {
 				return
 			}
 		} else if aliasDB.EnvID != envID {
-			a.sendAPIStoreError(c, http.StatusForbidden, fmt.Sprintf("Alias '%s' already used", alias))
-			telemetry.ReportCriticalError(ctx, "alias already used", err, attribute.String("alias", alias))
-			return
+			if aliasDB.IsRenamable {
+				// Check if the old env belongs to the same team
+				oldEnv, oldEnvErr := tx.Env.Query().Where(env.ID(aliasDB.EnvID), env.TeamID(team.ID)).Only(ctx)
+				if oldEnvErr != nil || oldEnv == nil {
+					a.sendAPIStoreError(c, http.StatusForbidden, fmt.Sprintf("Alias '%s' already used", alias))
+					telemetry.ReportCriticalError(ctx, "alias already used by another team", oldEnvErr, attribute.String("alias", alias))
+					return
+				}
+				// Same team — re-claim alias to point to the new envID
+				_, delErr := tx.EnvAlias.Delete().Where(envalias.ID(alias)).Exec(ctx)
+				if delErr != nil {
+					a.sendAPIStoreError(c, http.StatusInternalServerError, fmt.Sprintf("Error when deleting old alias: %s", delErr))
+					telemetry.ReportCriticalError(ctx, "error when deleting old alias", delErr, attribute.String("alias", alias))
+					return
+				}
+				createErr := tx.EnvAlias.Create().SetEnvID(envID).SetIsRenamable(true).SetID(alias).Exec(ctx)
+				if createErr != nil {
+					a.sendAPIStoreError(c, http.StatusInternalServerError, fmt.Sprintf("Error when re-claiming alias '%s': %s", alias, createErr))
+					telemetry.ReportCriticalError(ctx, "error when re-claiming alias", createErr, attribute.String("alias", alias))
+					return
+				}
+				telemetry.ReportEvent(ctx, "re-claimed alias from previous build", attribute.String("env.alias", alias), attribute.String("env.old_env_id", aliasDB.EnvID))
+			} else {
+				a.sendAPIStoreError(c, http.StatusForbidden, fmt.Sprintf("Alias '%s' already used", alias))
+				telemetry.ReportCriticalError(ctx, "alias already used", err, attribute.String("alias", alias))
+				return
+			}
 		}
 
 		telemetry.ReportEvent(ctx, "inserted alias", attribute.String("env.alias", alias))
