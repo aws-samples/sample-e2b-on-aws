@@ -26,7 +26,6 @@ Metadata:
           default: Architecture Configuration
         Parameters:
           - Architecture
-          - ClientInstanceType
       - Label:
           default: Client Cluster Configuration
         Parameters:

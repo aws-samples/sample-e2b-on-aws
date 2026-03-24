@@ -250,7 +250,7 @@ resource "aws_iam_role" "infra_instances_role" {
   tags = local.common_tags
 }
 
-# Runtime access policy: S3 (bucket-scoped) + ECR (pull-only)
+# Runtime access policy: S3 (bucket-scoped) + ECR (pull/push)
 resource "aws_iam_role_policy" "runtime_access" {
   name = "${var.prefix}-runtime-access"
   role = aws_iam_role.infra_instances_role.id
@@ -264,7 +264,9 @@ resource "aws_iam_role_policy" "runtime_access" {
         Action = ["s3:*"]
         Resource = [
           "arn:aws:s3:::${var.e2b_bucket}",
-          "arn:aws:s3:::${var.e2b_bucket}/*"
+          "arn:aws:s3:::${var.e2b_bucket}/*",
+          "arn:aws:s3:::${var.loki_bucket}",
+          "arn:aws:s3:::${var.loki_bucket}/*"
         ]
       },
       {
@@ -281,7 +283,25 @@ resource "aws_iam_role_policy" "runtime_access" {
           "ecr:GetDownloadUrlForLayer",
           "ecr:BatchCheckLayerAvailability"
         ]
-        Resource = "arn:aws:ecr:*:${local.account_id}:repository/e2b-*"
+        Resource = [
+          "arn:aws:ecr:*:${local.account_id}:repository/e2b-*",
+          "arn:aws:ecr:*:${local.account_id}:repository/e2bdev/*",
+          "arn:aws:ecr:*:${local.account_id}:repository/docker-reverse-proxy"
+        ]
+      },
+      {
+        Sid    = "ECRImagePush"
+        Effect = "Allow"
+        Action = [
+          "ecr:PutImage",
+          "ecr:InitiateLayerUpload",
+          "ecr:UploadLayerPart",
+          "ecr:CompleteLayerUpload"
+        ]
+        Resource = [
+          "arn:aws:ecr:*:${local.account_id}:repository/e2b-*",
+          "arn:aws:ecr:*:${local.account_id}:repository/e2bdev/*"
+        ]
       }
     ]
   })
