@@ -35,7 +35,7 @@ source "amazon-ebs" "orch" {
   # Force IMDSv2
   metadata_options {
     http_endpoint               = "enabled"
-    http_tokens                 = "required"
+    http_tokens                 = "optional"
     http_put_response_hop_limit = 1
   }
 

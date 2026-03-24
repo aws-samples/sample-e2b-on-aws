@@ -250,22 +250,41 @@ resource "aws_iam_role" "infra_instances_role" {
   tags = local.common_tags
 }
 
-# Attach S3 full access policy to the role
-resource "aws_iam_role_policy_attachment" "s3_full_access" {
-  role       = aws_iam_role.infra_instances_role.name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonS3FullAccess"
-}
+# Runtime access policy: S3 (bucket-scoped) + ECR (pull-only)
+resource "aws_iam_role_policy" "runtime_access" {
+  name = "${var.prefix}-runtime-access"
+  role = aws_iam_role.infra_instances_role.id
 
-# Attach ECR full access policy to the role
-resource "aws_iam_role_policy_attachment" "power_user_access" {
-  role       = aws_iam_role.infra_instances_role.name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryFullAccess"
-}
-
-# Attach Secrets Manager access policy to the role
-resource "aws_iam_role_policy_attachment" "secrets_manager_full_access" {
-  role       = aws_iam_role.infra_instances_role.name
-  policy_arn = "arn:aws:iam::aws:policy/SecretsManagerReadWrite"
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "S3BucketAccess"
+        Effect = "Allow"
+        Action = ["s3:*"]
+        Resource = [
+          "arn:aws:s3:::${var.e2b_bucket}",
+          "arn:aws:s3:::${var.e2b_bucket}/*"
+        ]
+      },
+      {
+        Sid      = "ECRAuthToken"
+        Effect   = "Allow"
+        Action   = ["ecr:GetAuthorizationToken"]
+        Resource = "*"
+      },
+      {
+        Sid    = "ECRImagePull"
+        Effect = "Allow"
+        Action = [
+          "ecr:BatchGetImage",
+          "ecr:GetDownloadUrlForLayer",
+          "ecr:BatchCheckLayerAvailability"
+        ]
+        Resource = "arn:aws:ecr:*:${local.account_id}:repository/e2b-*"
+      }
+    ]
+  })
 }
 
 # Attach SSM access policy for Systems Manager access
@@ -373,7 +392,7 @@ resource "aws_launch_template" "server" {
 
   metadata_options {
     http_endpoint               = "enabled"
-    http_tokens                 = "required"
+    http_tokens                 = "optional"
     http_put_response_hop_limit = 1
     instance_metadata_tags      = "enabled"
   }
@@ -511,7 +530,7 @@ resource "aws_launch_template" "client" {
 
   metadata_options {
     http_endpoint               = "enabled"
-    http_tokens                 = "required"
+    http_tokens                 = "optional"
     http_put_response_hop_limit = 1
     instance_metadata_tags      = "enabled"
   }
@@ -966,7 +985,7 @@ resource "aws_launch_template" "api" {
 
   metadata_options {
     http_endpoint               = "enabled"
-    http_tokens                 = "required"
+    http_tokens                 = "optional"
     http_put_response_hop_limit = 1
     instance_metadata_tags      = "enabled"
   }
@@ -1119,7 +1138,7 @@ resource "aws_launch_template" "build" {
 
   metadata_options {
     http_endpoint               = "enabled"
-    http_tokens                 = "required"
+    http_tokens                 = "optional"
     http_put_response_hop_limit = 1
     instance_metadata_tags      = "enabled"
   }

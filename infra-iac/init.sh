@@ -16,7 +16,7 @@ setup_environment() {
     done < <(
     aws cloudformation describe-stacks \
         --stack-name "$STACK_ID" \
-        --query "Stacks[0].Outputs[?ExportName != null && starts_with(ExportName || '', 'CFN')].[ExportName,OutputValue]" \
+        --query "Stacks[0].Outputs[?starts_with(OutputKey || '', 'CFN')].[OutputKey,OutputValue]" \
         --output text
     )
 

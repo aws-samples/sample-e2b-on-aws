@@ -135,10 +135,12 @@ Parameters:
     Type: String
     NoEcho: true
     Description: "PostgreSQL connection string (postgresql://user:pass@host:port/dbname)"
+    AllowedPattern: '^[a-zA-Z0-9:/@._\-]+$'
+    ConstraintDescription: "Only letters, numbers, and URL characters (:/@._-) are allowed. Avoid special characters ($!#'\"= etc.) in the password."
 
   ExistingRedisEndpoint:
     Type: String
-    Description: "Redis endpoint address (without port, e.g. xxx.serverless.use1.cache.amazonaws.com)"
+    Description: "Redis endpoint address (without port and with ssl on, e.g. xxx.serverless.use1.cache.amazonaws.com)"
 
   ExistingCertificateArn:
     Type: String
@@ -513,102 +515,102 @@ Outputs:
     Description: CloudFormation stack name for reference in other templates
     Value: !Ref AWS::StackName
     Export:
-      Name: CFNSTACKNAME
+      Name: !Sub "${AWS::StackName}-CFNSTACKNAME"
 
   # VPC outputs
   CFNVPCID:
     Description: VPC ID for the E2B infrastructure network
     Value: !Ref ExistingVpcId
     Export:
-      Name: CFNVPCID
+      Name: !Sub "${AWS::StackName}-CFNVPCID"
 
   CFNVPCCIDR:
     Description: VPC CIDR Block defining the overall network address space (automatically retrieved)
     Value: !GetAtt VpcCidrLookup.CidrBlock
     Export:
-      Name: CFNVPCCIDR
+      Name: !Sub "${AWS::StackName}-CFNVPCCIDR"
 
   # Public Access Configuration
   CFNPUBLICACCESS:
     Description: Public or Private access configuration
     Value: !Ref PublicAccess
     Export:
-      Name: CFNPUBLICACCESS
+      Name: !Sub "${AWS::StackName}-CFNPUBLICACCESS"
 
   # Subnet outputs
   CFNPRIVATESUBNET1:
     Description: Private Subnet ID in first availability zone for secure resources
     Value: !Ref ExistingPrivateSubnet1Id
     Export:
-      Name: CFNPRIVATESUBNET1
+      Name: !Sub "${AWS::StackName}-CFNPRIVATESUBNET1"
 
   CFNPRIVATESUBNET2:
     Description: Private Subnet ID in second availability zone for secure resources
     Value: !Ref ExistingPrivateSubnet2Id
     Export:
-      Name: CFNPRIVATESUBNET2
+      Name: !Sub "${AWS::StackName}-CFNPRIVATESUBNET2"
 
   CFNPUBLICSUBNET1:
     Description: Public Subnet ID in first availability zone for internet-facing resources
     Value: !Ref ExistingPublicSubnet1Id
     Export:
-      Name: CFNPUBLICSUBNET1
+      Name: !Sub "${AWS::StackName}-CFNPUBLICSUBNET1"
 
   CFNPUBLICSUBNET2:
     Description: Public Subnet ID in second availability zone for internet-facing resources
     Value: !Ref ExistingPublicSubnet2Id
     Export:
-      Name: CFNPUBLICSUBNET2
+      Name: !Sub "${AWS::StackName}-CFNPUBLICSUBNET2"
 
   # S3 bucket outputs
   CFNTERRAFORMBUCKET:
     Description: S3 bucket name for the unified E2B bucket
     Value: !Ref ExistingE2BBucketName
     Export:
-      Name: CFNTERRAFORMBUCKET
+      Name: !Sub "${AWS::StackName}-CFNTERRAFORMBUCKET"
 
   CFNLOKIBUCKET:
     Description: S3 bucket name for Loki log storage
     Value: !Ref ExistingLokiBucketName
     Export:
-      Name: CFNLOKIBUCKET
+      Name: !Sub "${AWS::StackName}-CFNLOKIBUCKET"
 
   # SSH key output
   CFNSSHKEY:
     Description: EC2 SSH Key Name for cluster instance access
     Value: !Ref KeyName
     Export:
-      Name: CFNSSHKEY
+      Name: !Sub "${AWS::StackName}-CFNSSHKEY"
 
   # Database connection string
   CFNDBURL:
     Description: Complete PostgreSQL connection string for application configuration
     Value: !Ref ExistingDBURL
     Export:
-      Name: CFNDBURL
+      Name: !Sub "${AWS::StackName}-CFNDBURL"
 
   # Domain output
   CFNDOMAIN:
     Description: Base domain name for E2B services
     Value: !Ref BaseDomain
     Export:
-      Name: CFNDOMAIN
+      Name: !Sub "${AWS::StackName}-CFNDOMAIN"
 
   # Certificate output
   CFNCERTARN:
     Description: SSL Certificate ARN for HTTPS endpoints
     Value: !Ref ExistingCertificateArn
     Export:
-      Name: CFNCERTARN
+      Name: !Sub "${AWS::StackName}-CFNCERTARN"
 
   # Redis output
   CFNREDISURL:
     Description: Redis endpoint address for application configuration
     Value: !Ref ExistingRedisEndpoint
     Export:
-      Name: CFNREDISURL
+      Name: !Sub "${AWS::StackName}-CFNREDISURL"
 
-  CLIENTINSTANCETYPE:
+  CFNCLIENTINSTANCETYPE:
     Description: Instance type for client cluster
     Value: !If
       - HasCustomClientInstanceType
@@ -618,46 +620,34 @@ Outputs:
         - c5.metal
         - c7g.metal
     Export:
-      Name: CFNCLIENTINSTANCETYPE
+      Name: !Sub "${AWS::StackName}-CFNCLIENTINSTANCETYPE"
 
   ENVIRONMENT:
     Description: E2B Environment
     Value: !Ref Environment
     Export:
-      Name: CFNENVIRONMENT
+      Name: !Sub "${AWS::StackName}-CFNENVIRONMENT"
 
   ARCHITECTURE:
     Description: E2B Cluster CPU Architecture
     Value: !Ref Architecture
     Export:
-      Name: CFNARCHITECTURE
-
-  CLIENTINSTANCETYPE:
-    Description: Instance type for client cluster
-    Value: !If
-      - HasCustomClientInstanceType
-      - !Ref ClientInstanceType
-      - !If
-        - IsX64
-        - c5.metal
-        - c7g.metal
-    Export:
-      Name: CFNCLIENTINSTANCETYPE
+      Name: !Sub "${AWS::StackName}-CFNARCHITECTURE"
 
   REGION:
     Description: E2B Cluster Deployment Region
     Value: !Ref AWS::Region
     Export:
-      Name: AWSREGION
+      Name: !Sub "${AWS::StackName}-AWSREGION"
 
   STACKNAME:
     Description: CloudFormation Stack Name
     Value: !Ref AWS::StackName
     Export:
-      Name: AWSSTACKNAME
+      Name: !Sub "${AWS::StackName}-AWSSTACKNAME"
 
   CFNCustomScriptUrl:
     Description: Custom script URL for EC2 instances
     Value: !Ref CustomScriptUrl
     Export:
-      Name: CFNCustomScriptUrl
+      Name: !Sub "${AWS::StackName}-CFNCustomScriptUrl"
