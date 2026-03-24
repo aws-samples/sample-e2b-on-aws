@@ -281,7 +281,8 @@ resource "aws_iam_role_policy" "runtime_access" {
         Action = [
           "ecr:BatchGetImage",
           "ecr:GetDownloadUrlForLayer",
-          "ecr:BatchCheckLayerAvailability"
+          "ecr:BatchCheckLayerAvailability",
+          "ecr:DescribeRepositories"
         ]
         Resource = [
           "arn:aws:ecr:*:${local.account_id}:repository/e2b-*",
@@ -296,7 +297,8 @@ resource "aws_iam_role_policy" "runtime_access" {
           "ecr:PutImage",
           "ecr:InitiateLayerUpload",
           "ecr:UploadLayerPart",
-          "ecr:CompleteLayerUpload"
+          "ecr:CompleteLayerUpload",
+          "ecr:CreateRepository"
         ]
         Resource = [
           "arn:aws:ecr:*:${local.account_id}:repository/e2b-*",
