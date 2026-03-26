@@ -136,16 +136,40 @@ if [[ "$USE_LVM" == "true" ]]; then
 
 else
     echo "Instance type $INSTANCE_TYPE uses single disk mode..."
-    # For AWS EBS volumes, typically the device will be /dev/nvme1n1 or similar
-    DISK="/dev/nvme1n1"
-    # Check for NVMe device (AWS uses NVMe)
-    if [ ! -e "$DISK" ]; then
-        # Find the first attached EBS volume that's not the root volume
-        DISK=$(lsblk -o NAME,TYPE -n | grep -v 'part\|lvm' | grep -v "$(df -h / | tail -1 | awk '{print $1}' | sed 's/\/dev\///')" | head -1 | awk '{print "/dev/"$1}')
+    # 动态检测数据盘：找到非根卷的 EBS 设备
+    ROOT_DEV=$(lsblk -no PKNAME $(findmnt -n -o SOURCE /) | head -1)
+    echo "Root device: /dev/$ROOT_DEV"
+
+    DISK=""
+    for dev in /dev/nvme*n1; do
+        if [[ -b "$dev" ]]; then
+            DEV_NAME=$(basename "$dev")
+            # 跳过根卷
+            if [[ "$DEV_NAME" == "$ROOT_DEV" ]]; then
+                echo "Skipping root device: $dev"
+                continue
+            fi
+            # 确认是 EBS 卷（序列号以 vol 开头）
+            SERIAL=$(nvme id-ctrl "$dev" 2>/dev/null | grep -i "sn" | awk '{print $3}')
+            if [[ "$SERIAL" =~ ^vol ]]; then
+                DISK="$dev"
+                echo "Found EBS data volume: $dev (SN: $SERIAL)"
+                break
+            fi
+        fi
+    done
+
+    if [[ -z "$DISK" ]]; then
+        echo "ERROR: No EBS data volume found!"
+        lsblk -o NAME,SIZE,TYPE,MOUNTPOINT
+        exit 1
     fi
 fi
 
 echo "Using disk: $DISK"
+
+# 确保设备未被挂载
+sudo umount "$DISK" 2>/dev/null || true
 
 # Step 1: Format the disk with XFS and standard block size
 sudo mkfs.xfs -f -b size=4096 $DISK
@@ -194,6 +218,9 @@ net.ipv4.tcp_max_syn_backlog = 65535
 
 # Increase the maximum number of memory map areas
 vm.max_map_count=1048576
+
+# Reserve static service ports from being used as ephemeral ports
+net.ipv4.ip_local_reserved_ports = 44313,50001
 
 EOF
 sudo sysctl -p

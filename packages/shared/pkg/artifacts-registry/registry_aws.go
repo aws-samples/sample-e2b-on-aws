@@ -121,19 +121,27 @@ func (g *AWSArtifactsRegistry) CopyImage(ctx context.Context, sourceRef string, 
 		return fmt.Errorf("failed to parse source image reference '%s': %w", sourceRef, err)
 	}
 
-	// 2. Get ECR auth
-	auth, err := g.getAuthToken(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to get ECR auth token: %w", err)
+	// 2. Fetch source image — use auth only for private ECR, anonymous for public sources
+	var img containerregistry.Image
+	if isPrivateECR(sourceRef) {
+		auth, err := g.getAuthToken(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to get ECR auth token: %w", err)
+		}
+		img, err = remote.Image(src, remote.WithAuth(auth))
+		if err != nil {
+			return fmt.Errorf("failed to fetch source image '%s': %w", sourceRef, err)
+		}
+	} else {
+		// Public images (Docker Hub, public.ecr.aws, etc.) — anonymous pull
+		var fetchErr error
+		img, fetchErr = remote.Image(src)
+		if fetchErr != nil {
+			return fmt.Errorf("failed to fetch source image '%s': %w", sourceRef, fetchErr)
+		}
 	}
 
-	// 3. Fetch source image
-	img, err := remote.Image(src, remote.WithAuth(auth))
-	if err != nil {
-		return fmt.Errorf("failed to fetch source image '%s': %w", sourceRef, err)
-	}
-
-	// 4. Ensure target ECR repository exists
+	// 3. Ensure target ECR repository exists
 	targetRepoName := fmt.Sprintf("%s/%s", g.repositoryName, templateId)
 	if err := g.ensureRepository(ctx, targetRepoName); err != nil {
 		return fmt.Errorf("failed to ensure target repository: %w", err)
@@ -150,8 +158,12 @@ func (g *AWSArtifactsRegistry) CopyImage(ctx context.Context, sourceRef string, 
 		return fmt.Errorf("failed to parse target reference '%s': %w", targetTag, err)
 	}
 
-	// 6. Write image to target
-	if err := remote.Write(dst, img, remote.WithAuth(auth)); err != nil {
+	// 6. Write image to target (always use ECR auth for the destination)
+	pushAuth, err := g.getAuthToken(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get ECR auth token for push: %w", err)
+	}
+	if err := remote.Write(dst, img, remote.WithAuth(pushAuth)); err != nil {
 		return fmt.Errorf("failed to write image to '%s': %w", targetTag, err)
 	}
 
@@ -177,30 +189,34 @@ func (g *AWSArtifactsRegistry) ensureRepository(ctx context.Context, repoName st
 	return nil
 }
 
-// resolveSourceRef resolves a short image name (e.g. "e2bdev/desktop") to a full
-// ECR URI by prepending the registry domain. If the reference already contains a
+// resolveSourceRef resolves image references. If the reference already contains a
 // registry domain (detected by a "." in the first path component), it is returned as-is.
+// Short names without a domain are treated as Docker Hub images.
 func (g *AWSArtifactsRegistry) resolveSourceRef(ctx context.Context, sourceRef string) (string, error) {
 	parts := strings.SplitN(sourceRef, "/", 2)
-	if strings.Contains(parts[0], ".") {
-		// Already has a registry domain
+	// Strip tag/digest before checking for domain dots
+	host := strings.SplitN(parts[0], ":", 2)[0]
+	if strings.Contains(host, ".") {
+		// Already has a registry domain (e.g. public.ecr.aws/..., 918xxx.dkr.ecr.../...)
 		return sourceRef, nil
 	}
 
-	// Get ECR registry URL from auth token
-	res, err := g.client.GetAuthorizationToken(ctx, &ecr.GetAuthorizationTokenInput{})
-	if err != nil {
-		return "", fmt.Errorf("failed to get ECR registry URL: %w", err)
+	// No domain → Docker Hub image
+	if len(parts) == 1 {
+		// Official image like "ubuntu:22.04" → "docker.io/library/ubuntu:22.04"
+		nameAndTag := strings.SplitN(sourceRef, ":", 2)
+		if len(nameAndTag) == 2 {
+			return fmt.Sprintf("docker.io/library/%s:%s", nameAndTag[0], nameAndTag[1]), nil
+		}
+		return fmt.Sprintf("docker.io/library/%s:latest", sourceRef), nil
 	}
-	if len(res.AuthorizationData) == 0 || res.AuthorizationData[0].ProxyEndpoint == nil {
-		return "", fmt.Errorf("no ECR proxy endpoint found")
-	}
+	// User image like "myuser/myrepo:tag" → "docker.io/myuser/myrepo:tag"
+	return fmt.Sprintf("docker.io/%s", sourceRef), nil
+}
 
-	// ProxyEndpoint is "https://918380168589.dkr.ecr.us-west-2.amazonaws.com"
-	registryURL := strings.TrimPrefix(*res.AuthorizationData[0].ProxyEndpoint, "https://")
-	registryURL = strings.TrimPrefix(registryURL, "http://")
-
-	return fmt.Sprintf("%s/%s", registryURL, sourceRef), nil
+// isPrivateECR checks if the image reference points to a private ECR registry.
+func isPrivateECR(ref string) bool {
+	return strings.Contains(ref, ".dkr.ecr.") && strings.Contains(ref, ".amazonaws.com")
 }
 
 func (g *AWSArtifactsRegistry) getAuthToken(ctx context.Context) (*authn.Basic, error) {

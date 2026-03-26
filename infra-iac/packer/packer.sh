@@ -1,4 +1,5 @@
 #!/bin/bash
+sudo mount -o remount,exec /tmp
 
 # Navigate to the directory containing the script
 cd "$(dirname "$0")"

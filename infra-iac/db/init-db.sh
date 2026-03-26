@@ -31,12 +31,14 @@ if [ ! -f "$CONFIG_FILE" ]; then
     exit 1
 fi
 
-# Read database connection information from config file
-DB_HOST=$(grep "^postgres_host=" "$CONFIG_FILE" | cut -d'=' -f2)
-DB_PORT=$(grep "^DB_PORT=" "$CONFIG_FILE" | cut -d'=' -f2)
-DB_NAME=$(grep "^DB_NAME=" "$CONFIG_FILE" | cut -d'=' -f2)
-DB_USER=$(grep "^postgres_user=" "$CONFIG_FILE" | cut -d'=' -f2)
-DB_PASSWORD=$(grep "^postgres_password=" "$CONFIG_FILE" | cut -d'=' -f2)
+# Read all database connection information from Secrets Manager
+DB_CREDENTIAL_SECRET=$(grep "^CFNDBCredentialSecretName=" "$CONFIG_FILE" | cut -d'=' -f2)
+DB_SECRET_JSON=$(aws secretsmanager get-secret-value --secret-id "$DB_CREDENTIAL_SECRET" --query SecretString --output text)
+DB_HOST=$(echo "$DB_SECRET_JSON" | jq -r '.host')
+DB_PORT=$(echo "$DB_SECRET_JSON" | jq -r '.port')
+DB_NAME=$(echo "$DB_SECRET_JSON" | jq -r '.dbname')
+DB_USER=$(echo "$DB_SECRET_JSON" | jq -r '.username')
+DB_PASSWORD=$(echo "$DB_SECRET_JSON" | jq -r '.password')
 
 # Check if all database variables are set
 for VAR_NAME in DB_HOST DB_PORT DB_NAME DB_USER DB_PASSWORD; do

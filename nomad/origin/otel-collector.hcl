@@ -94,7 +94,9 @@ receivers:
 
 processors:
   batch:
-    timeout: 5s
+    timeout: 15s
+    send_batch_size: 1500
+    send_batch_max_size: 2000
 
 
   # keep only metrics that are used
@@ -108,8 +110,6 @@ processors:
           - "template.*"
           - "api.*"
           - "client_proxy.*"
-
-          - "otelcol.*"
 
 
   filter/prometheus:
@@ -142,9 +142,9 @@ processors:
 
   resourcedetection:
     # https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/processor/resourcedetectionprocessor
-    detectors: [gcp]
+    detectors: [ec2]
     override: true
-    gcp:
+    ec2:
       resource_attributes:
         cloud.provider:
           enabled: false
@@ -160,8 +160,6 @@ processors:
           enabled: true
         host.id:
           enabled: true
-        gcp.gce.instance.name:
-          enabled: true
         host.name:
           enabled: true
 
@@ -173,7 +171,7 @@ processors:
       - delete_key(datapoint.attributes, "node_class")
       - delete_key(datapoint.attributes, "node_status")
       - delete_key(datapoint.attributes, "service_name")
-      - set(datapoint.attributes["service.instance.id"], resource.attributes["gcp.gce.instance.name"])
+      - set(datapoint.attributes["service.instance.id"], resource.attributes["host.name"])
 
   filter/rpc_duration_only:
     metrics:
@@ -186,11 +184,21 @@ processors:
     attributes:
       - action: delete
         key: service.instance.id
+  filter/logs_severity:
+    error_mode: ignore
+    logs:
+      log_record:
+        - 'severity_number < SEVERITY_NUMBER_WARN'
 extensions:
   basicauth/grafana_cloud:
     # https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/extension/basicauthextension
     client_auth:
       username: "${grafana_username}"
+      password: "${grafana_otel_collector_token}"
+
+  basicauth/grafana_cloud_prometheus:
+    client_auth:
+      username: "${grafana_prometheus_username}"
       password: "${grafana_otel_collector_token}"
 
   health_check:
@@ -203,6 +211,12 @@ exporters:
     endpoint: "${grafana_otlp_url}"
     auth:
       authenticator: basicauth/grafana_cloud
+  prometheusremotewrite/grafana_cloud:
+    endpoint: "https://prometheus-prod-36-prod-us-west-0.grafana.net/api/prom/push"
+    auth:
+      authenticator: basicauth/grafana_cloud_prometheus
+    resource_to_telemetry_conversion:
+      enabled: true
 service:
   telemetry:
     logs:
@@ -217,6 +231,7 @@ service:
                 endpoint: localhost:4317
   extensions:
     - basicauth/grafana_cloud
+    - basicauth/grafana_cloud_prometheus
     - health_check
   pipelines:
     metrics:
@@ -224,19 +239,19 @@ service:
         - otlp
       processors: [filter/otlp, resourcedetection, transform/set-name, batch]
       exporters:
-        - otlphttp/grafana_cloud
+        - prometheusremotewrite/grafana_cloud
     metrics/prometheus:
       receivers:
         - prometheus
       processors: [filter/prometheus, metricstransform, resourcedetection, transform/set-name, batch]
       exporters:
-        - otlphttp/grafana_cloud
+        - prometheusremotewrite/grafana_cloud
     metrics/rpc_only:
       receivers:
         - otlp
       processors: [filter/rpc_duration_only, resource/remove_instance, resourcedetection, transform/set-name, batch]
       exporters:
-        - otlphttp/grafana_cloud
+        - prometheusremotewrite/grafana_cloud
     traces:
       receivers:
         - otlp
@@ -246,7 +261,7 @@ service:
     logs:
       receivers:
         - otlp
-      processors: [batch]
+      processors: [filter/logs_severity, batch]
       exporters:
         - otlphttp/grafana_cloud
 EOF

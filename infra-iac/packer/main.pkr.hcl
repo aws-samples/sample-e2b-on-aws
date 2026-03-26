@@ -17,18 +17,6 @@ source "amazon-ebs" "orch" {
 
   source_ami = var.custom_ami_id != "" ? var.custom_ami_id : null
 
-  source_ami_filter {
-     filters = {
-       name = var.architecture == "x86_64" ? "ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*" : "ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-arm64-server-*"
-       root-device-type    = "ebs"
-       virtualization-type = "hvm"
-       state               = "available"
-       architecture        = var.architecture
-     }
-    owners = ["amazon"] // 或实际拥有此 AMI 的 AWS 账户 ID
-    most_recent = true
-  }
-
   ssh_username = "ubuntu"
 
   # Enable nested virtualization
@@ -63,7 +51,7 @@ source "amazon-ebs" "orch" {
   # Use EBS for the root volume with encryption
   launch_block_device_mappings {
     device_name           = "/dev/sda1"
-    volume_size           = 10
+    volume_size           = 20
     volume_type           = "gp3"
     delete_on_termination = true
     encrypted             = true
@@ -76,16 +64,21 @@ build {
   ]
 
   provisioner "shell" {
+      execute_command = "sudo -E bash '{{ .Path }}'"
     inline = [
+      "sudo mount -o remount,exec /tmp",
+      "echo 'web' | sudo tee /var/lib/teleport/team > /dev/null && sudo chown root:root /var/lib/teleport/team && sudo chmod 0644 /var/lib/teleport/team",
       "echo 'Waiting for cloud-init to finish...'",
       "cloud-init status --wait || true",
       "echo 'Stopping auto-update services...'",
       "sudo systemctl stop apt-daily.service apt-daily-upgrade.service unattended-upgrades.service || true",
       "sudo systemctl kill apt-daily.service apt-daily-upgrade.service unattended-upgrades.service || true",
       "sudo systemctl disable apt-daily.timer apt-daily-upgrade.timer || true",
+      "sudo systemctl mask apt-daily.service apt-daily-upgrade.service unattended-upgrades.service || true",
+      "sudo killall -9 apt-get apt dpkg unattended-upgr 2>/dev/null || true",
       "echo 'Waiting for apt/dpkg locks to be released...'",
-      "for i in $(seq 1 60); do if sudo fuser /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock >/dev/null 2>&1; then echo \"Lock held, waiting... ($i/60)\"; sleep 5; else echo 'Locks released.'; break; fi; done",
-      "sleep 2"
+      "for i in $(seq 1 60); do if sudo fuser /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock /var/cache/apt/archives/lock >/dev/null 2>&1; then echo \"Lock held, waiting... ($i/60)\"; sleep 5; else echo 'Locks released.'; break; fi; done",
+      "sleep 5"
     ]
   }
 
@@ -98,10 +91,34 @@ build {
       "sudo -E apt-get clean",
       "sudo -E apt-get update -y",
       "sudo -E apt-get upgrade -y",
-      "sudo -E apt-get install -y ca-certificates curl git"
+      "sudo -E apt-get install -y ca-certificates curl git rsync"
     ]
   }
-  
+
+  # Ensure systemd-resolved is active and /etc/resolv.conf uses the stub resolver (127.0.0.53)
+  provisioner "shell" {
+    inline = [
+      "sudo systemctl enable systemd-resolved",
+      "sudo systemctl start systemd-resolved",
+      "sudo ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf"
+    ]
+  }
+
+  # Install AWS-optimized kernel and update GRUB configuration
+  provisioner "shell" {
+    environment_vars = [
+      "DEBIAN_FRONTEND=noninteractive",
+      "DEBCONF_NONINTERACTIVE_SEEN=true"
+    ]
+    inline = [
+      "sudo -E apt-get install -y linux-aws",
+      "blkid -L cloudimg-rootfs | xargs blkid -s PARTUUID -o value | awk '{print \"GRUB_FORCE_PARTUUID=\"$1}' | sudo tee /etc/default/grub.d/40-force-partuuid.cfg > /dev/null",
+      "sudo chmod 755 /etc/default/grub.d/40-force-partuuid.cfg",
+      "sudo update-grub",
+      "sudo update-initramfs -u -k all"
+    ]
+  }
+
   provisioner "file" {
     source      = "${path.root}/setup/supervisord.conf"
     destination = "/tmp/supervisord.conf"
@@ -128,7 +145,7 @@ build {
       "sudo mkdir -p /etc/docker",
       "sudo mv /tmp/daemon.json /etc/docker/daemon.json",
       "sudo curl -fsSL https://get.docker.com -o get-docker.sh",
-      "sudo sh get-docker.sh",
+      "sudo sh get-docker.sh"
     ]
   }
 
@@ -139,7 +156,7 @@ build {
     ]
     inline = [
       "sudo -E apt-get update",
-      "sudo -E apt-get install -y unzip jq net-tools qemu-utils make build-essential openssh-client openssh-server", # TODO: openssh-server is updated to prevent security vulnerabilities
+      "sudo -E apt-get install -y unzip jq net-tools qemu-utils make build-essential openssh-client openssh-server" # TODO: openssh-server is updated to prevent security vulnerabilities
     ]
   }
   
@@ -173,7 +190,7 @@ build {
   provisioner "shell" {
     inline = [
       "sudo systemctl start docker",
-      "sudo usermod -aG docker $USER",
+      "sudo usermod -aG docker $USER"
     ]
   }
 
@@ -182,17 +199,18 @@ build {
       "sudo mkdir -p /opt/gruntwork",
       "git clone --branch v0.1.3 https://github.com/gruntwork-io/bash-commons.git /tmp/bash-commons",
       "sudo cp -r /tmp/bash-commons/modules/bash-commons/src /opt/gruntwork/bash-commons",
+      "sudo chmod -R a+rX /opt/gruntwork"
     ]
   }
 
   provisioner "shell" {
     script          = "${path.root}/setup/install-consul.sh"
-    execute_command = "chmod +x {{ .Path }}; {{ .Vars }} {{ .Path }} --version ${var.consul_version}"
+    execute_command =  "chmod +x {{ .Path }}; {{ .Vars }} sudo bash  {{ .Path }} --version ${var.consul_version}"
   }
 
   provisioner "shell" {
     script          = "${path.root}/setup/install-nomad.sh"
-    execute_command = "chmod +x {{ .Path }}; {{ .Vars }} {{ .Path }} --version ${var.nomad_version}"
+    execute_command =  "chmod +x {{ .Path }}; {{ .Vars }} sudo bash {{ .Path }} --version ${var.nomad_version}"
   }
 
   provisioner "shell" {

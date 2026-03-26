@@ -7,24 +7,19 @@ CONFIG_FILE="/opt/config.properties"
 if [ -f "$CONFIG_FILE" ]; then
   echo "找到配置文件: $CONFIG_FILE"
   # 只提取CFNDBURL变量，避免执行其他可能的命令
-  CFNDBURL=$(grep "^CFNDBURL=" "$CONFIG_FILE" | cut -d'=' -f2-)
-  
-  if [ -z "$CFNDBURL" ]; then
-    echo "错误: 配置文件中没有找到 CFNDBURL"
-    exit 1
-  fi
-  
-  echo "成功提取数据库连接信息"
+  echo "成功找到配置文件"
 else
   echo "错误: 配置文件 $CONFIG_FILE 不存在"
   exit 1
 fi
 
-# 从连接字符串中提取用户名、密码、主机和数据库名
-DB_USER=$(echo $CFNDBURL | sed -n 's/^postgresql:\/\/\([^:]*\):.*/\1/p')
-DB_PASSWORD=$(echo $CFNDBURL | sed -n 's/^postgresql:\/\/[^:]*:\([^@]*\)@.*/\1/p')
-DB_HOST=$(echo $CFNDBURL | sed -n 's/^postgresql:\/\/[^@]*@\([^\/]*\)\/.*/\1/p')
-DB_NAME=$(echo $CFNDBURL | sed -n 's/^postgresql:\/\/[^\/]*\/\(.*\)$/\1/p')
+# Read all database connection information from Secrets Manager
+DB_CREDENTIAL_SECRET=$(grep "^CFNDBCredentialSecretName=" "$CONFIG_FILE" | cut -d'=' -f2-)
+DB_SECRET_JSON=$(aws secretsmanager get-secret-value --secret-id "$DB_CREDENTIAL_SECRET" --query SecretString --output text)
+DB_HOST=$(echo "$DB_SECRET_JSON" | jq -r '.host')
+DB_USER=$(echo "$DB_SECRET_JSON" | jq -r '.username')
+DB_NAME=$(echo "$DB_SECRET_JSON" | jq -r '.dbname')
+DB_PASSWORD=$(echo "$DB_SECRET_JSON" | jq -r '.password')
 
 echo "检查数据库中的表..."
 

@@ -36,6 +36,9 @@ net.core.netdev_max_backlog = 65535
 
 # Increase maximum number of TCP sockets
 net.ipv4.tcp_max_syn_backlog = 65535
+
+# Reserve static service ports from being used as ephemeral ports
+net.ipv4.ip_local_reserved_ports = 50001
 EOF
 sudo sysctl -p
 
