@@ -235,8 +235,8 @@ EOH
 sudo udevadm control --reload-rules
 sudo udevadm trigger
 
-# Load the nbd module with 4096 devices
-sudo modprobe nbd nbds_max=4096
+# Load the nbd module with 512 devices
+sudo modprobe nbd nbds_max=512
 
 # Create the directory for the fc mounts
 mkdir -p /fc-vm
