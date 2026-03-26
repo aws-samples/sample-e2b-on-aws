@@ -1037,8 +1037,14 @@ Outputs:
       Name: CFNCLIENTINSTANCETYPE
 
   CFNCUSTOMAMI:
-    Description: Custom AMI ID (empty if using default)
-    Value: !Ref CustomAmiId
+    Description: AMI ID used for Packer base image
+    Value: !If
+      - HasCustomAmi
+      - !Ref CustomAmiId
+      - !If
+        - IsX64
+        - "{{resolve:ssm:/aws/service/canonical/ubuntu/server/22.04/stable/current/amd64/hvm/ebs-gp2/ami-id}}"
+        - "{{resolve:ssm:/aws/service/canonical/ubuntu/server/22.04/stable/current/arm64/hvm/ebs-gp2/ami-id}}"
     Export:
       Name: CFNCUSTOMAMI
 

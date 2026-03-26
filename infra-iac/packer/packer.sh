@@ -57,15 +57,6 @@ SUBNET_ID=$(grep "^CFNPRIVATESUBNET1=" "$CONFIG_FILE" | cut -d'=' -f2)
 echo "Using VPC: ${VPC_ID}"
 echo "Using Subnet: ${SUBNET_ID}"
 PACKER_VARS="-var aws_region=${AWS_REGION} -var architecture=${ARCHITECTURE} -var vpc_id=${VPC_ID} -var subnet_id=${SUBNET_ID}"
-if [ -n "${CUSTOM_AMI_ID}" ]; then
-    echo "Using custom AMI: ${CUSTOM_AMI_ID}"
-else
-    if [ "${ARCHITECTURE}" = "x86_64" ]; then
-        CUSTOM_AMI_ID=$(aws ssm get-parameter --name /aws/service/canonical/ubuntu/server/22.04/stable/current/amd64/hvm/ebs-gp2/ami-id --query Parameter.Value --output text)
-    else
-        CUSTOM_AMI_ID=$(aws ssm get-parameter --name /aws/service/canonical/ubuntu/server/22.04/stable/current/arm64/hvm/ebs-gp2/ami-id --query Parameter.Value --output text)
-    fi
-    echo "Using default Ubuntu 22.04 AMI: ${CUSTOM_AMI_ID}"
-fi
+echo "Using AMI: ${CUSTOM_AMI_ID}"
 PACKER_VARS="${PACKER_VARS} -var custom_ami_id=${CUSTOM_AMI_ID}"
 packer build -only=amazon-ebs.orch ${PACKER_VARS} .

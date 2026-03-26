@@ -15,7 +15,7 @@ source "amazon-ebs" "orch" {
   vpc_id        = var.vpc_id
   subnet_id     = var.subnet_id
 
-  source_ami = var.custom_ami_id != "" ? var.custom_ami_id : null
+  source_ami = var.custom_ami_id
 
   ssh_username = "ubuntu"
 
