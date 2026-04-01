@@ -560,15 +560,16 @@ Resources:
         - !Ref EC2ServiceRole
 
   # ------------------------------------------------------------------------------------------------
-  # Parameter Store - Secure storage for sensitive configuration values
+  # Secrets Manager - Encrypted storage for database credentials
   # ------------------------------------------------------------------------------------------------
-  DBPasswordParameter:
-    Type: AWS::SSM::Parameter
+  DBCredentialSecret:
+    Type: AWS::SecretsManager::Secret
     Properties:
-      Name: !Sub "e2b-${AWS::StackName}-db-password"
-      Type: String
-      Value: !Ref DBPassword
-      Description: PostgreSQL database password stored securely in AWS Systems Manager Parameter Store
+      Name: !Sub "e2b-${AWS::StackName}-db-credential"
+      Description: PostgreSQL database credentials (JSON) encrypted in AWS Secrets Manager
+      SecretString: !Sub
+        - '{"host":"${DBEndpoint}","port":"5432","dbname":"${DBName}","username":"${DBUsername}","password":"${DBPassword}"}'
+        - DBEndpoint: !GetAtt AuroraCluster.Endpoint.Address
 
   # ------------------------------------------------------------------------------------------------
   # Certificate - SSL/TLS certificate for secure HTTPS communication
@@ -951,14 +952,20 @@ Outputs:
     Export:
       Name: CFNSSHKEY
 
-  # Database connection string
+  # Database connection string (password stored separately in Secrets Manager)
   CFNDBURL:
-    Description: Complete PostgreSQL connection string for application configuration
+    Description: PostgreSQL connection string (password stored in Secrets Manager)
     Value: !Sub
-      - "postgresql://${DBUsername}:${DBPassword}@${DBEndpoint}/${DBName}"
+      - "postgresql://${DBUsername}@${DBEndpoint}/${DBName}"
       - DBEndpoint: !GetAtt AuroraCluster.Endpoint.Address
     Export:
       Name: CFNDBURL
+
+  CFNDBCredentialSecretName:
+    Description: Secrets Manager secret name for database credentials
+    Value: !Sub "e2b-${AWS::StackName}-db-credential"
+    Export:
+      Name: CFNDBCredentialSecretName
 
   # Domain and certificate outputs
   CFNDOMAIN:

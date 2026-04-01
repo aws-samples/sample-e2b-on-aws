@@ -159,28 +159,8 @@ if [ -n "$CFNAZ2" ]; then
 else
     echo "Warning: CFNAZ2 not found in config file, cannot set aws_az2"
 fi
-# Parse CFNDBURL to extract postgres host, port, username and password
-DB_URL=$(grep "^CFNDBURL=" "$CONFIG_FILE" | cut -d'=' -f2)
-if [ -n "$DB_URL" ]; then
-    # Extract host and port from URL (format: postgresql://user:pass@host:port/dbname)
-    HOST_PORT=$(echo "$DB_URL" | sed -E 's|.*@([^/]+)/.*|\1|')
-    DB_HOST=$(echo "$HOST_PORT" | cut -d':' -f1)
-    DB_PORT=$(echo "$HOST_PORT" | cut -d':' -f2 2>/dev/null || echo "5432")
-    DB_NAME=$(echo "$DB_URL" | sed -E 's|.*/([^?]+).*|\1|' || echo "postgres")
-    
-    # Extract username and password
-    USER_PASS=$(echo "$DB_URL" | sed -E 's|.*://([^@]+)@.*|\1|')
-    DB_USER=$(echo "$USER_PASS" | cut -d':' -f1)
-    DB_PASS=$(echo "$USER_PASS" | cut -d':' -f2)
-    
-    echo "postgres_host=${DB_HOST}" >> "$CONFIG_FILE"
-    echo "DB_PORT=5432" >> "$CONFIG_FILE"
-    echo "DB_NAME=${DB_NAME}" >> "$CONFIG_FILE"
-    echo "postgres_user=${DB_USER}" >> "$CONFIG_FILE"
-    echo "postgres_password=${DB_PASS}" >> "$CONFIG_FILE"
-else
-    echo "Warning: CFNDBURL not found in config file, cannot set postgres parameters"
-fi
+# Database credentials are stored in Secrets Manager (CFNDBCredentialSecretName in config file)
+# No DB parameters (host, port, user, password) written to config file
 
 # Set Nomad ACL token from the secret
 NOMAD_TOKEN=$(grep -i "NOMAD_SECRET_ID=" "$CONFIG_FILE" | cut -d'=' -f2)

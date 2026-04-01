@@ -10,20 +10,14 @@ if [ ! -f "$CONFIG_FILE" ]; then
   exit 1
 fi
 
-# 只提取CFNDBURL变量，避免执行其他可能的命令
-CFNDBURL=$(grep "^CFNDBURL=" "$CONFIG_FILE" | cut -d'=' -f2-)
+# Read all database connection information from Secrets Manager
+DB_CREDENTIAL_SECRET=$(grep "^CFNDBCredentialSecretName=" "$CONFIG_FILE" | cut -d'=' -f2-)
+DB_SECRET_JSON=$(aws secretsmanager get-secret-value --secret-id "$DB_CREDENTIAL_SECRET" --query SecretString --output text)
+DB_HOST=$(echo "$DB_SECRET_JSON" | jq -r '.host')
+DB_USER=$(echo "$DB_SECRET_JSON" | jq -r '.username')
+DB_NAME=$(echo "$DB_SECRET_JSON" | jq -r '.dbname')
+DB_PASSWORD=$(echo "$DB_SECRET_JSON" | jq -r '.password')
 AWSREGION=$(grep "^AWSREGION=" "$CONFIG_FILE" | cut -d'=' -f2-)
-
-if [ -z "$CFNDBURL" ]; then
-  echo "错误: 配置文件中没有找到 CFNDBURL"
-  exit 1
-fi
-
-# 从连接字符串中提取用户名、密码、主机和数据库名
-DB_USER=$(echo $CFNDBURL | sed -n 's/^postgresql:\/\/\([^:]*\):.*/\1/p')
-DB_PASSWORD=$(echo $CFNDBURL | sed -n 's/^postgresql:\/\/[^:]*:\([^@]*\)@.*/\1/p')
-DB_HOST=$(echo $CFNDBURL | sed -n 's/^postgresql:\/\/[^@]*@\([^\/]*\)\/.*/\1/p')
-DB_NAME=$(echo $CFNDBURL | sed -n 's/^postgresql:\/\/[^\/]*\/\(.*\)$/\1/p')
 
 echo "数据库连接信息:"
 echo "- 主机: $DB_HOST"

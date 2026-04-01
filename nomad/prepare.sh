@@ -26,6 +26,21 @@ else
     exit 1
 fi
 
+# Read all database credentials from Secrets Manager (only in memory, not written to config file)
+DB_CREDENTIAL_SECRET=$(grep "^CFNDBCredentialSecretName=" /opt/config.properties | cut -d'=' -f2)
+if [ -n "$DB_CREDENTIAL_SECRET" ]; then
+    DB_SECRET_JSON=$(aws secretsmanager get-secret-value --secret-id "$DB_CREDENTIAL_SECRET" --query SecretString --output text)
+    DB_HOST=$(echo "$DB_SECRET_JSON" | jq -r '.host')
+    DB_PORT=$(echo "$DB_SECRET_JSON" | jq -r '.port')
+    DB_NAME=$(echo "$DB_SECRET_JSON" | jq -r '.dbname')
+    DB_USER=$(echo "$DB_SECRET_JSON" | jq -r '.username')
+    DB_PASS=$(echo "$DB_SECRET_JSON" | jq -r '.password')
+    export postgres_password="$DB_PASS"
+    export postgres_host="$DB_HOST"
+    export postgres_user="$DB_USER"
+    export CFNDBURL="postgresql://${DB_USER}:${DB_PASS}@${DB_HOST}/${DB_NAME}"
+fi
+
 # Process each HCL file in the origin directory
 for file in origin/*.hcl; do
     if [[ -f "$file" && "$file" != *"-deploy.hcl" ]]; then
