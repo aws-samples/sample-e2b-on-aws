@@ -49,6 +49,11 @@ Metadata:
           - DBName
           - DBUsername
           - DBPassword
+      - Label:
+          default: External S3 Buckets
+        Parameters:
+          - ExistingE2BBucketName
+          - ExistingLokiBucketName
 
 # ===================================================================================================
 # Parameters - Input values required for the E2B infrastructure deployment
@@ -152,6 +157,17 @@ Parameters:
     AllowedPattern: ^(?=.*[a-zA-Z])(?=.*\d)[a-zA-Z0-9]{8,30}$
     ConstraintDescription: Password must be 8-30 characters and contain at least one letter and one number
 
+  # External S3 Bucket Configuration
+  ExistingE2BBucketName:
+    Type: String
+    Default: ""
+    Description: "Name of an existing unified E2B S3 bucket. Leave empty to auto-create."
+
+  ExistingLokiBucketName:
+    Type: String
+    Default: ""
+    Description: "Name of an existing Loki log storage S3 bucket. Leave empty to auto-create."
+
 # ===================================================================================================
 # Conditions - Conditional logic for resource creation (none used in this template)
 # ===================================================================================================
@@ -160,6 +176,10 @@ Conditions:
   IsArm64: !Equals [!Ref Architecture, arm64]
   IsProd: !Equals [!Ref Environment, prod]
   HasCustomClientInstanceType: !Not [!Equals [!Ref ClientInstanceType, ""]]
+  HasExternalE2BBucket: !Not [!Equals [!Ref ExistingE2BBucketName, ""]]
+  HasExternalLokiBucket: !Not [!Equals [!Ref ExistingLokiBucketName, ""]]
+  CreateE2BBucket: !Equals [!Ref ExistingE2BBucketName, ""]
+  CreateLokiBucket: !Equals [!Ref ExistingLokiBucketName, ""]
 
 # ===================================================================================================
 # Resources - AWS resources to be provisioned for the E2B infrastructure
@@ -697,47 +717,25 @@ Resources:
           ValidationDomain: !Ref BaseDomain
 
   # ------------------------------------------------------------------------------------------------
-  # S3 Buckets - Object storage for Terraform state files and software artifacts
+  # S3 Buckets - Unified E2B bucket and Loki log storage bucket
   # ------------------------------------------------------------------------------------------------
-  TerraformS3Bucket:
+  E2BBucket:
     Type: AWS::S3::Bucket
+    Condition: CreateE2BBucket
     Properties:
-      BucketName: !Sub "terraform-${AWS::StackName}-${AWS::Region}-${AWS::AccountId}"
-      VersioningConfiguration:
-        Status: Suspended
-      BucketEncryption:
-        ServerSideEncryptionConfiguration:
-          - ServerSideEncryptionByDefault:
-              SSEAlgorithm: AES256
-      AccessControl: Private
-      PublicAccessBlockConfiguration:
-        BlockPublicAcls: true
-        BlockPublicPolicy: true
-        IgnorePublicAcls: true
-        RestrictPublicBuckets: true
+      BucketName: !Sub "${AWS::StackName}-e2b-${AWS::AccountId}"
       Tags:
         - Key: Name
-          Value: !Sub "${AWS::StackName}-terraform-bucket"
+          Value: !Sub "${AWS::StackName}-e2b-bucket"
 
-  SoftwareS3Bucket:
+  LokiBucket:
     Type: AWS::S3::Bucket
+    Condition: CreateLokiBucket
     Properties:
-      BucketName: !Sub "software-${AWS::StackName}-${AWS::Region}-${AWS::AccountId}"
-      VersioningConfiguration:
-        Status: Suspended
-      BucketEncryption:
-        ServerSideEncryptionConfiguration:
-          - ServerSideEncryptionByDefault:
-              SSEAlgorithm: AES256
-      AccessControl: Private
-      PublicAccessBlockConfiguration:
-        BlockPublicAcls: true
-        BlockPublicPolicy: true
-        IgnorePublicAcls: true
-        RestrictPublicBuckets: true
+      BucketName: !Sub "${AWS::StackName}-loki-${AWS::AccountId}"
       Tags:
         - Key: Name
-          Value: !Sub "${AWS::StackName}-software-bucket"
+          Value: !Sub "${AWS::StackName}-loki-bucket"
 
   # ------------------------------------------------------------------------------------------------
   # RDS Database - PostgreSQL database for E2B platform data persistence
@@ -998,72 +996,72 @@ Outputs:
     Description: CloudFormation stack name for reference in other templates
     Value: !Ref AWS::StackName
     Export:
-      Name: CFNSTACKNAME
+      Name: !Sub "${AWS::StackName}-CFNSTACKNAME"
 
   # VPC outputs
   CFNVPCID:
     Description: VPC ID for the E2B infrastructure network
     Value: !Ref VPC
     Export:
-      Name: CFNVPCID
+      Name: !Sub "${AWS::StackName}-CFNVPCID"
 
   CFNVPCCIDR:
     Description: VPC CIDR Block defining the overall network address space
     Value: !Ref VpcBlock
     Export:
-      Name: CFNVPCCIDR
+      Name: !Sub "${AWS::StackName}-CFNVPCCIDR"
 
   # Public Access Configuration
   CFNPUBLICACCESS:
     Description: Public or Private access configuration
     Value: !Ref PublicAccess
     Export:
-      Name: CFNPUBLICACCESS
+      Name: !Sub "${AWS::StackName}-CFNPUBLICACCESS"
 
   # Subnet outputs
   CFNPRIVATESUBNET1:
     Description: Private Subnet ID in first availability zone for secure resources
     Value: !Ref PrivateSubnet1
     Export:
-      Name: CFNPRIVATESUBNET1
+      Name: !Sub "${AWS::StackName}-CFNPRIVATESUBNET1"
 
   CFNPRIVATESUBNET2:
     Description: Private Subnet ID in second availability zone for secure resources
     Value: !Ref PrivateSubnet2
     Export:
-      Name: CFNPRIVATESUBNET2
+      Name: !Sub "${AWS::StackName}-CFNPRIVATESUBNET2"
 
   CFNPUBLICSUBNET1:
     Description: Public Subnet ID in first availability zone for internet-facing resources
     Value: !Ref PublicSubnet1
     Export:
-      Name: CFNPUBLICSUBNET1
+      Name: !Sub "${AWS::StackName}-CFNPUBLICSUBNET1"
 
   CFNPUBLICSUBNET2:
     Description: Public Subnet ID in second availability zone for internet-facing resources
     Value: !Ref PublicSubnet2
     Export:
-      Name: CFNPUBLICSUBNET2
+      Name: !Sub "${AWS::StackName}-CFNPUBLICSUBNET2"
 
   # S3 bucket outputs
-  CFNTERRAFORMBUCKET:
-    Description: S3 bucket name for storing Terraform state files
-    Value: !Ref TerraformS3Bucket
+  CFNE2BBUCKET:
+    Description: Unified E2B S3 bucket name
+    Value: !If [HasExternalE2BBucket, !Ref ExistingE2BBucketName, !Ref E2BBucket]
     Export:
-      Name: CFNTERRAFORMBUCKET
+      Name: !Sub "${AWS::StackName}-CFNE2BBUCKET"
 
-  CFNSOFTWAREBUCKET:
-    Description: S3 bucket name for storing E2B software artifacts
-    Value: !Ref SoftwareS3Bucket
+  CFNLOKIBUCKET:
+    Description: Loki log storage S3 bucket name
+    Value: !If [HasExternalLokiBucket, !Ref ExistingLokiBucketName, !Ref LokiBucket]
     Export:
-      Name: CFNSOFTWAREBUCKET
+      Name: !Sub "${AWS::StackName}-CFNLOKIBUCKET"
 
   # SSH key output
   CFNSSHKEY:
     Description: EC2 SSH Key Name for bastion host access
     Value: !Ref KeyName
     Export:
-      Name: CFNSSHKEY
+      Name: !Sub "${AWS::StackName}-CFNSSHKEY"
 
   # Database connection string (password stored separately in Secrets Manager)
   CFNDBURL:
@@ -1072,51 +1070,51 @@ Outputs:
       - "postgresql://${DBUsername}@${DBEndpoint}/${DBName}"
       - DBEndpoint: !GetAtt AuroraCluster.Endpoint.Address
     Export:
-      Name: CFNDBURL
+      Name: !Sub "${AWS::StackName}-CFNDBURL"
 
   CFNDBCredentialSecretName:
     Description: Secrets Manager secret name for database credentials
     Value: !Sub "e2b-${AWS::StackName}-db-credential"
     Export:
-      Name: CFNDBCredentialSecretName
+      Name: !Sub "${AWS::StackName}-CFNDBCredentialSecretName"
 
   # Domain and certificate outputs
   CFNDOMAIN:
     Description: Base domain name for E2B services
     Value: !Ref BaseDomain
     Export:
-      Name: CFNDOMAIN
+      Name: !Sub "${AWS::StackName}-CFNDOMAIN"
 
   CFNCERTARN:
     Description: SSL Certificate ARN for HTTPS endpoints
     Value: !Ref WildcardCertificate
     Export:
-      Name: CFNCERTARN
+      Name: !Sub "${AWS::StackName}-CFNCERTARN"
 
   # Redis outputs
   REDISNAME:
     Description: Redis cache name
     Value: !Sub "${AWS::StackName}-redis"
     Export:
-      Name: CFNREDISNAME
+      Name: !Sub "${AWS::StackName}-CFNREDISNAME"
 
   REDISENDPOINT:
     Description: Complete Redis connection string for application configuration
     Value: !GetAtt RedisServerless.Endpoint.Address
     Export:
-      Name: CFNREDISURL
+      Name: !Sub "${AWS::StackName}-CFNREDISURL"
 
   ENVIRONMENT:
     Description: E2B Environment
     Value: !Ref Environment
     Export:
-      Name: CFNENVIRONMENT
+      Name: !Sub "${AWS::StackName}-CFNENVIRONMENT"
 
   ARCHITECTURE:
     Description: E2B Cluster CPU Architecture
     Value: !Ref Architecture
     Export:
-      Name: CFNARCHITECTURE
+      Name: !Sub "${AWS::StackName}-CFNARCHITECTURE"
 
   CLIENTINSTANCETYPE:
     Description: Instance type for client cluster
@@ -1128,19 +1126,19 @@ Outputs:
         - c5.metal
         - c7g.metal
     Export:
-      Name: CFNCLIENTINSTANCETYPE
+      Name: !Sub "${AWS::StackName}-CFNCLIENTINSTANCETYPE"
 
   REGION:
     Description: E2B Cluster Deployment Region
     Value: !Ref AWS::Region
     Export:
-      Name: AWSREGION
+      Name: !Sub "${AWS::StackName}-AWSREGION"
 
   STACKNAME:
     Description: CloudFormation Stack Name
     Value: !Ref AWS::StackName
     Export:
-      Name: AWSSTACKNAME
+      Name: !Sub "${AWS::StackName}-AWSSTACKNAME"
 
   # Bastion Host information
   BASTIONPUBLICDNS:

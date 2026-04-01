@@ -66,44 +66,9 @@ fi
 
 
 
+# External S3 buckets are not managed by this stack - skipping bucket cleanup
 
-
-# List of bucket variables to process
-BUCKET_VARS=(
-    "BUCKET_DOCKER_CONTEXTS"
-    "BUCKET_ENVS_DOCKER_CONTEXT"
-    "BUCKET_FC_ENV_PIPELINE"
-    "BUCKET_FC_KERNELS"
-    "BUCKET_FC_TEMPLATE"
-    "BUCKET_FC_VERSIONS"
-    "BUCKET_LOKI_STORAGE"
-    "BUCKET_SETUP"
-)
-
-echo "Starting to empty S3 buckets..."
-
-# Process each bucket
-for BUCKET_VAR in "${BUCKET_VARS[@]}"; do
-    # Extract the bucket name from the config file
-    BUCKET_NAME=$(grep "^$BUCKET_VAR=" /opt/config.properties | cut -d= -f2)
-    
-    if [ -n "$BUCKET_NAME" ]; then
-        echo "Emptying bucket: $BUCKET_NAME"
-        
-        # Check if the bucket exists
-        if aws s3api head-bucket --bucket "$BUCKET_NAME" --region "$REGION" >/dev/null 2>&1; then
-            # Empty the bucket
-            aws s3 rm "s3://$BUCKET_NAME" --recursive --region "$REGION" >/dev/null 2>&1
-            echo "Successfully emptied bucket: $BUCKET_NAME"
-        else
-            echo "Bucket $BUCKET_NAME does not exist or you don't have access to it. Skipping."
-        fi
-    else
-        echo "Could not find bucket name for variable $BUCKET_VAR. Skipping."
-    fi
-done
-
-echo "Completed emptying S3 buckets and modifying ELB deletion protection."
+echo "Completed modifying ELB deletion protection."
 
 # Now proceed with Terraform destroy
 TERRAFORM_DIR="/opt/infra/sample-e2b-on-aws/infra-iac/terraform"

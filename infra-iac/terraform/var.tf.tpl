@@ -78,3 +78,18 @@ variable "publicaccess" {
   type        = string
   default     = "${CFNPUBLICACCESS}"
 }
+
+variable "e2b_bucket" {
+  description = "Name of the unified E2B S3 bucket"
+  default     = "${CFNE2BBUCKET}"
+}
+
+variable "loki_bucket" {
+  description = "Name of the Loki log storage S3 bucket"
+  default     = "${CFNLOKIBUCKET}"
+}
+
+variable "custom_script_url" {
+  description = "URL of custom script to run on instances after startup"
+  default     = "${CFNCustomScriptUrl}"
+}

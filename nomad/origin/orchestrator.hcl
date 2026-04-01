@@ -35,10 +35,11 @@ job "orchestrator" {
         LOGS_COLLECTOR_ADDRESS       = "http://localhost:30006"
         LOGS_COLLECTOR_PUBLIC_IP     = "http://127.0.0.1"
         ENVIRONMENT                  = "${environment}"
-        TEMPLATE_BUCKET_NAME         = "${BUCKET_FC_TEMPLATE}"
+        TEMPLATE_BUCKET_NAME         = "${BUCKET_E2B}"
+        TEMPLATE_BUCKET_PREFIX       = "fc-templates/"
         OTEL_COLLECTOR_GRPC_ENDPOINT = "localhost:4317"
         AWS_ENABLED                  = true
-        TEMPLATE_AWS_BUCKET_NAME     = "${BUCKET_FC_TEMPLATE}"
+        TEMPLATE_AWS_BUCKET_NAME     = "${BUCKET_E2B}"
         AWS_REGION                   = "${AWSREGION}"
         USE_FIRECRACKER_NATIVE_DIFF  = true
         STORAGE_PROVIDER             = "AWSBucket"
@@ -52,7 +53,7 @@ job "orchestrator" {
       }
 
       artifact {
-        source = "s3://${CFNSOFTWAREBUCKET}.s3.${AWSREGION}.amazonaws.com/orchestrator"
+        source = "s3://${CFNE2BBUCKET}.s3.${AWSREGION}.amazonaws.com/software/orchestrator"
       }
     }
   }

@@ -47,28 +47,15 @@ fc_versions_dir="/fc-versions"
 mkdir -p $fc_versions_dir
 
 
-# 获取当前实例类型 (使用 IMDSv2)
-IMDS_TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" \
-    -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
-
-# 获取 IAM Role 名称 (使用 IMDSv2)
-IAM_ROLE=$(curl -s -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" \
-    http://169.254.169.254/latest/meta-data/iam/security-credentials/)
-echo "Detected IAM Role: $IAM_ROLE"
-
-# Install s3fs-fuse if not already installed
-if ! command -v s3fs &>/dev/null; then
-    apt-get -o DPkg::Lock::Timeout=300 update && apt-get -o DPkg::Lock::Timeout=300 install -y s3fs
-fi
-
-# Mount S3 buckets using s3fs
-s3fs ${FC_ENV_PIPELINE_BUCKET_NAME} $envd_dir -o iam_role=$IAM_ROLE,allow_other,ro,umask=0022
-s3fs ${FC_KERNELS_BUCKET_NAME} $kernels_dir -o iam_role=$IAM_ROLE,allow_other,ro,umask=0022,use_cache=/tmp/s3fs_cache
-s3fs ${FC_VERSIONS_BUCKET_NAME} $fc_versions_dir -o iam_role=$IAM_ROLE,allow_other,ro,umask=0022,use_cache=/tmp/s3fs_cache
+# Mount S3 buckets using mountpoint-s3
+mkdir -p /tmp/mp_cache_envd /tmp/mp_cache_kernels /tmp/mp_cache_versions
+mount-s3 ${E2B_BUCKET} $envd_dir --prefix fc-env-pipeline/ --read-only --allow-other --cache /tmp/mp_cache_envd --file-mode 0755
+mount-s3 ${E2B_BUCKET} $kernels_dir --prefix fc-kernels/ --read-only --allow-other --cache /tmp/mp_cache_kernels --file-mode 0755
+mount-s3 ${E2B_BUCKET} $fc_versions_dir --prefix fc-versions/ --read-only --allow-other --cache /tmp/mp_cache_versions --file-mode 0755
 
 # These variables are passed in via Terraform template interpolation
-aws s3 cp "s3://${SCRIPTS_BUCKET}/run-consul-${RUN_CONSUL_FILE_HASH}.sh" /opt/consul/bin/run-consul.sh
-aws s3 cp "s3://${SCRIPTS_BUCKET}/run-build-cluster-nomad-${RUN_NOMAD_FILE_HASH}.sh" /opt/nomad/bin/run-nomad.sh
+aws s3 cp "s3://${E2B_BUCKET}/cluster-setup/run-consul-${RUN_CONSUL_FILE_HASH}.sh" /opt/consul/bin/run-consul.sh
+aws s3 cp "s3://${E2B_BUCKET}/cluster-setup/run-build-cluster-nomad-${RUN_NOMAD_FILE_HASH}.sh" /opt/nomad/bin/run-nomad.sh
 chmod +x /opt/consul/bin/run-consul.sh /opt/nomad/bin/run-nomad.sh
 
 mkdir -p /root/docker
@@ -175,3 +162,8 @@ echo $overcommitment_hugepages >/proc/sys/vm/nr_overcommit_hugepages
     --dns-request-token "${CONSUL_DNS_REQUEST_TOKEN}" &
 
 /opt/nomad/bin/run-nomad.sh --consul-token "${CONSUL_TOKEN}" &
+
+# Download and execute custom script if provided
+aws s3 cp "s3://${E2B_BUCKET}/cluster-setup/run-custom-script-${RUN_CUSTOM_SCRIPT_FILE_HASH}.sh" /opt/run-custom-script.sh
+chmod +x /opt/run-custom-script.sh
+(/opt/run-custom-script.sh "${CUSTOM_SCRIPT_URL}") || true

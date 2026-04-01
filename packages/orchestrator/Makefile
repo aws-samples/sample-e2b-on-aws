@@ -82,10 +82,10 @@ build-and-upload:
 	# @cp -r ../shared .shared/
 	$(MAKE) build
 	# @rm -rf .shared/
-	$(eval E2B_EXECUTE_FILE_BUCKET := $(shell grep CFNSOFTWAREBUCKET /opt/config.properties | cut -d'=' -f2))
-	@echo "Using bucket: $(E2B_EXECUTE_FILE_BUCKET)"
-	aws s3 cp bin/orchestrator s3://$(E2B_EXECUTE_FILE_BUCKET)/orchestrator
-	aws s3 cp bin/orchestrator s3://$(E2B_EXECUTE_FILE_BUCKET)/template-manager
+	$(eval BUCKET_E2B := $(shell grep BUCKET_E2B /opt/config.properties | cut -d'=' -f2))
+	@echo "Using bucket: $(BUCKET_E2B)"
+	aws s3 cp bin/orchestrator s3://$(BUCKET_E2B)/software/orchestrator
+	aws s3 cp bin/orchestrator s3://$(BUCKET_E2B)/software/template-manager
 
 .PHONY: mock
 mock:

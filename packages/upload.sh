@@ -15,22 +15,15 @@ if [ ! -f "$CONFIG_FILE" ]; then
 fi
 
 # Read bucket information from configuration file
-BUCKET_FC_ENV_PIPELINE=$(grep "BUCKET_FC_ENV_PIPELINE" $CONFIG_FILE | cut -d'=' -f2)
-BUCKET_FC_KERNELS=$(grep "BUCKET_FC_KERNELS" $CONFIG_FILE | cut -d'=' -f2)
-BUCKET_FC_VERSIONS=$(grep "BUCKET_FC_VERSIONS" $CONFIG_FILE | cut -d'=' -f2)
+BUCKET_E2B=$(grep "BUCKET_E2B" $CONFIG_FILE | cut -d'=' -f2)
 
-if [ -z "$BUCKET_FC_ENV_PIPELINE" ] || [ -z "$BUCKET_FC_KERNELS" ] || [ -z "$BUCKET_FC_VERSIONS" ]; then
-    echo "Error: Could not read all required bucket information from configuration file"
-    echo "BUCKET_FC_ENV_PIPELINE: $BUCKET_FC_ENV_PIPELINE"
-    echo "BUCKET_FC_KERNELS: $BUCKET_FC_KERNELS"
-    echo "BUCKET_FC_VERSIONS: $BUCKET_FC_VERSIONS"
+if [ -z "$BUCKET_E2B" ]; then
+    echo "Error: Could not read BUCKET_E2B from configuration file"
     exit 1
 fi
 
 echo "Bucket information read from configuration file:"
-echo "BUCKET_FC_ENV_PIPELINE: $BUCKET_FC_ENV_PIPELINE"
-echo "BUCKET_FC_KERNELS: $BUCKET_FC_KERNELS"
-echo "BUCKET_FC_VERSIONS: $BUCKET_FC_VERSIONS"
+echo "BUCKET_E2B: $BUCKET_E2B"
 
 # Check if AWS CLI is installed
 if ! command -v aws &> /dev/null; then
@@ -76,8 +69,8 @@ fi
 
 # Upload to S3
 echo "Starting file upload to S3..."
-aws s3 cp --recursive "${TEMP_DIR}/kernels/" "s3://${BUCKET_FC_KERNELS}/"
-aws s3 cp --recursive "${TEMP_DIR}/firecrackers/" "s3://${BUCKET_FC_VERSIONS}/"
+aws s3 cp --recursive "${TEMP_DIR}/kernels/" "s3://${BUCKET_E2B}/fc-kernels/"
+aws s3 cp --recursive "${TEMP_DIR}/firecrackers/" "s3://${BUCKET_E2B}/fc-versions/"
 echo "File upload to S3 completed"
 
 # Clean up temporary directory

@@ -129,13 +129,13 @@ func NewAPIStore(ctx context.Context, tel *telemetry.Client) *APIStore {
 		redisClient = redis.NewClusterClient(&redis.ClusterOptions{
 			Addrs:        []string{redisClusterUrl},
 			MinIdleConns: 1,
-			TLSConfig:    &tls.Config{},  // 添加 TLS 支持
+			TLSConfig:    &tls.Config{}, // 添加 TLS 支持
 		})
 	} else if rurl := os.Getenv("REDIS_URL"); rurl != "" {
 		redisClient = redis.NewClient(&redis.Options{
 			Addr:         rurl,
 			MinIdleConns: 1,
-			TLSConfig:    &tls.Config{},  // 添加 TLS 支持
+			TLSConfig:    &tls.Config{}, // 添加 TLS 支持
 		})
 	} else {
 		zap.L().Warn("REDIS_URL not set, using local caches")
@@ -181,8 +181,9 @@ func NewAPIStore(ctx context.Context, tel *telemetry.Client) *APIStore {
 	// Initialize build context presign service (optional — only needed for SDK steps with COPY)
 	var buildContextPresign *storage.S3PresignService
 	if bucketName := os.Getenv("BUILD_CONTEXT_BUCKET_NAME"); bucketName != "" {
+		keyPrefix := os.Getenv("BUILD_CONTEXT_BUCKET_PREFIX")
 		var presignErr error
-		buildContextPresign, presignErr = storage.NewS3PresignService(ctx, bucketName)
+		buildContextPresign, presignErr = storage.NewS3PresignService(ctx, bucketName, keyPrefix)
 		if presignErr != nil {
 			zap.L().Warn("Failed to initialize build context presign service, steps with COPY will be unavailable",
 				zap.Error(presignErr))

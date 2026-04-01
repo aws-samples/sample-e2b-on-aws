@@ -12,11 +12,15 @@ setup_environment() {
   # Dynamic export of CFN outputs
   declare -A CFN_OUTPUTS
   while IFS=$'\t' read -r key value; do
+    # Ensure all keys have CFN prefix for consistency
+    if [[ "$key" != CFN* ]]; then
+      key="CFN${key}"
+    fi
     CFN_OUTPUTS["$key"]="$value"
     done < <(
     aws cloudformation describe-stacks \
         --stack-name "$STACK_ID" \
-        --query "Stacks[0].Outputs[?ExportName != null && starts_with(ExportName || '', 'CFN')].[ExportName,OutputValue]" \
+        --query "Stacks[0].Outputs[].[OutputKey,OutputValue]" \
         --output text
     )
 

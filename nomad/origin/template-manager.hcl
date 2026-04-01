@@ -42,8 +42,9 @@ job "template-manager" {
         AWS_ECR_REPOSITORY           = "e2bdev/base"
         OTEL_TRACING_PRINT           = false
         ENVIRONMENT                  = "dev"
-        TEMPLATE_AWS_BUCKET_NAME     = "${BUCKET_FC_TEMPLATE}"
-        TEMPLATE_BUCKET_NAME         = "${BUCKET_FC_TEMPLATE}"
+        TEMPLATE_AWS_BUCKET_NAME     = "${BUCKET_E2B}"
+        TEMPLATE_BUCKET_NAME         = "${BUCKET_E2B}"
+        TEMPLATE_BUCKET_PREFIX       = "fc-templates/"
         OTEL_COLLECTOR_GRPC_ENDPOINT = "localhost:4317"
         ORCHESTRATOR_SERVICES        = "template-manager"
       }
@@ -54,7 +55,7 @@ job "template-manager" {
       }
 
       artifact {
-        source      = "s3://${CFNSOFTWAREBUCKET}.s3.${AWSREGION}.amazonaws.com/template-manager"
+        source      = "s3://${CFNE2BBUCKET}.s3.${AWSREGION}.amazonaws.com/software/template-manager"
       }
     }
   }

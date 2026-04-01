@@ -50,11 +50,12 @@ func GetTemplateStorageProvider(ctx context.Context) (StorageProvider, error) {
 	}
 
 	bucketName := utils.RequiredEnv("TEMPLATE_BUCKET_NAME", "Bucket for storing template files")
+	keyPrefix := env.GetEnv("TEMPLATE_BUCKET_PREFIX", "")
 
 	// cloud bucket-based storage
 	switch provider {
 	case AWSStorageProvider:
-		return NewAWSBucketStorageProvider(ctx, bucketName)
+		return NewAWSBucketStorageProvider(ctx, bucketName, keyPrefix)
 	case GCPStorageProvider:
 		return NewGCPBucketStorageProvider(ctx, bucketName)
 	}

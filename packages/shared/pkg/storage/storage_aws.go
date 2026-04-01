@@ -24,6 +24,7 @@ const (
 type AWSBucketStorageProvider struct {
 	client     *s3.Client
 	bucketName string
+	keyPrefix  string
 }
 
 type AWSBucketStorageObjectProvider struct {
@@ -33,7 +34,7 @@ type AWSBucketStorageObjectProvider struct {
 	ctx        context.Context
 }
 
-func NewAWSBucketStorageProvider(ctx context.Context, bucketName string) (*AWSBucketStorageProvider, error) {
+func NewAWSBucketStorageProvider(ctx context.Context, bucketName string, keyPrefix string) (*AWSBucketStorageProvider, error) {
 	cfg, err := config.LoadDefaultConfig(ctx)
 	if err != nil {
 		return nil, err
@@ -44,6 +45,7 @@ func NewAWSBucketStorageProvider(ctx context.Context, bucketName string) (*AWSBu
 	return &AWSBucketStorageProvider{
 		client:     client,
 		bucketName: bucketName,
+		keyPrefix:  keyPrefix,
 	}, nil
 }
 
@@ -51,7 +53,8 @@ func (a *AWSBucketStorageProvider) DeleteObjectsWithPrefix(ctx context.Context, 
 	ctx, cancel := context.WithTimeout(ctx, awsOperationTimeout)
 	defer cancel()
 
-	list, err := a.client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{Bucket: &a.bucketName, Prefix: &prefix})
+	fullPrefix := a.keyPrefix + prefix
+	list, err := a.client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{Bucket: &a.bucketName, Prefix: &fullPrefix})
 	if err != nil {
 		return err
 	}
@@ -79,7 +82,7 @@ func (a *AWSBucketStorageProvider) OpenObject(ctx context.Context, path string) 
 	return &AWSBucketStorageObjectProvider{
 		client:     a.client,
 		bucketName: a.bucketName,
-		path:       path,
+		path:       a.keyPrefix + path,
 		ctx:        ctx,
 	}, nil
 }
