@@ -1,5 +1,5 @@
 job "redis" {
-  datacenters = ["${aws_az1}", "${aws_az2}"]
+  datacenters = ["${aws_az1}", "${aws_az2}", "${aws_az3}", "${aws_az4}"]
   node_pool = "api"
   type = "service"
   priority = 95

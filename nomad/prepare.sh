@@ -53,14 +53,16 @@ for file in origin/*.hcl; do
             temp_env_file=$(mktemp)
             echo "aws_az1=$aws_az1" > "$temp_env_file"
             echo "aws_az2=$aws_az2" >> "$temp_env_file"
+            echo "aws_az3=$aws_az3" >> "$temp_env_file"
+            echo "aws_az4=$aws_az4" >> "$temp_env_file"
             
             # Use env command with the temporary environment file
-            env -i $(cat "$temp_env_file") envsubst '${aws_az1} ${aws_az2}' < "$file" > "$output_file"
+            env -i $(cat "$temp_env_file") envsubst '${aws_az1} ${aws_az2} ${aws_az3} ${aws_az4}' < "$file" > "$output_file"
             
             # Remove the temporary file
             rm "$temp_env_file"
             
-            echo "Generated $output_file with limited variable substitution (aws_az1, aws_az2 only)"
+            echo "Generated $output_file with limited variable substitution (aws_az1, aws_az2, aws_az3, aws_az4 only)"
         else
             # For all other files, use regular envsubst with all variables
             envsubst < "$file" > "$output_file"

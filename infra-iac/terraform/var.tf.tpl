@@ -53,8 +53,8 @@ variable "VPC" {
   default = {
     id              = "${CFNVPCID}"                    # VPC ID placeholder
     CIDR            = "${CFNVPCCIDR}"                  # VPC CIDR block placeholder
-    private_subnets = ["${CFNPRIVATESUBNET1}", "${CFNPRIVATESUBNET2}"]  # Private subnet ID placeholders
-    public_subnets  = ["${CFNPUBLICSUBNET1}", "${CFNPUBLICSUBNET2}"]    # Public subnet ID placeholders
+    private_subnets = ["${CFNPRIVATESUBNET1}", "${CFNPRIVATESUBNET2}", "${CFNPRIVATESUBNET3}", "${CFNPRIVATESUBNET4}"]  # Private subnet ID placeholders
+    public_subnets  = ["${CFNPUBLICSUBNET1}", "${CFNPUBLICSUBNET2}", "${CFNPUBLICSUBNET3}", "${CFNPUBLICSUBNET4}"]    # Public subnet ID placeholders
   }
 }
 
@@ -92,4 +92,14 @@ variable "loki_bucket" {
 variable "custom_script_url" {
   description = "URL of custom script to run on instances after startup"
   default     = "${CFNCustomScriptUrl}"
+}
+
+variable "aws_az3" {
+  description = "Third availability zone"
+  default     = "${CFNAZ3}"
+}
+
+variable "aws_az4" {
+  description = "Fourth availability zone"
+  default     = "${CFNAZ4}"
 }

@@ -159,6 +159,22 @@ if [ -n "$CFNAZ2" ]; then
 else
     echo "Warning: CFNAZ2 not found in config file, cannot set aws_az2"
 fi
+
+# Extract CFNAZ3 value from the config file
+CFNAZ3=$(grep "^CFNAZ3=" "$CONFIG_FILE" | cut -d'=' -f2)
+if [ -n "$CFNAZ3" ]; then
+    echo "aws_az3=${CFNAZ3}" >> "$CONFIG_FILE"
+else
+    echo "Warning: CFNAZ3 not found in config file, cannot set aws_az3"
+fi
+
+# Extract CFNAZ4 value from the config file
+CFNAZ4=$(grep "^CFNAZ4=" "$CONFIG_FILE" | cut -d'=' -f2)
+if [ -n "$CFNAZ4" ]; then
+    echo "aws_az4=${CFNAZ4}" >> "$CONFIG_FILE"
+else
+    echo "Warning: CFNAZ4 not found in config file, cannot set aws_az4"
+fi
 # Database credentials are stored in Secrets Manager (CFNDBCredentialSecretName in config file)
 # No DB parameters (host, port, user, password) written to config file
 

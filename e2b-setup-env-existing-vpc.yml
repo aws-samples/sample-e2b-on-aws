@@ -15,8 +15,12 @@ Metadata:
           - ExistingVpcId
           - ExistingPrivateSubnet1Id
           - ExistingPrivateSubnet2Id
+          - ExistingPrivateSubnet3Id
+          - ExistingPrivateSubnet4Id
           - ExistingPublicSubnet1Id
           - ExistingPublicSubnet2Id
+          - ExistingPublicSubnet3Id
+          - ExistingPublicSubnet4Id
           - PublicAccess
       - Label:
           default: Security Configuration
@@ -112,6 +116,22 @@ Parameters:
     Type: AWS::EC2::Subnet::Id
     Description: ID of existing public subnet in second availability zone(not available in private access mode)
 
+  ExistingPrivateSubnet3Id:
+    Type: AWS::EC2::Subnet::Id
+    Description: Existing Private Subnet ID in third availability zone
+
+  ExistingPrivateSubnet4Id:
+    Type: AWS::EC2::Subnet::Id
+    Description: Existing Private Subnet ID in fourth availability zone
+
+  ExistingPublicSubnet3Id:
+    Type: AWS::EC2::Subnet::Id
+    Description: Existing Public Subnet ID in third availability zone
+
+  ExistingPublicSubnet4Id:
+    Type: AWS::EC2::Subnet::Id
+    Description: Existing Public Subnet ID in fourth availability zone
+
   PublicAccess:
     Type: String
     Description: Specify whether public or private access to E2B
@@ -162,6 +182,12 @@ Parameters:
     Type: String
     Default: ""
     Description: "Name of an existing Loki log storage S3 bucket. Leave empty to auto-create."
+
+  # Custom Script Configuration
+  CustomScriptUrl:
+    Type: String
+    Default: ""
+    Description: "(Optional) URL of a custom bash script to execute on EC2 instances after E2B services start. Supports S3 URLs (s3://bucket/script.sh) and HTTPS URLs."
 
 # ===================================================================================================
 # Conditions - Conditional logic for resource creation
@@ -634,6 +660,8 @@ Resources:
       SubnetIds:
         - !Ref ExistingPrivateSubnet1Id
         - !Ref ExistingPrivateSubnet2Id
+        - !Ref ExistingPrivateSubnet3Id
+        - !Ref ExistingPrivateSubnet4Id
       Tags:
         - Key: Name
           Value: !Sub "${AWS::StackName}-postgres-subnet-group"
@@ -691,6 +719,8 @@ Resources:
       SubnetIds:
         - !Ref ExistingPrivateSubnet1Id
         - !Ref ExistingPrivateSubnet2Id
+        - !Ref ExistingPrivateSubnet3Id
+        - !Ref ExistingPrivateSubnet4Id
       Tags:
         - Key: Name
           Value: !Sub "${AWS::StackName}-redis-subnet-group"
@@ -930,6 +960,30 @@ Outputs:
     Export:
       Name: !Sub "${AWS::StackName}-CFNPUBLICSUBNET2"
 
+  CFNPRIVATESUBNET3:
+    Description: Private Subnet ID in third availability zone
+    Value: !Ref ExistingPrivateSubnet3Id
+    Export:
+      Name: !Sub "${AWS::StackName}-CFNPRIVATESUBNET3"
+
+  CFNPRIVATESUBNET4:
+    Description: Private Subnet ID in fourth availability zone
+    Value: !Ref ExistingPrivateSubnet4Id
+    Export:
+      Name: !Sub "${AWS::StackName}-CFNPRIVATESUBNET4"
+
+  CFNPUBLICSUBNET3:
+    Description: Public Subnet ID in third availability zone
+    Value: !Ref ExistingPublicSubnet3Id
+    Export:
+      Name: !Sub "${AWS::StackName}-CFNPUBLICSUBNET3"
+
+  CFNPUBLICSUBNET4:
+    Description: Public Subnet ID in fourth availability zone
+    Value: !Ref ExistingPublicSubnet4Id
+    Export:
+      Name: !Sub "${AWS::StackName}-CFNPUBLICSUBNET4"
+
   # S3 bucket outputs
   CFNE2BBUCKET:
     Description: Unified E2B S3 bucket name
@@ -1035,3 +1089,10 @@ Outputs:
   # BASTIONPUBLICIP:
   #   Description: Public IP address of the Bastion Host for SSH access
   #   Value: !GetAtt BastionInstance.PublicIp
+
+  # Optional outputs
+  CFNCustomScriptUrl:
+    Description: Custom script URL for EC2 instances (optional)
+    Value: !Ref CustomScriptUrl
+    Export:
+      Name: !Sub "${AWS::StackName}-CFNCustomScriptUrl"

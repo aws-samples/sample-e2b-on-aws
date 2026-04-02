@@ -15,8 +15,12 @@ Metadata:
           - VpcBlock
           - PublicSubnet1Block
           - PublicSubnet2Block
+          - PublicSubnet3Block
+          - PublicSubnet4Block
           - PrivateSubnet1Block
           - PrivateSubnet2Block
+          - PrivateSubnet3Block
+          - PrivateSubnet4Block
           - PublicAccess
       - Label:
           default: Security Configuration
@@ -117,6 +121,23 @@ Parameters:
     Default: 10.0.48.0/20
     Description: CIDR block for private subnet in Availability Zone 2 (provides 4,096 IP addresses for internal resources)
 
+  PrivateSubnet3Block:
+    Type: String
+    Default: 10.0.64.0/20
+    Description: Private subnet 3 CIDR block in third availability zone
+  PrivateSubnet4Block:
+    Type: String
+    Default: 10.0.80.0/20
+    Description: Private subnet 4 CIDR block in fourth availability zone
+  PublicSubnet3Block:
+    Type: String
+    Default: 10.0.96.0/20
+    Description: Public subnet 3 CIDR block in third availability zone
+  PublicSubnet4Block:
+    Type: String
+    Default: 10.0.112.0/20
+    Description: Public subnet 4 CIDR block in fourth availability zone
+
   PublicAccess:
     Type: String
     Description: Specify whether public or private access to E2B
@@ -167,6 +188,12 @@ Parameters:
     Type: String
     Default: ""
     Description: "Name of an existing Loki log storage S3 bucket. Leave empty to auto-create."
+
+  # Custom Script Configuration
+  CustomScriptUrl:
+    Type: String
+    Default: ""
+    Description: "(Optional) URL of a custom bash script to execute on EC2 instances after E2B services start. Supports S3 URLs (s3://bucket/script.sh) and HTTPS URLs."
 
 # ===================================================================================================
 # Conditions - Conditional logic for resource creation (none used in this template)
@@ -285,6 +312,80 @@ Resources:
         - Key: kubernetes.io/role/internal-elb
           Value: "1"
 
+  # Public Subnet in AZ3 - Network segment with direct internet access in third availability zone
+  PublicSubnet3:
+    Type: AWS::EC2::Subnet
+    Metadata:
+      Comment: Public subnet in third availability zone for internet-facing resources
+    Properties:
+      AvailabilityZone: !Select
+        - "2"
+        - !GetAZs
+          Ref: AWS::Region
+      CidrBlock: !Ref PublicSubnet3Block
+      VpcId: !Ref VPC
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-public-3
+        - Key: kubernetes.io/role/elb
+          Value: "1"
+
+  # Public Subnet in AZ4 - Network segment with direct internet access in fourth availability zone
+  PublicSubnet4:
+    Type: AWS::EC2::Subnet
+    Metadata:
+      Comment: Public subnet in fourth availability zone for internet-facing resources
+    Properties:
+      AvailabilityZone: !Select
+        - "3"
+        - !GetAZs
+          Ref: AWS::Region
+      CidrBlock: !Ref PublicSubnet4Block
+      VpcId: !Ref VPC
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-public-4
+        - Key: kubernetes.io/role/elb
+          Value: "1"
+
+  # Private Subnet in AZ3 - Isolated network segment in third availability zone for backend services
+  PrivateSubnet3:
+    Type: AWS::EC2::Subnet
+    Metadata:
+      Comment: Private subnet in third availability zone for secure resources
+    Properties:
+      AvailabilityZone: !Select
+        - "2"
+        - !GetAZs
+          Ref: AWS::Region
+      CidrBlock: !Ref PrivateSubnet3Block
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-private-3
+        - Key: kubernetes.io/role/internal-elb
+          Value: "1"
+
+  # Private Subnet in AZ4 - Isolated network segment in fourth availability zone for backend services
+  PrivateSubnet4:
+    Type: AWS::EC2::Subnet
+    Metadata:
+      Comment: Private subnet in fourth availability zone for secure resources
+    Properties:
+      AvailabilityZone: !Select
+        - "3"
+        - !GetAZs
+          Ref: AWS::Region
+      CidrBlock: !Ref PrivateSubnet4Block
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-private-4
+        - Key: kubernetes.io/role/internal-elb
+          Value: "1"
+
   # Route Table for Public Subnets - Defines routing rules for internet-accessible subnets
   PublicRouteTable:
     Type: AWS::EC2::RouteTable
@@ -363,6 +464,30 @@ Resources:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
       SubnetId: !Ref PrivateSubnet2
+      RouteTableId: !Ref PrivateRouteTable
+
+  PublicSubnet3RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet3
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnet4RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet4
+      RouteTableId: !Ref PublicRouteTable
+
+  PrivateSubnet3RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet3
+      RouteTableId: !Ref PrivateRouteTable
+
+  PrivateSubnet4RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet4
       RouteTableId: !Ref PrivateRouteTable
 
   # S3 VPC Endpoint - Provides private access to S3 without traversing the public internet
@@ -747,6 +872,8 @@ Resources:
       SubnetIds:
         - !Ref PrivateSubnet1
         - !Ref PrivateSubnet2
+        - !Ref PrivateSubnet3
+        - !Ref PrivateSubnet4
       Tags:
         - Key: Name
           Value: !Sub "${AWS::StackName}-postgres-subnet-group"
@@ -804,6 +931,8 @@ Resources:
       SubnetIds:
         - !Ref PrivateSubnet1
         - !Ref PrivateSubnet2
+        - !Ref PrivateSubnet3
+        - !Ref PrivateSubnet4
       Tags:
         - Key: Name
           Value: !Sub "${AWS::StackName}-redis-subnet-group"
@@ -1043,6 +1172,30 @@ Outputs:
     Export:
       Name: !Sub "${AWS::StackName}-CFNPUBLICSUBNET2"
 
+  CFNPRIVATESUBNET3:
+    Description: Private Subnet ID in third availability zone
+    Value: !Ref PrivateSubnet3
+    Export:
+      Name: !Sub "${AWS::StackName}-CFNPRIVATESUBNET3"
+
+  CFNPRIVATESUBNET4:
+    Description: Private Subnet ID in fourth availability zone
+    Value: !Ref PrivateSubnet4
+    Export:
+      Name: !Sub "${AWS::StackName}-CFNPRIVATESUBNET4"
+
+  CFNPUBLICSUBNET3:
+    Description: Public Subnet ID in third availability zone
+    Value: !Ref PublicSubnet3
+    Export:
+      Name: !Sub "${AWS::StackName}-CFNPUBLICSUBNET3"
+
+  CFNPUBLICSUBNET4:
+    Description: Public Subnet ID in fourth availability zone
+    Value: !Ref PublicSubnet4
+    Export:
+      Name: !Sub "${AWS::StackName}-CFNPUBLICSUBNET4"
+
   # S3 bucket outputs
   CFNE2BBUCKET:
     Description: Unified E2B S3 bucket name
@@ -1148,3 +1301,10 @@ Outputs:
   BASTIONPUBLICIP:
     Description: Public IP address of the Bastion Host for SSH access
     Value: !GetAtt BastionInstance.PublicIp
+
+  # Optional outputs
+  CFNCustomScriptUrl:
+    Description: Custom script URL for EC2 instances (optional)
+    Value: !Ref CustomScriptUrl
+    Export:
+      Name: !Sub "${AWS::StackName}-CFNCustomScriptUrl"

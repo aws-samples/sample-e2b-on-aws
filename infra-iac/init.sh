@@ -46,6 +46,20 @@ setup_environment() {
   echo "CFNAZ1=$AZ1" >> /opt/config.properties
   echo "CFNAZ2=$AZ2" >> /opt/config.properties
 
+  # Extract AZ3 from PrivateSubnet3
+  PRIVATE_SUBNET3="${CFN_OUTPUTS[CFNPRIVATESUBNET3]:-}"
+  if [ -n "$PRIVATE_SUBNET3" ]; then
+    CFNAZ3=$(aws ec2 describe-subnets --subnet-ids "$PRIVATE_SUBNET3" --query 'Subnets[0].AvailabilityZone' --output text)
+    echo "CFNAZ3=$CFNAZ3" >> /opt/config.properties
+  fi
+
+  # Extract AZ4 from PrivateSubnet4
+  PRIVATE_SUBNET4="${CFN_OUTPUTS[CFNPRIVATESUBNET4]:-}"
+  if [ -n "$PRIVATE_SUBNET4" ]; then
+    CFNAZ4=$(aws ec2 describe-subnets --subnet-ids "$PRIVATE_SUBNET4" --query 'Subnets[0].AvailabilityZone' --output text)
+    echo "CFNAZ4=$CFNAZ4" >> /opt/config.properties
+  fi
+
   # Verification output
   echo "=== Exported Variables ==="
   cat /opt/config.properties
