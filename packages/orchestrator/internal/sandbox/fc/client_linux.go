@@ -233,7 +233,11 @@ func (c *apiClient) setMachineConfig(
 
 	if cpuTemplate == nil {
 		if envTemplate := os.Getenv("FC_CPU_TEMPLATE"); envTemplate != "" {
-			cpuTemplate = models.NewCPUTemplate(models.CPUTemplate(envTemplate))
+			t := models.CPUTemplate(envTemplate)
+			if err := t.Validate(nil); err != nil {
+				return fmt.Errorf("invalid FC_CPU_TEMPLATE %q: %w", envTemplate, err)
+			}
+			cpuTemplate = &t
 		} else {
 			cpuTemplate = models.NewCPUTemplate(models.CPUTemplateT2)
 		}
