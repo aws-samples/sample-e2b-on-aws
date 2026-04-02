@@ -262,6 +262,17 @@ resource "aws_iam_role_policy" "runtime_access" {
         ]
       },
       {
+        Sid      = "EC2SelfTerminate"
+        Effect   = "Allow"
+        Action   = ["ec2:TerminateInstances"]
+        Resource = "arn:aws:ec2:*:*:instance/*"
+        Condition = {
+          StringLike = {
+            "ec2:ResourceTag/aws:autoscaling:groupName" = "${var.prefix}-*"
+          }
+        }
+      },
+      {
         Sid      = "ECRAuthToken"
         Effect   = "Allow"
         Action   = ["ecr:GetAuthorizationToken"]

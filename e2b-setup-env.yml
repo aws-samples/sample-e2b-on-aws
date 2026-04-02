@@ -50,10 +50,11 @@ Metadata:
           - DBUsername
           - DBPassword
       - Label:
-          default: External S3 Buckets
+          default: Custom Configuration
         Parameters:
           - ExistingE2BBucketName
           - ExistingLokiBucketName
+          - CFNCustomScriptUrl
 
 # ===================================================================================================
 # Parameters - Input values required for the E2B infrastructure deployment
@@ -167,6 +168,12 @@ Parameters:
     Type: String
     Default: ""
     Description: "Name of an existing Loki log storage S3 bucket. Leave empty to auto-create."
+
+  # Custom Script Configuration
+  CFNCustomScriptUrl:
+    Type: String
+    Default: ""
+    Description: "URL of a custom script to run on instances after startup (S3 or HTTP). Leave empty to skip."
 
 # ===================================================================================================
 # Conditions - Conditional logic for resource creation (none used in this template)
@@ -1141,6 +1148,12 @@ Outputs:
       Name: !Sub "${AWS::StackName}-AWSSTACKNAME"
 
   # Bastion Host information
+  CFNCustomScriptUrl:
+    Description: Custom script URL for instance startup
+    Value: !Ref CFNCustomScriptUrl
+    Export:
+      Name: !Sub "${AWS::StackName}-CFNCustomScriptUrl"
+
   BASTIONPUBLICDNS:
     Description: Public DNS name of the Bastion Host for SSH access
     Value: !GetAtt BastionInstance.PublicDnsName
