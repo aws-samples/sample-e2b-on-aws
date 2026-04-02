@@ -6,6 +6,7 @@ package fc
 import (
 	"context"
 	"fmt"
+	"os"
 	"runtime"
 
 	"github.com/firecracker-microvm/firecracker-go-sdk"
@@ -231,7 +232,11 @@ func (c *apiClient) setMachineConfig(
 	trackDirtyPages := false
 
 	if cpuTemplate == nil {
-		cpuTemplate = models.NewCPUTemplate(models.CPUTemplateT2)
+		if envTemplate := os.Getenv("FC_CPU_TEMPLATE"); envTemplate != "" {
+			cpuTemplate = models.NewCPUTemplate(models.CPUTemplate(envTemplate))
+		} else {
+			cpuTemplate = models.NewCPUTemplate(models.CPUTemplateT2)
+		}
 	}
 
 	machineConfig := &models.MachineConfiguration{
