@@ -41,10 +41,10 @@ ACTUAL_CPU=$(grep -m1 "model name" /proc/cpuinfo | cut -d: -f2 | xargs)
 EXPECTED_CPU=""
 case "$INSTANCE_TYPE" in
     c5.metal|c5d.metal)                    EXPECTED_CPU="8275";;
-    c5n.metal)                             EXPECTED_CPU="8124";;
-    m5.metal|m5d.metal)                    EXPECTED_CPU="8175";;
+    c5n.metal)                             EXPECTED_CPU="8275";;
+    m5.metal|m5d.metal)                    EXPECTED_CPU="8259";;
     m5n.metal|m5dn.metal)                  EXPECTED_CPU="8259";;
-    r5.metal|r5d.metal)                    EXPECTED_CPU="8175";;
+    r5.metal|r5d.metal)                    EXPECTED_CPU="8259";;
     r5n.metal|r5dn.metal|r5b.metal)        EXPECTED_CPU="8259";;
     i3.metal)                              EXPECTED_CPU="E5-2686 v4";;
     i3en.metal)                            EXPECTED_CPU="8175";;

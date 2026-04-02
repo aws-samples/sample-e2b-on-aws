@@ -1151,8 +1151,6 @@ Outputs:
   CFNCustomScriptUrl:
     Description: Custom script URL for instance startup
     Value: !Ref CFNCustomScriptUrl
-    Export:
-      Name: !Sub "${AWS::StackName}-CFNCustomScriptUrl"
 
   BASTIONPUBLICDNS:
     Description: Public DNS name of the Bastion Host for SSH access
