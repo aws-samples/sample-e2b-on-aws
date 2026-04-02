@@ -1094,5 +1094,3 @@ Outputs:
   CFNCustomScriptUrl:
     Description: Custom script URL for EC2 instances (optional)
     Value: !Ref CustomScriptUrl
-    Export:
-      Name: !Sub "${AWS::StackName}-CFNCustomScriptUrl"
