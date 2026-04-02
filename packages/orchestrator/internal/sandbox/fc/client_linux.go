@@ -6,6 +6,7 @@ package fc
 import (
 	"context"
 	"fmt"
+	"os"
 	"runtime"
 
 	"github.com/firecracker-microvm/firecracker-go-sdk"
@@ -225,14 +226,29 @@ func (c *apiClient) setMachineConfig(
 	vCPUCount int64,
 	memoryMB int64,
 	hugePages bool,
+	cpuTemplate *models.CPUTemplate,
 ) error {
 	smt := runtime.GOARCH != "arm64"
 	trackDirtyPages := false
+
+	if cpuTemplate == nil {
+		if envTemplate := os.Getenv("FC_CPU_TEMPLATE"); envTemplate != "" {
+			t := models.CPUTemplate(envTemplate)
+			if err := t.Validate(nil); err != nil {
+				return fmt.Errorf("invalid FC_CPU_TEMPLATE %q: %w", envTemplate, err)
+			}
+			cpuTemplate = &t
+		} else {
+			cpuTemplate = models.NewCPUTemplate(models.CPUTemplateT2)
+		}
+	}
+
 	machineConfig := &models.MachineConfiguration{
 		VcpuCount:       &vCPUCount,
 		MemSizeMib:      &memoryMB,
 		Smt:             &smt,
 		TrackDirtyPages: &trackDirtyPages,
+		CPUTemplate:     cpuTemplate,
 	}
 	if hugePages {
 		machineConfig.HugePages = models.MachineConfigurationHugePagesNr2M
