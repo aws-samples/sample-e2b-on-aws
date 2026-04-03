@@ -1,0 +1,141 @@
+package factories
+
+import (
+	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/base64"
+	"errors"
+	"fmt"
+	"strings"
+
+	"github.com/redis/go-redis/extra/redisotel/v9"
+	"github.com/redis/go-redis/v9"
+	"go.uber.org/zap"
+
+	"github.com/e2b-dev/infra/packages/shared/pkg/logger"
+)
+
+var ErrRedisDisabled = errors.New("redis is disabled")
+
+type RedisConfig struct {
+	RedisURL         string
+	RedisClusterURL  string
+	RedisTLSCABase64 string
+	RedisTLSEnabled  bool
+	// PoolSize overrides the default connection pool size.
+	// When non-positive, defaults to 40.
+	PoolSize int
+}
+
+const (
+	defaultPoolSize     = 40
+	defaultMinIdleConns = 10
+)
+
+func NewRedisClient(ctx context.Context, config RedisConfig) (redis.UniversalClient, error) {
+	var redisClient redis.UniversalClient
+
+	switch {
+	case config.RedisClusterURL != "":
+		// For managed Redis Cluster in GCP we should use Cluster Client, because
+		// > Redis node endpoints can change and can be recycled as nodes are added and removed over time.
+		// https://cloud.google.com/memorystore/docs/cluster/cluster-node-specification#cluster_endpoints
+		// https://cloud.google.com/memorystore/docs/cluster/client-library-code-samples#go-redis
+
+		poolSize := defaultPoolSize
+		minIdleConns := defaultMinIdleConns
+		if config.PoolSize > 0 {
+			poolSize = max(defaultMinIdleConns, config.PoolSize)
+			minIdleConns = max(defaultMinIdleConns, config.PoolSize/4)
+		}
+
+		clusterOpts := &redis.ClusterOptions{
+			Addrs:        []string{config.RedisClusterURL},
+			PoolSize:     poolSize,
+			MinIdleConns: minIdleConns,
+		}
+
+		if config.RedisTLSCABase64 != "" {
+			cert, err := base64.StdEncoding.DecodeString(config.RedisTLSCABase64)
+			if err != nil {
+				logger.L().Error(ctx, "Failed to decode Redis cluster TLS CA certificate from base64", zap.Error(err))
+
+				return nil, err
+			}
+
+			certPool := x509.NewCertPool()
+			if !certPool.AppendCertsFromPEM(cert) {
+				logger.L().Error(ctx, "Failed to parse Redis cluster TLS CA certificate")
+
+				return nil, fmt.Errorf("failed to parse Redis cluster TLS CA certificate")
+			}
+
+			// Remove the port if present
+			serverName := strings.Split(config.RedisClusterURL, ":")[0]
+			clusterOpts.TLSConfig = &tls.Config{
+				RootCAs:    certPool,
+				MinVersion: tls.VersionTLS12,
+				ServerName: serverName,
+			}
+
+			logger.L().Info(ctx, "Redis cluster will be started with TLS enabled (custom CA)")
+		} else if config.RedisTLSEnabled {
+			// AWS ElastiCache Serverless requires TLS with system CA pool
+			serverName := strings.Split(config.RedisClusterURL, ":")[0]
+			clusterOpts.TLSConfig = &tls.Config{
+				MinVersion: tls.VersionTLS12,
+				ServerName: serverName,
+			}
+			logger.L().Info(ctx, "Redis cluster will be started with TLS enabled (system CA)")
+		}
+
+		redisClient = redis.NewClusterClient(clusterOpts)
+	case config.RedisURL != "":
+		poolSize := defaultPoolSize
+		minIdleConns := defaultMinIdleConns
+		if config.PoolSize > 0 {
+			poolSize = max(defaultMinIdleConns, config.PoolSize)
+			minIdleConns = max(defaultMinIdleConns, config.PoolSize/4)
+		}
+		opts := &redis.Options{
+			Addr:         config.RedisURL,
+			PoolSize:     poolSize,
+			MinIdleConns: minIdleConns,
+		}
+
+		redisClient = redis.NewClient(opts)
+	default:
+		return nil, ErrRedisDisabled
+	}
+
+	// Enable tracing
+	if err := redisotel.InstrumentTracing(redisClient); err != nil {
+		closeErr := redisClient.Close()
+
+		return nil, errors.Join(fmt.Errorf("failed to enable redis tracing: %w", err), closeErr)
+	}
+
+	// Enable metrics (pool stats, command latency histograms)
+	if err := redisotel.InstrumentMetrics(redisClient); err != nil {
+		closeErr := redisClient.Close()
+
+		return nil, errors.Join(fmt.Errorf("failed to enable redis metrics: %w", err), closeErr)
+	}
+
+	if _, err := redisClient.Ping(ctx).Result(); err != nil {
+		closeErr := redisClient.Close()
+
+		return nil, errors.Join(fmt.Errorf("failed to ping redis: %w", err), closeErr)
+	}
+
+	return redisClient, nil
+}
+
+func CloseCleanly(client redis.UniversalClient) error {
+	if err := client.Close(); err != nil && !errors.Is(err, redis.ErrClosed) {
+		return err
+	}
+
+	return nil
+}

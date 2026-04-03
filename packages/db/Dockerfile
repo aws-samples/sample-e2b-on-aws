@@ -1,31 +1,34 @@
+ARG GOLANG_VERSION=1.25.4
+ARG ALPINE_VERSION=3.22
+
 # Builder stage
-FROM golang:1.24-alpine AS builder
+FROM golang:${GOLANG_VERSION}-alpine${ALPINE_VERSION} AS builder
 
-# Shared
+# Cached golang dependencies
 WORKDIR /build/shared
-
-COPY .shared/go.mod .shared/go.sum ./
+COPY ./shared/go.mod ./shared/go.sum ./
 RUN go mod download
 
-COPY .shared/pkg pkg
+WORKDIR /build/db
+COPY ./db/go.mod ./db/go.sum ./
+RUN go mod download
 
-#
+# Copy source code
+WORKDIR /build
+
+COPY ./shared/pkg ./shared/pkg
+
+COPY ./db/scripts/migrator.go ./db/scripts/migrator.go
+COPY ./db/migrations/ ./db/migrations
+
 WORKDIR /build/db
 
-COPY go.mod go.sum ./
-RUN go mod download
+RUN go build -o ./bin/migrator ./scripts/migrator.go
+RUN chmod +x ./bin/migrator
 
-COPY scripts/migrator.go .
+FROM alpine:${ALPINE_VERSION}
 
-RUN go build -o ./migrator ./migrator.go
-RUN chmod +x ./migrator
+COPY --from=builder /build/db/bin/migrator .
+COPY --from=builder  /build/db/migrations ./migrations
 
-# Final stage
-FROM alpine:latest
-
-COPY --from=builder /build/db/migrator /usr/local/bin/migrator
-
-WORKDIR /app
-COPY /migrations ./migrations
-
-ENTRYPOINT ["migrator"]
+ENTRYPOINT ["./migrator"]

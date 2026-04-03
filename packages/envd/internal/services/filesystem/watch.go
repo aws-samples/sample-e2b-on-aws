@@ -20,12 +20,12 @@ func (s Service) WatchDir(ctx context.Context, req *connect.Request[rpc.WatchDir
 }
 
 func (s Service) watchHandler(ctx context.Context, req *connect.Request[rpc.WatchDirRequest], stream *connect.ServerStream[rpc.WatchDirResponse]) error {
-	u, err := permissions.GetAuthUser(ctx)
+	u, err := permissions.GetAuthUser(ctx, s.defaults.User)
 	if err != nil {
 		return err
 	}
 
-	watchPath, err := permissions.ExpandAndResolve(req.Msg.GetPath(), u)
+	watchPath, err := permissions.ExpandAndResolve(req.Msg.GetPath(), u, s.defaults.Workdir)
 	if err != nil {
 		return connect.NewError(connect.CodeInvalidArgument, err)
 	}
@@ -43,13 +43,22 @@ func (s Service) watchHandler(ctx context.Context, req *connect.Request[rpc.Watc
 		return connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("path %s not a directory: %w", watchPath, err))
 	}
 
+	// Check if path is on a network filesystem mount
+	isNetworkMount, err := IsPathOnNetworkMount(watchPath)
+	if err != nil {
+		return connect.NewError(connect.CodeInternal, fmt.Errorf("error checking mount status: %w", err))
+	}
+	if isNetworkMount {
+		return connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("cannot watch path on network filesystem: %s", watchPath))
+	}
+
 	w, err := fsnotify.NewWatcher()
 	if err != nil {
 		return connect.NewError(connect.CodeInternal, fmt.Errorf("error creating watcher: %w", err))
 	}
 	defer w.Close()
 
-	err = w.Add(utils.FsnotifyPath(watchPath, req.Msg.Recursive))
+	err = w.Add(utils.FsnotifyPath(watchPath, req.Msg.GetRecursive()))
 	if err != nil {
 		return connect.NewError(connect.CodeInternal, fmt.Errorf("error adding path %s to watcher: %w", watchPath, err))
 	}

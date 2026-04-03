@@ -1,9 +1,10 @@
 package handlers
 
 import (
+	"database/sql"
+	"errors"
 	"fmt"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -12,21 +13,22 @@ import (
 
 	"github.com/e2b-dev/infra/packages/api/internal/api"
 	"github.com/e2b-dev/infra/packages/api/internal/team"
-	"github.com/e2b-dev/infra/packages/api/internal/utils"
-	"github.com/e2b-dev/infra/packages/shared/pkg/keys"
-	"github.com/e2b-dev/infra/packages/shared/pkg/models"
-	"github.com/e2b-dev/infra/packages/shared/pkg/models/teamapikey"
+	"github.com/e2b-dev/infra/packages/auth/pkg/auth"
+	"github.com/e2b-dev/infra/packages/db/pkg/auth/queries"
+	"github.com/e2b-dev/infra/packages/shared/pkg/ginutils"
+	"github.com/e2b-dev/infra/packages/shared/pkg/logger"
 	"github.com/e2b-dev/infra/packages/shared/pkg/telemetry"
 )
 
 func (a *APIStore) PatchApiKeysApiKeyID(c *gin.Context, apiKeyID string) {
 	ctx := c.Request.Context()
 
-	body, err := utils.ParseBody[api.UpdateTeamAPIKey](ctx, c)
+	body, err := ginutils.ParseBody[api.UpdateTeamAPIKey](ctx, c)
 	if err != nil {
 		a.sendAPIStoreError(c, http.StatusBadRequest, fmt.Sprintf("Error when parsing request: %s", err))
 
 		telemetry.ReportCriticalError(ctx, "error when parsing request", err)
+
 		return
 	}
 
@@ -35,17 +37,28 @@ func (a *APIStore) PatchApiKeysApiKeyID(c *gin.Context, apiKeyID string) {
 		a.sendAPIStoreError(c, http.StatusBadRequest, fmt.Sprintf("Error when parsing API key ID: %s", err))
 
 		telemetry.ReportCriticalError(ctx, "error when parsing API key ID", err)
+
 		return
 	}
 
-	err = a.db.Client.TeamAPIKey.UpdateOneID(apiKeyIDParsed).SetName(body.Name).SetUpdatedAt(time.Now()).Exec(ctx)
-	if models.IsNotFound(err) {
+	teamID := auth.MustGetTeamInfo(c).Team.ID
+
+	now := time.Now()
+	_, err = a.authDB.Write.UpdateTeamApiKey(ctx, authqueries.UpdateTeamApiKeyParams{
+		Name:      body.Name,
+		UpdatedAt: &now,
+		ID:        apiKeyIDParsed,
+		TeamID:    teamID,
+	})
+	if errors.Is(err, sql.ErrNoRows) {
 		c.String(http.StatusNotFound, "id not found")
+
 		return
 	} else if err != nil {
 		a.sendAPIStoreError(c, http.StatusInternalServerError, fmt.Sprintf("Error when updating team API key name: %s", err))
 
 		telemetry.ReportCriticalError(ctx, "error when updating team API key name", err)
+
 		return
 	}
 
@@ -55,15 +68,11 @@ func (a *APIStore) PatchApiKeysApiKeyID(c *gin.Context, apiKeyID string) {
 func (a *APIStore) GetApiKeys(c *gin.Context) {
 	ctx := c.Request.Context()
 
-	teamID := a.GetTeamInfo(c).Team.ID
+	teamID := auth.MustGetTeamInfo(c).Team.ID
 
-	apiKeysDB, err := a.db.Client.TeamAPIKey.
-		Query().
-		Where(teamapikey.TeamID(teamID)).
-		WithCreator().
-		All(ctx)
+	apiKeysDB, err := a.authDB.Read.GetTeamAPIKeysWithCreator(ctx, teamID)
 	if err != nil {
-		zap.L().Warn("error when getting team API keys", zap.Error(err))
+		logger.L().Warn(ctx, "error when getting team API keys", zap.Error(err))
 		c.String(http.StatusInternalServerError, "Error when getting team API keys")
 
 		return
@@ -72,30 +81,21 @@ func (a *APIStore) GetApiKeys(c *gin.Context) {
 	teamAPIKeys := make([]api.TeamAPIKey, len(apiKeysDB))
 	for i, apiKey := range apiKeysDB {
 		var createdBy *api.TeamUser
-		if apiKey.Edges.Creator != nil {
+		if apiKey.CreatedByID != nil && apiKey.CreatedByEmail != nil {
 			createdBy = &api.TeamUser{
-				Email: apiKey.Edges.Creator.Email,
-				Id:    apiKey.Edges.Creator.ID,
+				Email: *apiKey.CreatedByEmail,
+				Id:    *apiKey.CreatedByID,
 			}
-		}
-
-		keyValue := strings.Split(apiKey.APIKey, keys.ApiKeyPrefix)[1]
-
-		// TODO: remove this once we migrate to hashed API keys
-		maskedKeyProperties, err := keys.MaskKey(keys.ApiKeyPrefix, keyValue)
-		if err != nil {
-			fmt.Printf("masking API key failed %d: %v", apiKey.ID, err)
-			continue
 		}
 
 		teamAPIKeys[i] = api.TeamAPIKey{
 			Id:   apiKey.ID,
 			Name: apiKey.Name,
 			Mask: api.IdentifierMaskingDetails{
-				Prefix:            maskedKeyProperties.Prefix,
-				ValueLength:       maskedKeyProperties.ValueLength,
-				MaskedValuePrefix: maskedKeyProperties.MaskedValuePrefix,
-				MaskedValueSuffix: maskedKeyProperties.MaskedValueSuffix,
+				Prefix:            apiKey.ApiKeyPrefix,
+				ValueLength:       int(apiKey.ApiKeyLength),
+				MaskedValuePrefix: apiKey.ApiKeyMaskPrefix,
+				MaskedValueSuffix: apiKey.ApiKeyMaskSuffix,
 			},
 			CreatedAt: apiKey.CreatedAt,
 			CreatedBy: createdBy,
@@ -113,17 +113,26 @@ func (a *APIStore) DeleteApiKeysApiKeyID(c *gin.Context, apiKeyID string) {
 		a.sendAPIStoreError(c, http.StatusBadRequest, fmt.Sprintf("Error when parsing API key ID: %s", err))
 
 		telemetry.ReportCriticalError(ctx, "error when parsing API key ID", err)
+
 		return
 	}
 
-	err = a.db.Client.TeamAPIKey.DeleteOneID(apiKeyIDParsed).Exec(ctx)
-	if models.IsNotFound(err) {
-		c.String(http.StatusNotFound, "id not found")
-		return
-	} else if err != nil {
+	teamID := auth.MustGetTeamInfo(c).Team.ID
+
+	ids, err := a.authDB.Write.DeleteTeamAPIKey(ctx, authqueries.DeleteTeamAPIKeyParams{
+		ID:     apiKeyIDParsed,
+		TeamID: teamID,
+	})
+	if err != nil {
 		a.sendAPIStoreError(c, http.StatusInternalServerError, fmt.Sprintf("Error when deleting API key: %s", err))
 
 		telemetry.ReportCriticalError(ctx, "error when deleting API key", err)
+
+		return
+	}
+	if len(ids) == 0 {
+		c.String(http.StatusNotFound, "id not found")
+
 		return
 	}
 
@@ -133,10 +142,10 @@ func (a *APIStore) DeleteApiKeysApiKeyID(c *gin.Context, apiKeyID string) {
 func (a *APIStore) PostApiKeys(c *gin.Context) {
 	ctx := c.Request.Context()
 
-	userID := a.GetUserID(c)
-	teamID := a.GetTeamInfo(c).Team.ID
+	userID := auth.MustGetUserID(c)
+	teamID := auth.MustGetTeamInfo(c).Team.ID
 
-	body, err := utils.ParseBody[api.NewTeamAPIKey](ctx, c)
+	body, err := ginutils.ParseBody[api.NewTeamAPIKey](ctx, c)
 	if err != nil {
 		a.sendAPIStoreError(c, http.StatusBadRequest, fmt.Sprintf("Error when parsing request: %s", err))
 
@@ -145,7 +154,7 @@ func (a *APIStore) PostApiKeys(c *gin.Context) {
 		return
 	}
 
-	apiKey, err := team.CreateAPIKey(ctx, a.db, teamID, userID, body.Name)
+	apiKey, err := team.CreateAPIKey(ctx, a.authDB, teamID, userID, body.Name)
 	if err != nil {
 		a.sendAPIStoreError(c, http.StatusInternalServerError, fmt.Sprintf("Error when creating team API key: %s", err))
 
@@ -154,7 +163,7 @@ func (a *APIStore) PostApiKeys(c *gin.Context) {
 		return
 	}
 
-	user, err := a.db.Client.User.Get(ctx, userID)
+	user, err := a.authDB.Read.GetUser(ctx, userID)
 	if err != nil {
 		a.sendAPIStoreError(c, http.StatusInternalServerError, fmt.Sprintf("Error when getting user: %s", err))
 
@@ -166,12 +175,12 @@ func (a *APIStore) PostApiKeys(c *gin.Context) {
 	c.JSON(http.StatusCreated, api.CreatedTeamAPIKey{
 		Id:   apiKey.ID,
 		Name: apiKey.Name,
-		Key:  apiKey.APIKey,
+		Key:  apiKey.RawAPIKey,
 		Mask: api.IdentifierMaskingDetails{
-			Prefix:            apiKey.APIKeyPrefix,
-			ValueLength:       apiKey.APIKeyLength,
-			MaskedValuePrefix: apiKey.APIKeyMaskPrefix,
-			MaskedValueSuffix: apiKey.APIKeyMaskSuffix,
+			Prefix:            apiKey.ApiKeyPrefix,
+			ValueLength:       int(apiKey.ApiKeyLength),
+			MaskedValuePrefix: apiKey.ApiKeyMaskPrefix,
+			MaskedValueSuffix: apiKey.ApiKeyMaskSuffix,
 		},
 		CreatedBy: &api.TeamUser{
 			Id:    user.ID,

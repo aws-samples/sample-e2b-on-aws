@@ -7,14 +7,34 @@ option go_package = "https://github.com/e2b-dev/infra/orchestrator";
 
 // needs to be different from the enumeration in the template manager
 enum ServiceInfoStatus {
-  OrchestratorHealthy = 0;
-  OrchestratorDraining = 1;
-  OrchestratorUnhealthy = 2;
+  Healthy = 0;
+  // Draining means the node is bound to be shut down. It will not accept new sandboxes and will stop once all existing sandboxes are done.
+  Draining = 1;
+  Unhealthy = 2;
+  // Standby means the node is not actively used, but it can return to Healthy and continues serving traffic.
+  Standby = 3;
 }
 
 enum ServiceInfoRole {
   TemplateBuilder = 0;
   Orchestrator = 1;
+}
+
+message DiskMetrics {
+  string mount_point = 1;
+  string device = 2;
+  string filesystem_type = 3;
+  uint64 used_bytes = 4;
+  uint64 total_bytes = 5;
+}
+
+
+message MachineInfo {
+  string cpu_architecture = 1;
+  string cpu_family = 2;
+  string cpu_model = 3;
+  string cpu_model_name = 4;
+  repeated string cpu_flags = 5;
 }
 
 message ServiceInfoResponse {
@@ -26,11 +46,29 @@ message ServiceInfoResponse {
   ServiceInfoStatus service_status = 51;
   repeated ServiceInfoRole service_roles = 52;
   google.protobuf.Timestamp service_startup = 53;
+  MachineInfo machine_info = 54;
+  repeated string labels = 55;
 
-  int64 metric_vcpu_used = 101;
-  int64 metric_memory_used_mb = 102;
-  int64 metric_disk_mb = 103;
-  int64 metric_sandboxes_running = 104;
+  int64 metric_vcpu_used = 101 [deprecated = true];
+  int64 metric_memory_used_mb = 102 [deprecated = true];
+  int64 metric_disk_mb = 103 [deprecated = true];
+  uint32 metric_sandboxes_running = 104;
+
+  // Host system usage metrics
+  uint32 metric_cpu_percent = 105;
+  uint64 metric_memory_used_bytes = 106;
+
+  // Host system total resources
+  uint32 metric_cpu_count = 108;
+  uint64 metric_memory_total_bytes = 109;
+
+  // Allocated resources to sandboxes
+  uint32 metric_cpu_allocated = 110;
+  uint64 metric_memory_allocated_bytes = 111;
+  uint64 metric_disk_allocated_bytes = 112;
+
+  // Detailed disk metrics for each mount point
+  repeated DiskMetrics metric_disks = 113;
 }
 
 message ServiceStatusChangeRequest {

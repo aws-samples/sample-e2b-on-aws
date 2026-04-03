@@ -1,58 +1,61 @@
-IMAGE := e2b-orchestration/client-proxy
+ENV := $(shell cat ../../.last_used_env || echo "not-set")
+-include ../../.env.${ENV}
+
+LOCAL_BUILD_TARGET ?= build-debug
+PREFIX := $(strip $(subst ",,$(PREFIX)))
+HOSTNAME := $(shell hostname 2> /dev/null || hostnamectl hostname 2> /dev/null)
+$(if $(HOSTNAME),,$(error Failed to determine hostname: both 'hostname' and 'hostnamectl' failed))
+
+# Architecture for builds. Defaults to amd64; override for ARM64 builds.
+# (e.g., BUILD_ARCH=arm64 make build-and-upload)
+BUILD_ARCH ?= amd64
+# Docker platform string. Override for multi-arch builds:
+#   BUILD_PLATFORM=linux/amd64,linux/arm64 make build-and-upload
+BUILD_PLATFORM ?= linux/$(BUILD_ARCH)
+
+ifeq ($(PROVIDER),aws)
+	IMAGE_REGISTRY := $(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/$(PREFIX)core/client-proxy
+else
+	IMAGE_REGISTRY := $(GCP_REGION)-docker.pkg.dev/$(GCP_PROJECT_ID)/$(PREFIX)core/client-proxy
+endif
 
 .PHONY: build
 build:
 	# Allow for passing commit sha directly for docker builds
 	$(eval COMMIT_SHA ?= $(shell git rev-parse --short HEAD))
-	CGO_ENABLED=0 GOOS=linux go build -o bin/client-proxy -ldflags "-X=main.commitSHA=$(COMMIT_SHA)" .
+	CGO_ENABLED=0 GOOS=linux GOARCH=$(BUILD_ARCH) go build -o bin/client-proxy -ldflags "-X=main.commitSHA=$(COMMIT_SHA)" .
+
+.PHONY: build-debug
+build-debug:
+	$(eval COMMIT_SHA ?= $(shell git rev-parse --short HEAD))
+	CGO_ENABLED=1 go build -race -gcflags=all="-N -l" -o bin/client-proxy -ldflags "-X=main.commitSHA=$(COMMIT_SHA)" .
 
 .PHONY: build-and-upload
 build-and-upload:
 	$(eval COMMIT_SHA := $(shell git rev-parse --short HEAD))
-	@rm -rf .shared/
-	@cp -r ../shared .shared/
-	@docker buildx install # sets up the buildx as default docker builder (otherwise the command below won't work)
-	@docker build --platform linux/amd64 --tag "$(GCP_REGION)-docker.pkg.dev/$(GCP_PROJECT_ID)/$(IMAGE)" --push --build-arg COMMIT_SHA="$(COMMIT_SHA)" .
-	@rm -rf .shared/
+	@docker buildx build --platform $(BUILD_PLATFORM) --tag $(IMAGE_REGISTRY) --push --build-arg COMMIT_SHA="$(COMMIT_SHA)" -f ./Dockerfile ..
 
-openapi := ../../spec/openapi-edge.yml
-codegen := go tool github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen
+.PHONY: run
+run:
+	make build-debug
+	NODE_ID=integration-tests \
+	NODE_IP=127.0.0.1 \
+	./bin/client-proxy
+
+define setup_local_env
+	$(eval include .env.local)
+	$(eval export $(shell sed 's/=.*//' .env.local))
+endef
+
+.PHONY: run-local
+run-local: $(LOCAL_BUILD_TARGET)
+	$(call setup_local_env)
+	NODE_ID=$(HOSTNAME) ./bin/client-proxy
 
 .PHONY: generate
 generate:
-	$(codegen) -old-config-style -generate gin --package api $(openapi) > ../shared/pkg/http/edge/api.gen.go
-	$(codegen) -old-config-style -generate types --package api $(openapi) > ../shared/pkg/http/edge/types.gen.go
-	$(codegen) -old-config-style -generate spec --package api $(openapi) > ../shared/pkg/http/edge/spec.gen.go
-	$(codegen) -old-config-style -generate client --package api $(openapi) > ../shared/pkg/http/edge/client.gen.go
+	go generate ./...
 
 .PHONY: test
 test:
-	go test -v ./...
-
-
-.PHONY: build-and-upload-aws
-build-and-upload-aws:
-	$(eval AWS_ACCOUNT_ID := $(shell grep "^account_id=" /opt/config.properties | cut -d= -f2))
-	$(eval AWS_REGION := $(shell grep "^AWSREGION=" /opt/config.properties | cut -d= -f2))
-	$(eval ARCHITECTURE := $(shell grep "^CFNARCHITECTURE=" /opt/config.properties | cut -d= -f2 || echo "amd64"))
-
-	@rm -rf .shared/
-	@cp -r ../shared .shared/
-	@docker buildx install || true # sets up the buildx as default docker builder
-	# Create ECR repository if it doesn't exist
-	@aws ecr describe-repositories --repository-names $(IMAGE) || aws ecr create-repository --repository-name $(IMAGE)
-	# Login to ECR
-	@aws ecr get-login-password --region $(AWS_REGION) | docker login --username AWS --password-stdin $(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com
-	# Build and push the image
-	@echo "Building for architecture: $(ARCHITECTURE)"
-
-	@if [ "$(ARCHITECTURE)" = "arm64" ]; then \
-		echo "Building for ARM64 architecture"; \
-		docker build --platform linux/arm64 --tag "$(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/$(IMAGE):latest" .; \
-	else \
-		echo "Building for x86_64 architecture"; \
-		docker build --platform linux/amd64 --tag "$(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/$(IMAGE):latest" .; \
-	fi
-
-	@docker push "$(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/$(IMAGE):latest"
-	@rm -rf .shared/
+	go test -race -v ./...

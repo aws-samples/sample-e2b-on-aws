@@ -1,11 +1,7 @@
 #!/bin/bash
 set -e
 
-echo "Starting migration script..."
-
-# Create temporary directory
-TEMP_DIR=$(mktemp -d)
-echo "Created temporary directory: ${TEMP_DIR}"
+echo "Starting resource upload script..."
 
 # Read configuration file
 CONFIG_FILE="/opt/config.properties"
@@ -14,67 +10,72 @@ if [ ! -f "$CONFIG_FILE" ]; then
     exit 1
 fi
 
-# Read bucket information from configuration file
 BUCKET_E2B=$(grep "BUCKET_E2B" $CONFIG_FILE | cut -d'=' -f2)
+ARCHITECTURE=$(grep "^CFNARCHITECTURE=" "$CONFIG_FILE" | cut -d'=' -f2)
 
 if [ -z "$BUCKET_E2B" ]; then
     echo "Error: Could not read BUCKET_E2B from configuration file"
     exit 1
 fi
 
-echo "Bucket information read from configuration file:"
 echo "BUCKET_E2B: $BUCKET_E2B"
+echo "ARCHITECTURE: $ARCHITECTURE"
 
-# Check if AWS CLI is installed
-if ! command -v aws &> /dev/null; then
-    echo "Installing AWS CLI..."
-    sudo apt-get install -y awscli
-    echo "AWS CLI installation completed"
-else
-    echo "AWS CLI is already installed"
-fi
+# E2B public builds source (custom Firecracker + kernels)
+E2B_GCS="https://storage.googleapis.com/e2b-prod-public-builds"
 
-CI_VERSION="v1.10"
-KERNEL_VERSION="6.1.102"
-KERNEL_FOLDER="vmlinux-${KERNEL_VERSION}"
-FC_VERSION="v1.10.1"
-FC_FOLDER="v1.10.1_1fcdaec"
+TEMP_DIR=$(mktemp -d)
 
-# Create subdirectories
-mkdir -p "${TEMP_DIR}/kernels/${KERNEL_FOLDER}"
-mkdir -p "${TEMP_DIR}/firecrackers/${FC_FOLDER}"
+# ==============================================================
+# Kernel and Firecracker versions to download
+# All downloaded from e2b's custom builds (NOT official releases)
+# ==============================================================
 
-fc_url="https://github.com/firecracker-microvm/firecracker/releases"
+declare -A KERNELS=(
+    ["vmlinux-6.1.102"]="${E2B_GCS}/kernels/vmlinux-6.1.102/vmlinux.bin"
+    ["vmlinux-6.1.158"]="${E2B_GCS}/kernels/vmlinux-6.1.158/vmlinux.bin"
+)
 
-ARCHITECTURE=$(grep "^CFNARCHITECTURE=" "$CONFIG_FILE" | cut -d'=' -f2)
+declare -A FIRECRACKERS=(
+    ["v1.10.1_1fcdaec"]="${E2B_GCS}/firecrackers/v1.10.1_1fcdaec/firecracker"
+    ["v1.12.1_210cbac"]="${E2B_GCS}/firecrackers/v1.12.1_210cbac/firecracker"
+)
 
-# Download kernel and fc
-if [ "$ARCHITECTURE" = "arm64" ]; then
-    # Download kernel
-	curl -L https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/$CI_VERSION/aarch64/vmlinux-$KERNEL_VERSION -o ${TEMP_DIR}/kernels/${KERNEL_FOLDER}/vmlinux.bin
-	# Download firecracker
-	curl -L ${fc_url}/download/${FC_VERSION}/firecracker-${FC_VERSION}-aarch64.tgz | tar -xz
-    mv release-${FC_VERSION}-aarch64/firecracker-${FC_VERSION}-aarch64 \
-       ${TEMP_DIR}/firecrackers/${FC_FOLDER}/firecracker
-    rm -rf release-${latest_version}-aarch64
-else
-    # Download kernel
-	curl -L https://storage.googleapis.com/e2b-prod-public-builds/kernels/vmlinux-6.1.102/vmlinux.bin -o ${TEMP_DIR}/kernels/${KERNEL_FOLDER}/vmlinux.bin
-	# Download firecracker
-	curl -L ${fc_url}/download/${FC_VERSION}/firecracker-${FC_VERSION}-x86_64.tgz | tar -xz
-    mv release-${FC_VERSION}-x86_64/firecracker-${FC_VERSION}-x86_64 \
-       ${TEMP_DIR}/firecrackers/${FC_FOLDER}/firecracker
-    rm -rf release-${latest_version}-x86_64
-fi
+# ==============================================================
+# Download and upload kernels
+# ==============================================================
+echo "=== Downloading kernels ==="
+for folder in "${!KERNELS[@]}"; do
+    url="${KERNELS[$folder]}"
+    echo "  Downloading $folder..."
+    mkdir -p "${TEMP_DIR}/kernels/${folder}"
+    curl -sL "$url" -o "${TEMP_DIR}/kernels/${folder}/vmlinux.bin"
+    echo "  Downloaded $(du -h ${TEMP_DIR}/kernels/${folder}/vmlinux.bin | cut -f1)"
+done
 
-# Upload to S3
-echo "Starting file upload to S3..."
+echo "Uploading kernels to S3..."
 aws s3 cp --recursive "${TEMP_DIR}/kernels/" "s3://${BUCKET_E2B}/fc-kernels/"
-aws s3 cp --recursive "${TEMP_DIR}/firecrackers/" "s3://${BUCKET_E2B}/fc-versions/"
-echo "File upload to S3 completed"
+echo "Kernels uploaded"
 
-# Clean up temporary directory
-echo "Cleaning up temporary files..."
+# ==============================================================
+# Download and upload Firecracker versions
+# ==============================================================
+echo "=== Downloading Firecracker versions ==="
+for folder in "${!FIRECRACKERS[@]}"; do
+    url="${FIRECRACKERS[$folder]}"
+    echo "  Downloading $folder..."
+    mkdir -p "${TEMP_DIR}/firecrackers/${folder}"
+    curl -sL "$url" -o "${TEMP_DIR}/firecrackers/${folder}/firecracker"
+    chmod +x "${TEMP_DIR}/firecrackers/${folder}/firecracker"
+    echo "  Downloaded $(du -h ${TEMP_DIR}/firecrackers/${folder}/firecracker | cut -f1)"
+done
+
+echo "Uploading Firecracker versions to S3..."
+aws s3 cp --recursive "${TEMP_DIR}/firecrackers/" "s3://${BUCKET_E2B}/fc-versions/"
+echo "Firecracker versions uploaded"
+
+# ==============================================================
+# Cleanup
+# ==============================================================
 rm -rf "${TEMP_DIR}"
-echo "Temporary files cleaned up"
-echo "Migration completed!"
+echo "Upload completed!"

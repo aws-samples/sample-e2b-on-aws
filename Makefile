@@ -333,3 +333,11 @@ grafana-plan:
 grafana-apply:
 	@ printf "Applying Grafana Terraform for env: `tput setaf 2``tput bold`$(ENV)`tput sgr0`\n\n"
 	cd terraform/grafana && make apply && cd - || cd -
+
+.PHONY: e2b:build:dev
+e2b:build:dev:
+	cd test && python build_dev.py
+
+.PHONY: e2b:build:prod
+e2b:build:prod:
+	cd test && python build_prod.py

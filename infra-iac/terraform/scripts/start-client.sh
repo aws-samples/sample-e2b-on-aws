@@ -193,7 +193,7 @@ echo "Using disk: $DISK"
 sudo umount "$DISK" 2>/dev/null || true
 
 # Step 1: Format the disk with XFS and standard block size
-sudo mkfs.xfs -f -b size=4096 $DISK
+sudo mkfs.xfs -f -b size=4096 -m reflink=1 $DISK
 
 # Step 2: Create the mount point
 sudo mkdir -p $MOUNT_POINT

@@ -2,215 +2,112 @@ package handlers
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
-	"sync"
-	"sync/atomic"
-	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/launchdarkly/go-sdk-common/v3/ldcontext"
 	"go.opentelemetry.io/otel/attribute"
 	"go.uber.org/zap"
-	"golang.org/x/sync/semaphore"
 
 	"github.com/e2b-dev/infra/packages/api/internal/api"
-	"github.com/e2b-dev/infra/packages/api/internal/auth"
-	authcache "github.com/e2b-dev/infra/packages/api/internal/cache/auth"
 	"github.com/e2b-dev/infra/packages/api/internal/utils"
+	"github.com/e2b-dev/infra/packages/auth/pkg/auth"
+	"github.com/e2b-dev/infra/packages/shared/pkg/clusters"
+	"github.com/e2b-dev/infra/packages/shared/pkg/featureflags"
 	"github.com/e2b-dev/infra/packages/shared/pkg/logger"
 	"github.com/e2b-dev/infra/packages/shared/pkg/telemetry"
 )
 
-const (
-	getSandboxesMetricsTimeout = 30 * time.Second
-	maxConcurrentMetricFetches = 30
-)
+const maxSandboxMetricsCount = 100
 
 func (a *APIStore) getSandboxesMetrics(
 	ctx context.Context,
 	teamID uuid.UUID,
-	sandboxes []utils.PaginatedSandbox,
-) ([]api.RunningSandboxWithMetrics, error) {
-	// Add operation telemetry
-	telemetry.ReportEvent(ctx, "fetch metrics for sandboxes")
+	clusterID uuid.UUID,
+	sandboxIDs []string,
+) (map[string]api.SandboxMetric, *api.APIError) {
+	ctx, span := tracer.Start(ctx, "fetch-sandboxes-metrics")
+	defer span.End()
+
+	for i, id := range sandboxIDs {
+		short, err := utils.ShortID(id)
+		if err != nil {
+			return nil, &api.APIError{
+				Code:      http.StatusBadRequest,
+				ClientMsg: "Invalid sandbox ID",
+				Err:       err,
+			}
+		}
+
+		sandboxIDs[i] = short
+	}
+
 	telemetry.SetAttributes(ctx,
 		telemetry.WithTeamID(teamID.String()),
-		attribute.Int("sandboxes.count", len(sandboxes)),
+		attribute.Int("sandboxes.count", len(sandboxIDs)),
 	)
 
-	startTime := time.Now()
-	defer func() {
-		// Report operation duration
-		duration := time.Since(startTime)
-		telemetry.SetAttributes(ctx,
-			attribute.Float64("operation.duration_ms", float64(duration.Milliseconds())),
-		)
-	}()
-
-	type metricsResult struct {
-		sandbox utils.PaginatedSandbox
-		metrics []api.SandboxMetric
-		err     error
+	// Get metrics for all sandboxes
+	metricsReadFlag := a.featureFlags.BoolFlag(ctx, featureflags.MetricsReadFlag)
+	if !metricsReadFlag {
+		logger.L().Debug(ctx, "sandbox metrics read feature flag is disabled")
+		// If we are not reading from ClickHouse, we can return an empty map
+		// This is here just to have the possibility to turn off ClickHouse metrics reading
+		return make(map[string]api.SandboxMetric), nil
 	}
 
-	results := make(chan metricsResult, len(sandboxes))
-	var wg sync.WaitGroup
-	sem := semaphore.NewWeighted(int64(maxConcurrentMetricFetches))
-
-	// Error tracking with atomic counters
-	var errorCount atomic.Int32
-	var timeoutCount atomic.Int32
-	var successCount atomic.Int32
-	var metricsErrors []error
-
-	// Fetch metrics for each sandbox concurrently with rate limiting
-	for _, sandbox := range sandboxes {
-		wg.Add(1)
-		go func(s utils.PaginatedSandbox) {
-			defer wg.Done()
-
-			err := sem.Acquire(ctx, 1)
-			if err != nil {
-				timeoutCount.Add(1)
-				err := fmt.Errorf("context cancelled while waiting for rate limiter: %w", ctx.Err())
-				telemetry.ReportError(ctx, "context cancelled while waiting for rate limiter", err)
-				results <- metricsResult{
-					sandbox: s,
-					err:     err,
-				}
-
-				return
-			}
-			defer sem.Release(1)
-
-			// Get metrics for this sandbox
-			metrics, err := a.LegacyGetSandboxIDMetrics(
-				ctx,
-				s.SandboxID,
-				teamID.String(),
-				1,
-				oldestLogsLimit,
-			)
-
-			if err != nil {
-				errorCount.Add(1)
-				telemetry.ReportError(ctx, "failed to fetch metrics for sandbox", err, telemetry.WithSandboxID(s.SandboxID))
-			} else {
-				successCount.Add(1)
-			}
-
-			results <- metricsResult{
-				sandbox: s,
-				metrics: metrics,
-				err:     err,
-			}
-		}(sandbox)
-	}
-
-	// Close results channel once all goroutines complete
-	go func() {
-		wg.Wait()
-		close(results)
-	}()
-
-	// Collect results and build final response
-	sandboxesWithMetrics := make([]api.RunningSandboxWithMetrics, 0, len(sandboxes))
-
-	// Process each result as it arrives
-	for result := range results {
-		sandbox := api.RunningSandboxWithMetrics{
-			ClientID:   result.sandbox.ClientID,
-			TemplateID: result.sandbox.TemplateID,
-			Alias:      result.sandbox.Alias,
-			SandboxID:  result.sandbox.SandboxID,
-			StartedAt:  result.sandbox.StartedAt,
-			CpuCount:   result.sandbox.CpuCount,
-			MemoryMB:   result.sandbox.MemoryMB,
-			EndAt:      result.sandbox.EndAt,
-			Metadata:   result.sandbox.Metadata,
+	cluster, found := a.clusters.GetClusterById(clusterID)
+	if !found {
+		return nil, &api.APIError{
+			Code:      http.StatusInternalServerError,
+			ClientMsg: "cluster not found for sandbox metrics",
+			Err:       fmt.Errorf("cluster not found for sandbox metrics, cluster id: %s", clusterID.String()),
 		}
-
-		if result.err == nil {
-			sandbox.Metrics = &result.metrics
-		} else {
-			metricsErrors = append(metricsErrors, result.err)
-		}
-
-		sandboxesWithMetrics = append(sandboxesWithMetrics, sandbox)
 	}
 
-	// Report final metrics
-	telemetry.SetAttributes(ctx,
-		attribute.Int("metrics.success_count", int(successCount.Load())),
-		attribute.Int("metrics.error_count", int(errorCount.Load())),
-		attribute.Int("metrics.timeout_count", int(timeoutCount.Load())),
-	)
-
-	// Log operation summary
-	if len(metricsErrors) == 0 {
-		zap.L().Info("Completed fetching sandbox metrics without errors",
-			logger.WithTeamID(teamID.String()),
-			zap.Int32("total_sandboxes", int32(len(sandboxes))),
-			zap.Int32("successful_fetches", successCount.Load()),
-			zap.Int32("timeouts", timeoutCount.Load()),
-			zap.Duration("duration", time.Since(startTime)),
-		)
-	} else {
-		errorStrings := make([]string, len(metricsErrors))
-		for i, err := range metricsErrors {
-			errorStrings[i] = err.Error()
-		}
-
-		err := errors.Join(metricsErrors...)
-
-		zap.L().Error("Received errors while fetching metrics for some sandboxes",
-			logger.WithTeamID(teamID.String()),
-			zap.Int32("total_sandboxes", int32(len(sandboxes))),
-			zap.Int32("successful_fetches", successCount.Load()),
-			zap.Int32("failed_fetches", errorCount.Load()),
-			zap.Int32("timeouts", timeoutCount.Load()),
-			zap.Duration("duration", time.Since(startTime)),
-			zap.Error(err),
-		)
+	metrics, apiErr := cluster.GetResources().GetSandboxesMetrics(ctx, teamID.String(), sandboxIDs)
+	if apiErr != nil {
+		return nil, apiErr
 	}
 
-	return sandboxesWithMetrics, nil
+	return metrics, nil
 }
 
 func (a *APIStore) GetSandboxesMetrics(c *gin.Context, params api.GetSandboxesMetricsParams) {
 	ctx := c.Request.Context()
 	telemetry.ReportEvent(ctx, "list running instances with metrics")
 
-	// Cancel context after timeout to ensure no goroutines are left hanging for too long
-	ctx, cancel := context.WithTimeout(ctx, getSandboxesMetricsTimeout)
-	defer cancel()
+	team := auth.MustGetTeamInfo(c)
 
-	team := c.Value(auth.TeamContextKey).(authcache.AuthTeamInfo).Team
+	if len(params.SandboxIds) > maxSandboxMetricsCount {
+		logger.L().Error(ctx, "Too many sandboxes requested", zap.Int("requested_count", len(params.SandboxIds)), zap.Int("max_count", maxSandboxMetricsCount), logger.WithTeamID(team.ID.String()))
+		telemetry.ReportError(ctx, "too many sandboxes requested", fmt.Errorf("requested %d, max %d", len(params.SandboxIds), maxSandboxMetricsCount), telemetry.WithTeamID(team.ID.String()))
+		a.sendAPIStoreError(c, http.StatusBadRequest, fmt.Sprintf("Too many sandboxes requested, maximum is %d", maxSandboxMetricsCount))
 
-	a.posthog.IdentifyAnalyticsTeam(team.ID.String(), team.Name)
+		return
+	}
+
+	a.posthog.IdentifyAnalyticsTeam(ctx, team.ID.String(), team.Name)
 	properties := a.posthog.GetPackageToPosthogProperties(&c.Request.Header)
-	a.posthog.CreateAnalyticsTeamEvent(team.ID.String(), "listed running instances with metrics", properties)
+	a.posthog.CreateAnalyticsTeamEvent(ctx, team.ID.String(), "listed running instances with metrics", properties)
 
-	metadataFilter, err := utils.ParseMetadata(params.Metadata)
-	if err != nil {
-		zap.L().Error("Error parsing metadata", zap.Error(err))
-		a.sendAPIStoreError(c, http.StatusBadRequest, fmt.Sprintf("Error parsing metadata: %s", err))
+	// Build the context for feature flags
+	ctx = featureflags.AddToContext(
+		ctx,
+		ldcontext.NewBuilder(team.ID.String()).
+			Kind(featureflags.TeamKind).
+			Build(),
+	)
 
-		return
-	}
-
-	// Get relevant running sandboxes
-	sandboxes := getRunningSandboxes(ctx, a.orchestrator, team.ID, metadataFilter)
-
-	sandboxesWithMetrics, err := a.getSandboxesMetrics(ctx, team.ID, sandboxes)
-	if err != nil {
-		telemetry.ReportCriticalError(ctx, "error fetching metrics for sandboxes", err)
-		a.sendAPIStoreError(c, http.StatusInternalServerError, fmt.Sprintf("Error returning metrics for sandboxes for team '%s'", team.ID))
+	sandboxesWithMetrics, apiErr := a.getSandboxesMetrics(ctx, team.ID, clusters.WithClusterFallback(team.ClusterID), params.SandboxIds)
+	if apiErr != nil {
+		telemetry.ReportCriticalError(ctx, "error fetching sandboxes metrics", apiErr.Err)
+		a.sendAPIStoreError(c, apiErr.Code, apiErr.ClientMsg)
 
 		return
 	}
 
-	c.JSON(http.StatusOK, sandboxesWithMetrics)
+	c.JSON(http.StatusOK, &api.SandboxesWithMetrics{Sandboxes: sandboxesWithMetrics})
 }

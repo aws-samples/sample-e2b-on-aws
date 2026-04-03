@@ -82,9 +82,9 @@ locals {
     build = {
       instance_type_x86    = var.client_instance_type
       instance_type_arm    = var.client_instance_type
-      desired_capacity = 0
-      max_size         = 0
-      min_size         = 0
+      desired_capacity = 1
+      max_size         = 1
+      min_size         = 1
     }
   }
 }
@@ -1069,7 +1069,11 @@ resource "aws_autoscaling_group" "api" {
   desired_capacity  = local.clusters.api.desired_capacity
   max_size          = local.clusters.api.max_size
   min_size          = local.clusters.api.min_size
-  target_group_arns = [aws_lb_target_group.e2b-api.arn]
+  target_group_arns = [
+    aws_lb_target_group.e2b-api.arn,
+    aws_lb_target_group.client-proxy.arn,
+    aws_lb_target_group.docker-proxy.arn
+  ]
 
   launch_template {
     id      = aws_launch_template.api.id
@@ -1171,7 +1175,18 @@ resource "aws_launch_template" "build" {
     device_name = "/dev/sda1"
 
     ebs {
-      volume_size           = 100
+      volume_size           = 300
+      volume_type           = "gp3"
+      encrypted             = true
+      delete_on_termination = true
+    }
+  }
+
+  block_device_mappings {
+    device_name = "/dev/sda2"
+
+    ebs {
+      volume_size           = 500
       volume_type           = "gp3"
       encrypted             = true
       delete_on_termination = true
@@ -1241,6 +1256,25 @@ resource "aws_autoscaling_group" "build" {
       value               = tag.value
       propagate_at_launch = true
     }
+  }
+}
+
+# Create a new launch template version with NestedVirtualization enabled via AWS CLI
+resource "null_resource" "build_nested_virtualization" {
+  count = endswith(var.client_instance_type, ".metal") ? 0 : 1
+
+  triggers = {
+    launch_template_id      = aws_launch_template.build.id
+    launch_template_version = aws_launch_template.build.latest_version
+  }
+
+  provisioner "local-exec" {
+    command = <<-EOT
+      aws ec2 create-launch-template-version \
+        --launch-template-id ${aws_launch_template.build.id} \
+        --source-version ${aws_launch_template.build.latest_version} \
+        --launch-template-data '{"CpuOptions":{"NestedVirtualization":"enabled"}}'
+    EOT
   }
 }
 

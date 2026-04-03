@@ -2,232 +2,216 @@ package templatecache
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
-	"net/http"
-	"sync"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jellydator/ttlcache/v3"
-	"go.uber.org/zap"
+	"github.com/redis/go-redis/v9"
+	"go.opentelemetry.io/otel"
 
 	"github.com/e2b-dev/infra/packages/api/internal/api"
 	sqlcdb "github.com/e2b-dev/infra/packages/db/client"
+	"github.com/e2b-dev/infra/packages/db/pkg/dberrors"
 	"github.com/e2b-dev/infra/packages/db/queries"
-	"github.com/e2b-dev/infra/packages/shared/pkg/db"
-	"github.com/e2b-dev/infra/packages/shared/pkg/logger"
-	"github.com/e2b-dev/infra/packages/shared/pkg/models/envbuild"
+	"github.com/e2b-dev/infra/packages/shared/pkg/cache"
+	"github.com/e2b-dev/infra/packages/shared/pkg/clusters"
+	"github.com/e2b-dev/infra/packages/shared/pkg/id"
+	sharedUtils "github.com/e2b-dev/infra/packages/shared/pkg/utils"
 )
 
-const templateInfoExpiration = 5 * time.Minute
+const (
+	templateCacheTTL             = 5 * time.Minute
+	templateCacheRefreshInterval = 1 * time.Minute
 
+	templateCacheKeyPrefix = "template:info"
+)
+
+var tracer = otel.Tracer("github.com/e2b-dev/infra/packages/api/internal/cache/templates")
+
+func buildCacheKey(templateID, tag string) string {
+	// Wrap templateID in {} so it becomes a Redis hash tag — all keys for the
+	// same template land on the same hash slot in Redis Cluster, enabling
+	// pipelined prefix deletion in InvalidateAllTags.
+	return fmt.Sprintf("{%s}:%s", templateID, tag)
+}
+
+// TemplateInfo holds cached template with build information
 type TemplateInfo struct {
-	template *api.Template
-	teamID   uuid.UUID
-	build    *queries.EnvBuild
+	Template  *api.Template     `json:"template"`
+	TeamID    uuid.UUID         `json:"team_id"`
+	ClusterID uuid.UUID         `json:"cluster_id"`
+	Build     *queries.EnvBuild `json:"build"`
+	Tag       string            `json:"tag"`
 }
 
-type AliasCache struct {
-	cache *ttlcache.Cache[string, string]
-}
-
-func NewAliasCache() *AliasCache {
-	cache := ttlcache.New(ttlcache.WithTTL[string, string](templateInfoExpiration))
-
-	go cache.Start()
-
-	return &AliasCache{
-		cache: cache,
-	}
-}
-
-func (c *AliasCache) Get(alias string) (templateID string, found bool) {
-	item := c.cache.Get(alias)
-
-	if item == nil {
-		return "", false
-	}
-
-	return item.Value(), true
-}
-
+// TemplateCache caches template+build by templateID:tag.
+// This is a simple lookup layer - resolution happens in AliasCache.
 type TemplateCache struct {
-	cache      *ttlcache.Cache[string, *TemplateInfo]
-	db         *sqlcdb.Client
-	aliasCache *AliasCache
+	cache         *cache.RedisCache[*TemplateInfo]
+	db            *sqlcdb.Client
+	aliasCache    *AliasCache
+	metadataCache *TemplateMetadataCache
 }
 
-func NewTemplateCache(db *sqlcdb.Client) *TemplateCache {
-	cache := ttlcache.New(ttlcache.WithTTL[string, *TemplateInfo](templateInfoExpiration))
-	aliasCache := NewAliasCache()
-	go cache.Start()
+func NewTemplateCache(db *sqlcdb.Client, redisClient redis.UniversalClient) *TemplateCache {
+	redisCache := cache.NewRedisCache[*TemplateInfo](cache.RedisConfig[*TemplateInfo]{
+		TTL:             templateCacheTTL,
+		RefreshInterval: templateCacheRefreshInterval,
+		RedisClient:     redisClient,
+		RedisPrefix:     templateCacheKeyPrefix,
+
+		ExtractKeyFunc: func(value *TemplateInfo) string {
+			return buildCacheKey(value.Template.TemplateID, value.Tag)
+		},
+	})
 
 	return &TemplateCache{
-		cache:      cache,
-		db:         db,
-		aliasCache: aliasCache,
+		cache:         redisCache,
+		db:            db,
+		aliasCache:    NewAliasCache(db, redisClient),
+		metadataCache: NewTemplateMetadataCache(db, redisClient),
 	}
 }
 
-func (c *TemplateCache) Get(ctx context.Context, aliasOrEnvID string, teamID uuid.UUID, public bool) (*api.Template, *queries.EnvBuild, *api.APIError) {
-	var item *ttlcache.Item[string, *TemplateInfo]
-	var templateInfo *TemplateInfo
+// ResolveAlias resolves an identifier to AliasInfo (templateID, teamID).
+// The identifier is "namespace/alias" or just "alias" (already validated by id.ParseName).
+// namespaceFallback is used for bare aliases (no explicit namespace).
+func (c *TemplateCache) ResolveAlias(ctx context.Context, identifier string, namespaceFallback string) (*AliasInfo, error) {
+	return c.aliasCache.Resolve(ctx, identifier, namespaceFallback)
+}
 
-	var build *queries.EnvBuild
+// GetByID looks up template info by direct template ID only (no alias resolution).
+func (c *TemplateCache) GetByID(ctx context.Context, templateID string) (*AliasInfo, error) {
+	return c.aliasCache.LookupByID(ctx, templateID)
+}
 
-	templateID, found := c.aliasCache.Get(aliasOrEnvID)
-	if found == true {
-		item = c.cache.Get(templateID)
+// ResolveAliasWithMetadata chains alias resolution with metadata lookup.
+func (c *TemplateCache) ResolveAliasWithMetadata(ctx context.Context, identifier string, namespaceFallback string) (*AliasInfo, *TemplateMetadata, error) {
+	aliasInfo, err := c.aliasCache.Resolve(ctx, identifier, namespaceFallback)
+	if err != nil {
+		return nil, nil, err
 	}
 
-	if item == nil {
-		result, err := c.db.GetEnvWithBuild(ctx, aliasOrEnvID)
+	metadata, err := c.metadataCache.Get(ctx, aliasInfo.TemplateID)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return aliasInfo, metadata, nil
+}
+
+// Get fetches a template with build by templateID and tag.
+// Does NOT do alias resolution - callers should use ResolveAlias first.
+// Performs access control and cluster checks.
+func (c *TemplateCache) Get(ctx context.Context, templateID string, tag *string, teamID uuid.UUID, clusterID uuid.UUID) (*api.Template, *queries.EnvBuild, error) {
+	ctx, span := tracer.Start(ctx, "get template")
+	defer span.End()
+
+	// Step 1: Get template with build by ID and tag
+	templateInfo, err := c.getByID(ctx, templateID, tag)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Step 2: Access control check
+	if templateInfo.TeamID != teamID && !templateInfo.Template.Public {
+		return nil, nil, fmt.Errorf("%w: team '%s' cannot access template '%s'", ErrAccessDenied, teamID, templateID)
+	}
+
+	// Step 3: Cluster check
+	if templateInfo.ClusterID != clusterID {
+		return nil, nil, fmt.Errorf("%w: template '%s' not in cluster '%s'", ErrClusterMismatch, templateID, clusterID)
+	}
+
+	return templateInfo.Template, templateInfo.Build, nil
+}
+
+// getByID fetches template+build by templateID and tag
+func (c *TemplateCache) getByID(ctx context.Context, templateID string, tag *string) (*TemplateInfo, error) {
+	tagValue := id.DefaultTag
+	if tag != nil {
+		tagValue = *tag
+	}
+	cacheKey := buildCacheKey(templateID, tagValue)
+
+	info, err := c.cache.GetOrSet(ctx, cacheKey, c.fetchTemplateWithBuild(templateID, tag))
+	if err != nil {
+		return nil, err
+	}
+
+	return info, nil
+}
+
+func (c *TemplateCache) fetchTemplateWithBuild(templateID string, tag *string) func(context.Context, string) (*TemplateInfo, error) {
+	return func(ctx context.Context, _ string) (*TemplateInfo, error) {
+		ctx, span := tracer.Start(ctx, "fetch template with build")
+		defer span.End()
+
+		result, err := c.db.GetTemplateWithBuildByTag(ctx, queries.GetTemplateWithBuildByTagParams{
+			TemplateID: templateID,
+			Tag:        tag,
+		})
 		if err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return nil, nil, &api.APIError{Code: http.StatusNotFound, ClientMsg: fmt.Sprintf("template '%s' not found", aliasOrEnvID), Err: err}
+			if dberrors.IsNotFoundError(err) {
+				return nil, ErrTemplateNotFound
 			}
 
-			return nil, nil, &api.APIError{Code: http.StatusInternalServerError, ClientMsg: fmt.Sprintf("error while getting template: %v", err), Err: err}
+			return nil, fmt.Errorf("fetching template with build: %w", err)
 		}
 
-		build = &result.EnvBuild
+		build := &result.EnvBuild
 		template := result.Env
-		aliases := result.Aliases
+		clusterID := clusters.WithClusterFallback(template.ClusterID)
 
-		c.aliasCache.cache.Set(template.ID, template.ID, templateInfoExpiration)
-		for _, alias := range aliases {
-			c.aliasCache.cache.Set(alias, template.ID, templateInfoExpiration)
-		}
+		tagValue := sharedUtils.DerefOrDefault(tag, id.DefaultTag)
 
-		// Check if the team has access to the environment
-		if template.TeamID != teamID && (!public || !template.Public) {
-			return nil, nil, &api.APIError{Code: http.StatusForbidden, ClientMsg: fmt.Sprintf("Team  '%s' does not have access to the template '%s'", teamID, aliasOrEnvID), Err: fmt.Errorf("team  '%s' does not have access to the template '%s'", teamID, aliasOrEnvID)}
-		}
-
-		templateInfo = &TemplateInfo{
-			template: &api.Template{
+		return &TemplateInfo{
+			Template: &api.Template{
 				TemplateID: template.ID,
 				BuildID:    build.ID.String(),
 				Public:     template.Public,
-				Aliases:    &aliases,
+				Aliases:    result.Aliases,
+				Names:      result.Names,
 			},
-			teamID: teamID,
-			build:  build,
-		}
-
-		c.cache.Set(template.ID, templateInfo, templateInfoExpiration)
-	} else {
-		templateInfo = item.Value()
-		build = templateInfo.build
-
-		if templateInfo.teamID != teamID && !templateInfo.template.Public {
-			return nil, nil, &api.APIError{Code: http.StatusForbidden, ClientMsg: fmt.Sprintf("Team  '%s' does not have access to the template '%s'", teamID, aliasOrEnvID), Err: fmt.Errorf("team  '%s' does not have access to the template '%s'", teamID, aliasOrEnvID)}
-		}
-	}
-
-	return templateInfo.template, build, nil
-}
-
-// Invalidate invalidates the cache for the given templateID
-func (c *TemplateCache) Invalidate(templateID string) {
-	c.cache.Delete(templateID)
-}
-
-type TemplateBuildInfo struct {
-	TeamID        uuid.UUID
-	TemplateID    string
-	BuildStatus   envbuild.Status
-	FailureReason string
-
-	ClusterID     *uuid.UUID
-	ClusterNodeID *string
-}
-
-type TemplateBuildInfoNotFound struct{ error }
-
-func (TemplateBuildInfoNotFound) Error() string {
-	return "Template build info not found"
-}
-
-type TemplatesBuildCache struct {
-	cache *ttlcache.Cache[uuid.UUID, *TemplateBuildInfo]
-	db    *db.DB
-	mx    sync.Mutex
-}
-
-func NewTemplateBuildCache(db *db.DB) *TemplatesBuildCache {
-	cache := ttlcache.New(ttlcache.WithTTL[uuid.UUID, *TemplateBuildInfo](templateInfoExpiration))
-	go cache.Start()
-
-	return &TemplatesBuildCache{
-		cache: cache,
-		db:    db,
+			TeamID:    template.TeamID,
+			ClusterID: clusterID,
+			Build:     build,
+			Tag:       tagValue,
+		}, nil
 	}
 }
 
-func (c *TemplatesBuildCache) SetStatus(buildID uuid.UUID, status envbuild.Status, reason string) {
-	c.mx.Lock()
-	defer c.mx.Unlock()
-
-	item := c.cache.Get(buildID)
-	if item == nil {
-		return
+func (c *TemplateCache) Invalidate(ctx context.Context, templateID string, tag *string) {
+	tagValue := id.DefaultTag
+	if tag != nil {
+		tagValue = *tag
 	}
-
-	zap.L().Info("Setting template build status",
-		logger.WithBuildID(buildID.String()),
-		zap.String("to_status", status.String()),
-		zap.String("from_status", item.Value().BuildStatus.String()),
-		zap.String("reason", reason),
-	)
-
-	item.Value().BuildStatus = status
-	item.Value().FailureReason = reason
+	cacheKey := buildCacheKey(templateID, tagValue)
+	c.cache.Delete(ctx, cacheKey)
 }
 
-func (c *TemplatesBuildCache) Get(ctx context.Context, buildID uuid.UUID, templateID string) (*TemplateBuildInfo, error) {
-	item := c.cache.Get(buildID)
-	if item == nil {
-		zap.L().Debug("Template build info not found in cache, fetching from DB", logger.WithBuildID(buildID.String()))
+// InvalidateAllTags invalidates the cache for the given templateID across all tags
+func (c *TemplateCache) InvalidateAllTags(ctx context.Context, templateID string) []string {
+	pattern := buildCacheKey(templateID, "")
+	keys := c.cache.DeleteByPrefix(ctx, pattern)
 
-		envDB, envDBErr := c.db.GetEnv(ctx, templateID)
-		if envDBErr != nil {
-			if errors.Is(envDBErr, db.TemplateNotFound{}) {
-				return nil, TemplateBuildInfoNotFound{}
-			}
+	c.metadataCache.Invalidate(ctx, templateID)
 
-			return nil, fmt.Errorf("failed to get template '%s': %w", buildID, envDBErr)
-		}
+	return keys
+}
 
-		// making sure associated template build really exists
-		envBuildDB, envBuildDBErr := c.db.GetEnvBuild(ctx, buildID)
-		if envBuildDBErr != nil {
-			if errors.Is(envBuildDBErr, db.TemplateBuildNotFound{}) {
-				return nil, TemplateBuildInfoNotFound{}
-			}
+// InvalidateAliasesByTemplateID invalidates alias cache entries for the given keys.
+// aliasKeys are cache-key-formatted strings as returned by DeleteTemplate.
+func (c *TemplateCache) InvalidateAliasesByTemplateID(ctx context.Context, templateID string, aliasKeys []string) {
+	c.aliasCache.InvalidateAliasesByTemplateID(ctx, templateID, aliasKeys)
+}
 
-			return nil, fmt.Errorf("failed to get template build '%s': %w", buildID, envBuildDBErr)
-		}
+// InvalidateAlias invalidates the alias cache entry
+func (c *TemplateCache) InvalidateAlias(ctx context.Context, namespace *string, alias string) {
+	c.aliasCache.Invalidate(ctx, namespace, alias)
+}
 
-		item = c.cache.Set(
-			buildID,
-			&TemplateBuildInfo{
-				TeamID:      envDB.TeamID,
-				TemplateID:  envDB.ID,
-				BuildStatus: envBuildDB.Status,
-
-				ClusterID:     envDB.ClusterID,
-				ClusterNodeID: envBuildDB.ClusterNodeID,
-			},
-			templateInfoExpiration,
-		)
-
-		return item.Value(), nil
-	}
-
-	zap.L().Debug("Template build info found in cache", logger.WithBuildID(buildID.String()))
-
-	return item.Value(), nil
+func (c *TemplateCache) Close(ctx context.Context) error {
+	return errors.Join(c.aliasCache.Close(ctx), c.metadataCache.Close(ctx), c.cache.Close(ctx))
 }

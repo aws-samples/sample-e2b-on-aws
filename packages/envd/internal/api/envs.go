@@ -13,7 +13,7 @@ func (a *API) GetEnvs(w http.ResponseWriter, _ *http.Request) {
 	a.logger.Debug().Str(string(logs.OperationIDKey), operationID).Msg("Getting env vars")
 
 	envs := make(EnvVars)
-	a.envVars.Range(func(key, value string) bool {
+	a.defaults.EnvVars.Range(func(key, value string) bool {
 		envs[key] = value
 
 		return true
@@ -23,5 +23,7 @@ func (a *API) GetEnvs(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(envs)
+	if err := json.NewEncoder(w).Encode(envs); err != nil {
+		a.logger.Error().Err(err).Str(string(logs.OperationIDKey), operationID).Msg("Failed to encode env vars")
+	}
 }

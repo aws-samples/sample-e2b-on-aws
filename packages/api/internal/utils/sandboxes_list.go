@@ -1,28 +1,29 @@
 package utils
 
 import (
+	"context"
 	"encoding/base64"
 	"fmt"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
 	"go.uber.org/zap"
 
 	"github.com/e2b-dev/infra/packages/api/internal/api"
+	"github.com/e2b-dev/infra/packages/shared/pkg/logger"
 )
 
-const maxSandboxID = "zzzzzzzzzzzzzzzzzzzz"
+const (
+	MaxSandboxID = "zzzzzzzzzzzzzzzzzzzz"
+)
 
-// extend the api.ListedSandbox with a timestamp to use for pagination
+// PaginatedSandbox extends the api.ListedSandbox with a timestamp to use for pagination
 type PaginatedSandbox struct {
 	api.ListedSandbox
-	PaginationTimestamp time.Time `json:"-"`
-}
 
-func (p *PaginatedSandbox) GenerateCursor() string {
-	cursor := fmt.Sprintf("%s__%s", p.PaginationTimestamp.Format(time.RFC3339Nano), p.SandboxID)
-	return base64.URLEncoding.EncodeToString([]byte(cursor))
+	PaginationTimestamp time.Time `json:"-"`
 }
 
 func ParseNextToken(token *string) (time.Time, string, error) {
@@ -36,16 +37,16 @@ func ParseNextToken(token *string) (time.Time, string, error) {
 	}
 
 	// default to all sandboxes (older than now) and always lexically after any sandbox ID (the sort is descending)
-	return time.Now(), maxSandboxID, nil
+	return time.Now(), MaxSandboxID, nil
 }
 
-func ParseMetadata(metadata *string) (*map[string]string, error) {
+func ParseMetadata(ctx context.Context, metadata *string) (*map[string]string, error) {
 	// Parse metadata filter (query) if provided
 	var metadataFilter *map[string]string
 	if metadata != nil {
 		parsedMetadataFilter, err := parseFilters(*metadata)
 		if err != nil {
-			zap.L().Error("Error parsing metadata", zap.Error(err))
+			logger.L().Error(ctx, "Error parsing metadata", zap.Error(err))
 
 			return nil, fmt.Errorf("error parsing metadata: %w", err)
 		}
@@ -75,7 +76,7 @@ func ParseCursor(cursor string) (time.Time, string, error) {
 	return cursorTime, parts[1], nil
 }
 
-func FilterBasedOnCursor(sandboxes []PaginatedSandbox, cursorTime time.Time, cursorID string, limit int32) []PaginatedSandbox {
+func FilterBasedOnCursor(sandboxes []PaginatedSandbox, cursorTime time.Time, cursorID string) []PaginatedSandbox {
 	// Apply cursor-based filtering if cursor is provided
 	var filteredSandboxes []PaginatedSandbox
 	for _, sandbox := range sandboxes {
@@ -86,14 +87,20 @@ func FilterBasedOnCursor(sandboxes []PaginatedSandbox, cursorTime time.Time, cur
 			filteredSandboxes = append(filteredSandboxes, sandbox)
 		}
 	}
-	sandboxes = filteredSandboxes
 
-	// Apply limit if provided (get limit + 1 for pagination if possible)
-	if len(sandboxes) > int(limit) {
-		sandboxes = sandboxes[:limit+1]
-	}
+	return filteredSandboxes
+}
 
-	return sandboxes
+// SortPaginatedSandboxesDesc sorts the sandboxes by StartedAt (descending),
+// then by SandboxID (ascending) for stability
+func SortPaginatedSandboxesDesc(sandboxes []PaginatedSandbox) {
+	slices.SortFunc(sandboxes, func(a, b PaginatedSandbox) int {
+		if !a.StartedAt.Equal(b.StartedAt) {
+			return b.StartedAt.Compare(a.StartedAt)
+		}
+
+		return strings.Compare(a.SandboxID, b.SandboxID)
+	})
 }
 
 func FilterSandboxesOnMetadata(sandboxes []PaginatedSandbox, metadata *map[string]string) []PaginatedSandbox {
@@ -112,6 +119,7 @@ func FilterSandboxesOnMetadata(sandboxes []PaginatedSandbox, metadata *map[strin
 		for key, value := range *metadata {
 			if metadataValue, ok := (*sbx.Metadata)[key]; !ok || metadataValue != value {
 				matchesAll = false
+
 				break
 			}
 		}
@@ -137,7 +145,7 @@ func parseFilters(query string) (map[string]string, error) {
 	// Parse filters, both key and value are also unescaped
 	filters := make(map[string]string)
 
-	for _, filter := range strings.Split(query, "&") {
+	for filter := range strings.SplitSeq(query, "&") {
 		parts := strings.Split(filter, "=")
 		if len(parts) != 2 {
 			return nil, fmt.Errorf("invalid key value pair in query")

@@ -1,9 +1,7 @@
 #!/bin/bash
-# init-db.sh - One-click database initialization (including table creation and data population)
-
+# init-db.sh - Database initialization: migration + seed
 set -e
 
-# Change to the directory of the script
 cd "$(dirname "$0")"
 
 MIGRATION_SQL="./.migration.sql"
@@ -11,27 +9,21 @@ SEED_SQL="./.seed-db.sql"
 CONFIG_PATH="./config.json"
 CONFIG_FILE="/opt/config.properties"
 
-
-# First, execute init-config.sh to generate configuration
-echo "Generating configuration file..."
+# ============================================================
+# Step 1: Generate credentials
+# ============================================================
+echo "=== Generating credentials ==="
 if [ -f "./init-config.sh" ]; then
     bash ./init-config.sh
-    if [ $? -ne 0 ]; then
-        echo "Error: Failed to generate configuration"
-        exit 1
-    fi
-    echo "Configuration generated successfully!"
 else
     echo "Error: init-config.sh not found"
     exit 1
 fi
-# Check if config file exists
-if [ ! -f "$CONFIG_FILE" ]; then
-    echo "Error: Configuration file $CONFIG_FILE does not exist"
-    exit 1
-fi
 
-# Read all database connection information from Secrets Manager
+# ============================================================
+# Step 2: Read DB connection from Secrets Manager
+# ============================================================
+echo "=== Reading DB credentials ==="
 DB_CREDENTIAL_SECRET=$(grep "^CFNDBCredentialSecretName=" "$CONFIG_FILE" | cut -d'=' -f2)
 DB_SECRET_JSON=$(aws secretsmanager get-secret-value --secret-id "$DB_CREDENTIAL_SECRET" --query SecretString --output text)
 DB_HOST=$(echo "$DB_SECRET_JSON" | jq -r '.host')
@@ -40,82 +32,94 @@ DB_NAME=$(echo "$DB_SECRET_JSON" | jq -r '.dbname')
 DB_USER=$(echo "$DB_SECRET_JSON" | jq -r '.username')
 DB_PASSWORD=$(echo "$DB_SECRET_JSON" | jq -r '.password')
 
-# Check if all database variables are set
 for VAR_NAME in DB_HOST DB_PORT DB_NAME DB_USER DB_PASSWORD; do
-    VAR_VALUE=${!VAR_NAME}
-    if [ -z "$VAR_VALUE" ]; then
-        echo "Error: $VAR_NAME variable is missing in the configuration file"
+    if [ -z "${!VAR_NAME}" ]; then
+        echo "Error: $VAR_NAME is empty"
         exit 1
     fi
-    echo "Using $VAR_NAME = $VAR_VALUE"
 done
+echo "  DB_HOST=$DB_HOST DB_NAME=$DB_NAME"
 
-# Check if migration.sql exists
-if [ ! -f "$MIGRATION_SQL" ]; then
-    echo "Error: migration.sql file not found: $MIGRATION_SQL"
+PSQL="PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME"
+
+# Test connection
+if ! PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -c '\q' &>/dev/null; then
+    echo "Error: Cannot connect to database"
     exit 1
 fi
+echo "  DB connection OK"
 
-# Check if seed-db.sql exists
-if [ ! -f "$SEED_SQL" ]; then
-    echo "Error: seed-db.sql file not found: $SEED_SQL"
-    exit 1
-fi
+# ============================================================
+# Step 3: Run migration
+# ============================================================
+echo "=== Running migration ==="
+PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -f "$MIGRATION_SQL"
+echo "  Migration complete"
 
-# Read configuration file
-echo "Reading information from configuration file..."
-if command -v jq &> /dev/null; then
+# ============================================================
+# Step 4: Seed (only if no access tokens exist)
+#
+# Why check access_tokens instead of teams?
+# The migration creates triggers that auto-insert teams when
+# auth.users rows exist. So teams may already have rows even
+# on a fresh DB. access_tokens is only populated by seed.
+# ============================================================
+echo "=== Checking if seed is needed ==="
+TOKEN_COUNT=$(PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" \
+    -t -c "SELECT COUNT(*) FROM access_tokens;" 2>/dev/null | tr -d ' ')
+
+if [ "$TOKEN_COUNT" = "" ] || [ "$TOKEN_COUNT" = "0" ]; then
+    echo "  No tokens found, running seed..."
+
+    # Clean any trigger-created data to avoid conflicts
+    PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -c "
+        DELETE FROM users_teams;
+        DELETE FROM team_api_keys;
+        DELETE FROM access_tokens;
+        DELETE FROM envs WHERE id = 'rki5dems9wqfm4r03t7g';
+        DELETE FROM teams;
+        DELETE FROM users;
+    " 2>/dev/null || true
+
+    # Read generated values
     email=$(jq -r '.email' "$CONFIG_PATH")
     teamId=$(jq -r '.teamId' "$CONFIG_PATH")
-    accessToken=$(jq -r '.accessToken' "$CONFIG_PATH")
-    teamApiKey=$(jq -r '.teamApiKey' "$CONFIG_PATH")
-    cloud=$(jq -r '.cloud // "aws"' "$CONFIG_PATH")
-    region=$(jq -r '.region // "us-east-1"' "$CONFIG_PATH")
-else
-    echo "Warning: jq tool not found"
-    exit 1
-fi
+    accessTokenHash=$(grep "^accessTokenHash=" "$CONFIG_FILE" | cut -d'=' -f2)
+    apiKeyHash=$(grep "^apiKeyHash=" "$CONFIG_FILE" | cut -d'=' -f2)
+    atMaskPrefix=$(grep "^atMaskPrefix=" "$CONFIG_FILE" | cut -d'=' -f2)
+    atMaskSuffix=$(grep "^atMaskSuffix=" "$CONFIG_FILE" | cut -d'=' -f2)
+    akMaskPrefix=$(grep "^akMaskPrefix=" "$CONFIG_FILE" | cut -d'=' -f2)
+    akMaskSuffix=$(grep "^akMaskSuffix=" "$CONFIG_FILE" | cut -d'=' -f2)
 
-# Check database connection
-if ! PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d postgres -c '\q' &>/dev/null; then
-    echo "Error: Cannot connect to PostgreSQL database server. Please check connection parameters."
-    exit 1
-fi
-
-# Step 1: Execute migration.sql to create table structure
-PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -f "$MIGRATION_SQL"
-if [ $? -ne 0 ]; then
-    echo "Error: Table structure creation failed"
-    exit 1
-fi
-echo "Table structure created successfully!"
-
-# Step 2: Check if database contains data
-TEAM_COUNT=$(PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -t -c "SELECT COUNT(*) FROM teams;" 2>/dev/null || echo "0")
-TEAM_COUNT=$(echo $TEAM_COUNT | tr -d ' ')
-
-if [ "$TEAM_COUNT" = "" ] || [ "$TEAM_COUNT" = "0" ]; then
-    # Step 3: Execute seed-db.sql to populate initial data
     PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" \
         -v email="$email" \
         -v teamID="$teamId" \
-        -v accessToken="$accessToken" \
-        -v teamAPIKey="$teamApiKey" \
+        -v accessTokenHash="$accessTokenHash" \
+        -v apiKeyHash="$apiKeyHash" \
+        -v atMaskPrefix="$atMaskPrefix" \
+        -v atMaskSuffix="$atMaskSuffix" \
+        -v akMaskPrefix="$akMaskPrefix" \
+        -v akMaskSuffix="$akMaskSuffix" \
         -f "$SEED_SQL"
-    
+
     if [ $? -ne 0 ]; then
-        echo "Error: Data population failed"
+        echo "Error: Seed failed"
         exit 1
     fi
-    echo "Database initialization completed!"
-elif [ "$TEAM_COUNT" -gt 1 ]; then
-    echo "Database already contains data (team count: $TEAM_COUNT). Skipping data population step."
+    echo "  Seed complete"
 else
-    echo "Database already has one team. To reinitialize, please clear the database first."
+    echo "  Database already seeded ($TOKEN_COUNT tokens found). Skipping."
 fi
 
+# ============================================================
+# Summary
+# ============================================================
+echo ""
 echo "==================="
-echo "User: $email"
-echo "Team ID: $teamId"
-echo "Access Token: $accessToken"
-echo "Team API Key: $teamApiKey"
+echo "Database initialization complete!"
+echo "==================="
+echo "User:         $(jq -r '.email' $CONFIG_PATH)"
+echo "Team ID:      $(jq -r '.teamId' $CONFIG_PATH)"
+echo "Access Token: $(jq -r '.accessToken' $CONFIG_PATH)"
+echo "API Key:      $(jq -r '.teamApiKey' $CONFIG_PATH)"
+echo "==================="

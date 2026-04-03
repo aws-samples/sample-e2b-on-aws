@@ -6,6 +6,12 @@ import (
 	"google.golang.org/grpc/stats"
 )
 
+// IsResumeMetadataKey is the gRPC metadata key used to pass the is_resume/snapshot
+// value from the API client to the orchestrator server. This allows the server-side
+// otelgrpc stats handler to include sandbox.resume in metric attributes during TagRPC,
+// before the request payload is available.
+const IsResumeMetadataKey = "x-sandbox-resume"
+
 type noTraceKey struct{}
 
 var noTrace = struct{}{}
@@ -21,12 +27,12 @@ func NewStatsWrapper(statsHandler stats.Handler) stats.Handler {
 }
 
 // HandleConn exists to satisfy gRPC stats.Handler.
-func (s *statsWrapper) HandleConn(ctx context.Context, cs stats.ConnStats) {
+func (s *statsWrapper) HandleConn(context.Context, stats.ConnStats) {
 	// no-op
 }
 
 // TagConn exists to satisfy gRPC stats.Handler.
-func (s *statsWrapper) TagConn(ctx context.Context, cti *stats.ConnTagInfo) context.Context {
+func (s *statsWrapper) TagConn(ctx context.Context, _ *stats.ConnTagInfo) context.Context {
 	// no-op
 	return ctx
 }
@@ -35,10 +41,12 @@ func (s *statsWrapper) TagConn(ctx context.Context, cti *stats.ConnTagInfo) cont
 func (s *statsWrapper) HandleRPC(ctx context.Context, rs stats.RPCStats) {
 	// Check if the context contains noTraceKey, and trace only when its
 	// not present.
-	_, ok := ctx.Value(noTraceKey{}).(struct{})
-	if !ok {
-		s.statsHandler.HandleRPC(ctx, rs)
+	_, skip := ctx.Value(noTraceKey{}).(struct{})
+	if skip {
+		return
 	}
+
+	s.statsHandler.HandleRPC(ctx, rs)
 }
 
 // TagRPC implements per-RPC context management.
@@ -47,5 +55,6 @@ func (s *statsWrapper) TagRPC(ctx context.Context, rti *stats.RPCTagInfo) contex
 		// Add to context we don't want to trace this.
 		return context.WithValue(ctx, noTraceKey{}, noTrace)
 	}
+
 	return s.statsHandler.TagRPC(ctx, rti)
 }

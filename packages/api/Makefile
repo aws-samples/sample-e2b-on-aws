@@ -1,16 +1,22 @@
-IMAGE := e2b-orchestration/api
+ENV := $(shell cat ../../.last_used_env || echo "not-set")
+-include ../../.env.${ENV}
 
+LOCAL_BUILD_TARGET ?= build-debug
+PREFIX := $(strip $(subst ",,$(PREFIX)))
+HOSTNAME := $(shell hostname 2> /dev/null || hostnamectl hostname 2> /dev/null)
+$(if $(HOSTNAME),,$(error Failed to determine hostname: both 'hostname' and 'hostnamectl' failed))
 
-openapi := ../../spec/openapi.yml
-codegen := go tool github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen
 expectedMigration := $(shell ./../../scripts/get-latest-migration.sh)
+
+ifeq ($(PROVIDER),aws)
+	REGISTRY_PREFIX := $(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/$(PREFIX)core
+else
+	REGISTRY_PREFIX := $(GCP_REGION)-docker.pkg.dev/$(GCP_PROJECT_ID)/$(PREFIX)core
+endif
 
 .PHONY: generate
 generate:
-	$(codegen) -old-config-style -generate gin --package api $(openapi) > internal/api/api.gen.go
-	$(codegen) -old-config-style -generate types --package api $(openapi) > internal/api/types.gen.go
-	$(codegen) -old-config-style -generate spec --package api $(openapi) > internal/api/spec.gen.go
-
+	go generate ./...
 
 .PHONY: build
 build:
@@ -32,11 +38,27 @@ run:
 	SUPABASE_JWT_SECRETS=$(SUPABASE_JWT_SECRETS) \
 	GOTRACEBACK=crash \
 	GODEBUG=madvdontneed=1 \
-	TEMPLATE_BUCKET_NAME=$(TEMPLATE_BUCKET_NAME) \
 	SANDBOX_ACCESS_TOKEN_HASH_SEED=$(SANDBOX_ACCESS_TOKEN_HASH_SEED) \
+	CLICKHOUSE_CONNECTION_STRING=$(CLICKHOUSE_CONNECTION_STRING) \
 	ENVIRONMENT=$(ENVIRONMENT) \
 	ORCHESTRATOR_PORT=5008 \
+	NODE_ID=integration-tests \
+	LOKI_URL=unset \
+	VOLUME_TOKEN_ISSUER=local.e2b.dev \
+	VOLUME_TOKEN_SIGNING_METHOD=ES256 \
+	VOLUME_TOKEN_SIGNING_KEY=ECDSA:LS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0tCk1JR0hBZ0VBTUJNR0J5cUdTTTQ5QWdFR0NDcUdTTTQ5QXdFSEJHMHdhd0lCQVFRZ2xwTHZaNnZmSGNYanBvMFYKUzVncW5JM21kdTNBSGJ0UnhmcU1CNWViT3I2aFJBTkNBQVQ3MHBiSE5NY015eFRxTVJiRjN0bXNwemZQTDIwQQpldk1lWGN5MFVDMkRiRXJ2bXBuT2hDamxFT2l4TXVDRzdUekJDdllLNUM0bGdxY0FjVnZVclBwZgotLS0tLUVORCBQUklWQVRFIEtFWS0tLS0tCg== \
+	VOLUME_TOKEN_SIGNING_KEY_NAME=local-dev-2026-03-03 \
 	./bin/api --port 3000
+
+define setup_local_env
+	$(eval include .env.local)
+	$(eval export $(shell sed 's/=.*//' .env.local))
+endef
+
+.PHONY: run-local
+run-local: $(LOCAL_BUILD_TARGET)
+	$(call setup_local_env)
+	NODE_ID=$(HOSTNAME) ./bin/api --port 3000
 
 # Run the API using air
 .PHONY: dev
@@ -47,40 +69,43 @@ dev:
 # make metric=heap interval=90 profiler
 .PHONY: profiler
 profiler:
-	go tool pprof -http :9991 http://localhost:3000/debug/pprof/$(metric)?seconds=$(interval)\&timeout=120
+	go tool pprof -http :9991 http://localhost:6060/debug/pprof/$(metric)?seconds=$(interval)\&timeout=120
 
 .PHONY: build-and-upload
 build-and-upload:
 	$(eval COMMIT_SHA := $(shell git rev-parse --short HEAD))
 	$(eval EXPECTED_MIGRATION_TIMESTAMP := $(expectedMigration))
-	@rm -rf .shared/ .db/
-	@cp -r ../shared .shared/
-	@cp -r ../db .db/
-	@docker buildx install # sets up the buildx as default docker builder (otherwise the command below won't work)
-	@docker build --platform linux/amd64 --tag "$(GCP_REGION)-docker.pkg.dev/$(GCP_PROJECT_ID)/$(IMAGE)" --push --build-arg COMMIT_SHA="$(COMMIT_SHA)" --build-arg EXPECTED_MIGRATION_TIMESTAMP="$(EXPECTED_MIGRATION_TIMESTAMP)" .
-	@rm -rf .shared/
-	@rm -rf .db/
+	cd .. && REGISTRY_PREFIX=$(REGISTRY_PREFIX) \
+		COMMIT_SHA=$(COMMIT_SHA) \
+		EXPECTED_MIGRATION_TIMESTAMP=$(EXPECTED_MIGRATION_TIMESTAMP) \
+		docker buildx bake -f api/docker-bake.hcl --push
 
 .PHONY: test
 test:
-	go test -v ./...
+	go test -race -v ./...
 
-.PHONY: build-and-upload-aws
-build-and-upload-aws:
-	$(eval AWS_ACCOUNT_ID := $(shell grep "^account_id=" /opt/config.properties | cut -d= -f2))
-	$(eval AWS_REGION := $(shell grep "^AWSREGION=" /opt/config.properties | cut -d= -f2))
-	$(eval ARCHITECTURE := $(shell grep "^CFNARCHITECTURE=" /opt/config.properties | cut -d= -f2 || echo "amd64"))
-	
-	@rm -rf .shared/ .db/
-	@cp -r ../shared .shared/
-	@cp -r ../db .db/
-	@docker buildx install || true # sets up the buildx as default docker builder
-	# Create ECR repository if it doesn't exist
-	@aws ecr describe-repositories --repository-names $(IMAGE) || aws ecr create-repository --repository-name $(IMAGE)
-	# Login to ECR
-	@aws ecr get-login-password --region $(AWS_REGION) | docker login --username AWS --password-stdin $(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com
-	# Build and push the image
-	@echo "Building for architecture: $(ARCHITECTURE)"
-	@docker build --platform linux/$(ARCHITECTURE) --tag "$(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/$(IMAGE):latest" .
-	@docker push "$(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/$(IMAGE):latest"
-	@rm -rf .shared/
+.PHONY: lint
+lint:
+	golangci-lint run --fix ./...
+
+.PHONY: generate-key
+generate-local-key:
+	# Generate a new ECDSA key pair (P-256)
+	openssl ecparam -name prime256v1 -genkey -noout -out private.pem
+	openssl ec -in private.pem -pubout -out public.pem
+	# Update .env.local with the new private key and name stamped with today's date
+	KEY=$$(base64 -w0 private.pem); \
+	NAME=local-dev-$$(date +%F); \
+	if grep -q '^VOLUME_TOKEN_SIGNING_KEY=' .env.local; then \
+		sed -i "s|^VOLUME_TOKEN_SIGNING_KEY=.*|VOLUME_TOKEN_SIGNING_KEY=ECDSA:$${KEY}|" .env.local; \
+	else \
+		echo "VOLUME_TOKEN_SIGNING_KEY=ECDSA:$${KEY}" >> .env.local; \
+	fi; \
+	if grep -q '^VOLUME_TOKEN_SIGNING_KEY_NAME=' .env.local; then \
+		sed -i "s|^VOLUME_TOKEN_SIGNING_KEY_NAME=.*|VOLUME_TOKEN_SIGNING_KEY_NAME=$${NAME}|" .env.local; \
+	else \
+		echo "VOLUME_TOKEN_SIGNING_KEY_NAME=$${NAME}" >> .env.local; \
+	fi
+
+	echo "Use the following base64 encoded private key to validate the token's signature:"
+	echo "local-dev:ECDSA:$$(base64 -w0 public.pem)"

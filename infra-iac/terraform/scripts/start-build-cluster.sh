@@ -11,9 +11,218 @@ PS4='[\D{%Y-%m-%d %H:%M:%S}] '
 # Enable command tracing
 set -x
 
+  while sudo fuser /var/lib/apt/lists/lock >/dev/null 2>&1 || \
+        sudo fuser /var/lib/dpkg/lock >/dev/null 2>&1 || \
+        sudo fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
+    sleep 5
+  done
+
+sudo apt-get -o DPkg::Lock::Timeout=300 update
+sudo apt-get -o DPkg::Lock::Timeout=300 install -y amazon-ecr-credential-helper nvme-cli
+
 # Send the log output from this script to user-data.log, syslog, and the console
 # Inspired by https://alestic.com/2010/12/ec2-user-data-output/
 exec > >(tee /var/log/user-data.log | logger -t user-data -s 2>/dev/console) 2>&1
+
+# Add cache disk for orchestrator and swapfile
+MOUNT_POINT="/orchestrator"
+
+# 获取当前实例类型 (使用 IMDSv2)
+IMDS_TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" \
+    -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
+INSTANCE_TYPE=$(curl -s -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" \
+    http://169.254.169.254/latest/meta-data/instance-type)
+echo "Detected instance type: $INSTANCE_TYPE"
+
+# ============================================================
+# CPU 型号校验（仅 5 系列 metal）：防止 Firecracker 快照跨 CPU 恢复失败
+# ============================================================
+ACTUAL_CPU=$(grep -m1 "model name" /proc/cpuinfo | cut -d: -f2 | xargs)
+EXPECTED_CPU=""
+case "$INSTANCE_TYPE" in
+    c5.metal|c5d.metal)                    EXPECTED_CPU="8275";;
+    c5n.metal)                             EXPECTED_CPU="8275";;
+    m5.metal|m5d.metal)                    EXPECTED_CPU="8259";;
+    m5n.metal|m5dn.metal)                  EXPECTED_CPU="8259";;
+    r5.metal|r5d.metal)                    EXPECTED_CPU="8259";;
+    r5n.metal|r5dn.metal|r5b.metal)        EXPECTED_CPU="8259";;
+    i3.metal)                              EXPECTED_CPU="E5-2686 v4";;
+    i3en.metal)                            EXPECTED_CPU="8175";;
+    z1d.metal)                             EXPECTED_CPU="8151";;
+    *)                                     EXPECTED_CPU="";;
+esac
+
+if [[ -n "$EXPECTED_CPU" && "$ACTUAL_CPU" != *"$EXPECTED_CPU"* ]]; then
+    echo "ERROR: CPU mismatch! Expected='$EXPECTED_CPU' Actual='$ACTUAL_CPU' Type=$INSTANCE_TYPE"
+    echo "Terminating instance to let ASG launch a replacement..."
+    INSTANCE_ID=$(curl -s -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" http://169.254.169.254/latest/meta-data/instance-id)
+    REGION=$(curl -s -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" http://169.254.169.254/latest/meta-data/placement/region)
+    aws ec2 terminate-instances --instance-ids "$INSTANCE_ID" --region "$REGION"
+    sleep 60
+    exit 1
+fi
+echo "CPU check passed: $ACTUAL_CPU"
+
+# 使用 case 语句检查是否支持多盘 LVM
+USE_LVM=false
+case "$INSTANCE_TYPE" in
+    m5d.metal|r5d.metal|m5dn.metal|r5dn.metal|i3.metal|i3en.metal)
+        USE_LVM=true
+        ;;
+esac
+echo "USE_LVM=$USE_LVM"
+
+if [[ "$USE_LVM" == "true" ]]; then
+    echo "Instance type $INSTANCE_TYPE supports multiple local NVMe disks, using LVM..."
+
+    # 安装 LVM2 工具（如果未安装）
+    if ! command -v pvcreate &>/dev/null; then
+        apt-get -o DPkg::Lock::Timeout=300 update && apt-get -o DPkg::Lock::Timeout=300 install -y lvm2
+    fi
+
+    # 查找所有本地 NVMe 实例存储设备（排除 EBS 卷）
+    NVME_DEVICES=()
+    for dev in /dev/nvme*n1; do
+        if [[ -b "$dev" ]]; then
+            # 检查是否是实例存储（非 EBS）
+            # EBS 卷的序列号通常以 "vol" 开头
+            SERIAL=$(nvme id-ctrl "$dev" 2>/dev/null | grep -i "sn" | awk '{print $3}')
+
+            if [[ ! "$SERIAL" =~ ^vol ]]; then
+                # 确保不是根卷
+                ROOT_DEV=$(df / | tail -1 | awk '{print $1}' | sed 's/p[0-9]*$//' | sed 's/[0-9]*$//')
+                if [[ "$dev" != "$ROOT_DEV" ]]; then
+                    NVME_DEVICES+=("$dev")
+                    echo "Found local NVMe device: $dev"
+                fi
+            fi
+        fi
+    done
+
+    NVME_COUNT=$${#NVME_DEVICES[@]}
+    echo "Found $NVME_COUNT local NVMe devices"
+
+    if [[ $NVME_COUNT -gt 1 ]]; then
+        echo "Creating LVM volume group from $NVME_COUNT devices..."
+
+        VG_NAME="vg_orchestrator"
+        LV_NAME="lv_orchestrator"
+
+        # 清理可能存在的旧配置
+        if vgdisplay $VG_NAME &>/dev/null; then
+            echo "Removing existing volume group $VG_NAME..."
+            lvremove -f /dev/$VG_NAME/$LV_NAME 2>/dev/null || true
+            vgremove -f $VG_NAME 2>/dev/null || true
+        fi
+
+        # 清理设备上的旧签名
+        for dev in "$${NVME_DEVICES[@]}"; do
+            wipefs -a "$dev" 2>/dev/null || true
+            pvremove -f "$dev" 2>/dev/null || true
+        done
+
+        # Step 1: 创建物理卷 (PV)
+        echo "Creating physical volumes..."
+        for dev in "$${NVME_DEVICES[@]}"; do
+            pvcreate -f "$dev"
+            echo "  Created PV on $dev"
+        done
+
+        # Step 2: 创建卷组 (VG)
+        echo "Creating volume group $VG_NAME..."
+        vgcreate $VG_NAME "$${NVME_DEVICES[@]}"
+
+        # Step 3: 创建逻辑卷 (LV) - 使用 100% 可用空间，条带化以提高性能
+        echo "Creating logical volume $LV_NAME with striping..."
+        lvcreate -l 100%FREE -i $NVME_COUNT -I 256K -n $LV_NAME $VG_NAME
+
+        # 设置 DISK 变量为 LVM 设备
+        DISK="/dev/$VG_NAME/$LV_NAME"
+        echo "LVM logical volume created: $DISK"
+
+        # 显示 LVM 配置信息
+        echo "=== LVM Configuration ==="
+        pvs
+        vgs
+        lvs
+        echo "========================="
+
+    elif [[ $NVME_COUNT -eq 1 ]]; then
+        echo "Only 1 local NVMe device found, using it directly..."
+        DISK="$${NVME_DEVICES[0]}"
+    else
+        echo "No local NVMe devices found, falling back to EBS detection..."
+        DISK="/dev/nvme1n1"
+    fi
+
+else
+    echo "Instance type $INSTANCE_TYPE uses single disk mode..."
+    # 动态检测数据盘：找到非根卷的 EBS 设备
+    ROOT_DEV=$(lsblk -no PKNAME $(findmnt -n -o SOURCE /) | head -1)
+    echo "Root device: /dev/$ROOT_DEV"
+
+    DISK=""
+    for dev in /dev/nvme*n1; do
+        if [[ -b "$dev" ]]; then
+            DEV_NAME=$(basename "$dev")
+            # 跳过根卷
+            if [[ "$DEV_NAME" == "$ROOT_DEV" ]]; then
+                echo "Skipping root device: $dev"
+                continue
+            fi
+            # 确认是 EBS 卷（序列号以 vol 开头）
+            SERIAL=$(nvme id-ctrl "$dev" 2>/dev/null | grep -i "sn" | awk '{print $3}')
+            if [[ "$SERIAL" =~ ^vol ]]; then
+                DISK="$dev"
+                echo "Found EBS data volume: $dev (SN: $SERIAL)"
+                break
+            fi
+        fi
+    done
+
+    if [[ -z "$DISK" ]]; then
+        echo "ERROR: No EBS data volume found!"
+        lsblk -o NAME,SIZE,TYPE,MOUNTPOINT
+        exit 1
+    fi
+fi
+
+echo "Using disk: $DISK"
+
+# 确保设备未被挂载
+sudo umount "$DISK" 2>/dev/null || true
+
+# Step 1: Format the disk with XFS and standard block size
+sudo mkfs.xfs -f -b size=4096 $DISK
+
+# Step 2: Create the mount point
+sudo mkdir -p $MOUNT_POINT
+
+# Step 3: Mount the disk
+sudo mount -o noatime $DISK $MOUNT_POINT
+
+sudo mkdir -p /orchestrator/sandbox
+sudo mkdir -p /orchestrator/template
+sudo mkdir -p /orchestrator/build
+
+# Add swapfile
+SWAPFILE="/swapfile"
+sudo fallocate -l 100G $SWAPFILE
+sudo chmod 600 $SWAPFILE
+sudo mkswap $SWAPFILE
+sudo swapon $SWAPFILE
+
+# Make swapfile persistent
+echo "$SWAPFILE none swap sw 0 0" | sudo tee -a /etc/fstab
+
+# Set swap settings
+sudo sysctl vm.swappiness=10
+sudo sysctl vm.vfs_cache_pressure=50
+
+# Add tmpfs for snapshotting
+# TODO: Parametrize this
+sudo mkdir -p /mnt/snapshot-cache
+sudo mount -t tmpfs -o size=65G tmpfs /mnt/snapshot-cache
 
 ulimit -n 1048576
 export GOMAXPROCS='nproc'
@@ -28,10 +237,27 @@ net.core.netdev_max_backlog = 65535
 # Increase maximum number of TCP sockets
 net.ipv4.tcp_max_syn_backlog = 65535
 
+# Increase the maximum number of memory map areas
+vm.max_map_count=1048576
+
 # Reserve static service ports from being used as ephemeral ports
 net.ipv4.ip_local_reserved_ports = 44313,50001
+
 EOF
 sudo sysctl -p
+
+echo "Disabling inotify for NBD devices"
+# https://lore.kernel.org/lkml/20220422054224.19527-1-matthew.ruffell@canonical.com/
+cat <<EOH >/etc/udev/rules.d/97-nbd-device.rules
+# Disable inotify watching of change events for NBD devices
+ACTION=="add|change", KERNEL=="nbd*", OPTIONS:="nowatch"
+EOH
+
+sudo udevadm control --reload-rules
+sudo udevadm trigger
+
+# Load the nbd module with 4096 devices
+sudo modprobe nbd nbds_max=4096
 
 # Create the directory for the fc mounts
 mkdir -p /fc-vm
@@ -46,7 +272,6 @@ mkdir -p $kernels_dir
 fc_versions_dir="/fc-versions"
 mkdir -p $fc_versions_dir
 
-
 # Mount S3 buckets using mountpoint-s3
 mkdir -p /tmp/mp_cache_envd /tmp/mp_cache_kernels /tmp/mp_cache_versions
 mount-s3 ${E2B_BUCKET} $envd_dir --prefix fc-env-pipeline/ --read-only --allow-other --cache /tmp/mp_cache_envd --file-mode 0755
@@ -56,6 +281,7 @@ mount-s3 ${E2B_BUCKET} $fc_versions_dir --prefix fc-versions/ --read-only --allo
 # These variables are passed in via Terraform template interpolation
 aws s3 cp "s3://${E2B_BUCKET}/cluster-setup/run-consul-${RUN_CONSUL_FILE_HASH}.sh" /opt/consul/bin/run-consul.sh
 aws s3 cp "s3://${E2B_BUCKET}/cluster-setup/run-build-cluster-nomad-${RUN_NOMAD_FILE_HASH}.sh" /opt/nomad/bin/run-nomad.sh
+
 chmod +x /opt/consul/bin/run-consul.sh /opt/nomad/bin/run-nomad.sh
 
 mkdir -p /root/docker
@@ -162,6 +388,14 @@ echo $overcommitment_hugepages >/proc/sys/vm/nr_overcommit_hugepages
     --dns-request-token "${CONSUL_DNS_REQUEST_TOKEN}" &
 
 /opt/nomad/bin/run-nomad.sh --consul-token "${CONSUL_TOKEN}" &
+
+# Add alias for ssh-ing to sbx
+echo '_sbx_ssh() {
+  local address=$(dig @127.0.0.4 $1. A +short 2>/dev/null)
+  ssh -o StrictHostKeyChecking=accept-new "root@$address"
+}
+
+alias sbx-ssh=_sbx_ssh' >>/etc/profile
 
 # Download and execute custom script if provided
 aws s3 cp "s3://${E2B_BUCKET}/cluster-setup/run-custom-script-${RUN_CUSTOM_SCRIPT_FILE_HASH}.sh" /opt/run-custom-script.sh

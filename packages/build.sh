@@ -1,54 +1,84 @@
 #!/bin/bash
-# Set error handling - script will exit if any command fails
 set -e
 
-# Navigate to the directory containing the script
 cd "$(dirname "$0")"
-
-# Define project root directory (adjust according to actual situation)
 PROJECT_ROOT=$(pwd)
-echo "Project root directory: $PROJECT_ROOT"
 
-# Build and upload API module
-echo "=== Building and uploading API module ==="
-cd "$PROJECT_ROOT/api" || { echo "API directory not found"; exit 1; }
-echo "Current directory: $(pwd)"
-make build-and-upload-aws
-echo "API module build and upload completed successfully"
+# Read config
+source /opt/config.properties 2>/dev/null || true
+AWS_ACCOUNT_ID=${account_id}
+AWS_REGION=${AWSREGION}
+BUCKET_E2B=${BUCKET_E2B}
 
-# Build and upload client-proxy module
-echo "=== Building and uploading client-proxy module ==="
-cd "$PROJECT_ROOT/client-proxy" || { echo "client-proxy directory not found"; exit 1; }
-echo "Current directory: $(pwd)"
-make build-and-upload-aws
-echo "client-proxy module build and upload completed successfully"
+if [ -z "$AWS_ACCOUNT_ID" ] || [ -z "$AWS_REGION" ]; then
+    echo "Error: account_id or AWSREGION not found in /opt/config.properties"
+    exit 1
+fi
 
-# Build and upload docker-reverse-proxy module
-echo "=== Building and uploading docker-reverse-proxy module ==="
-cd "$PROJECT_ROOT/docker-reverse-proxy" || { echo "docker-reverse-proxy directory not found"; exit 1; }
-echo "Current directory: $(pwd)"
-make build-and-upload-aws
-echo "docker-reverse-proxy module build and upload completed successfully"
+ECR_DOMAIN="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
 
-# Build and upload orchestrator module
-echo "=== Building and uploading orchestrator module ==="
-cd "$PROJECT_ROOT/orchestrator" || { echo "orchestrator directory not found"; exit 1; }
-echo "Current directory: $(pwd)"
-make build-and-upload
-echo "orchestrator module build and upload completed successfully"
+# ECR login
+echo "=== ECR Login ==="
+aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$ECR_DOMAIN"
 
-# Build and upload envd module
-echo "=== Building envd module ==="
-cd "$PROJECT_ROOT/envd" || { echo "envd directory not found"; exit 1; }
-echo "Current directory: $(pwd)"
-make build-and-upload
-echo "envd module build-and-upload completed successfully"
+# Ensure ECR repos exist
+for repo in e2b-orchestration/api e2b-orchestration/client-proxy docker-reverse-proxy; do
+    aws ecr describe-repositories --repository-names "$repo" --region "$AWS_REGION" 2>/dev/null || \
+    aws ecr create-repository --repository-name "$repo" --region "$AWS_REGION" 2>/dev/null || true
+done
 
-# Upload other required files
-echo "=== Uploading required files ==="
-cd "$PROJECT_ROOT" || { echo "Cannot return to project root"; exit 1; }
-echo "Current directory: $(pwd)"
+# ============================================================
+# Docker images (build context = packages/ root for all)
+# ============================================================
+echo ""
+echo "=== Building API ==="
+docker build --platform linux/amd64 \
+    -t "${ECR_DOMAIN}/e2b-orchestration/api:latest" \
+    -f api/Dockerfile .
+docker push "${ECR_DOMAIN}/e2b-orchestration/api:latest"
+echo "API done"
+
+echo ""
+echo "=== Building client-proxy ==="
+docker build --platform linux/amd64 \
+    -t "${ECR_DOMAIN}/e2b-orchestration/client-proxy:latest" \
+    -f client-proxy/Dockerfile .
+docker push "${ECR_DOMAIN}/e2b-orchestration/client-proxy:latest"
+echo "client-proxy done"
+
+echo ""
+echo "=== Building docker-reverse-proxy ==="
+docker build --platform linux/amd64 \
+    -t "${ECR_DOMAIN}/docker-reverse-proxy:latest" \
+    -f docker-reverse-proxy/Dockerfile .
+docker push "${ECR_DOMAIN}/docker-reverse-proxy:latest"
+echo "docker-reverse-proxy done"
+
+# ============================================================
+# Native binaries → S3
+# ============================================================
+echo ""
+echo "=== Building orchestrator ==="
+cd "$PROJECT_ROOT/orchestrator"
+make build
+aws s3 cp bin/orchestrator "s3://${BUCKET_E2B}/software/orchestrator"
+aws s3 cp bin/orchestrator "s3://${BUCKET_E2B}/software/template-manager"
+echo "orchestrator done"
+
+echo ""
+echo "=== Building envd ==="
+cd "$PROJECT_ROOT/envd"
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -a -o bin/envd .
+aws s3 cp bin/envd "s3://${BUCKET_E2B}/fc-env-pipeline/envd"
+echo "envd done"
+
+# ============================================================
+# Kernels + Firecracker (from e2b public builds)
+# ============================================================
+echo ""
+echo "=== Uploading kernels & firecracker ==="
+cd "$PROJECT_ROOT"
 bash ./upload.sh
-echo "envd upload completed successfully"
 
-echo "=== All builds and uploads completed successfully ==="
+echo ""
+echo "=== All builds and uploads completed ==="

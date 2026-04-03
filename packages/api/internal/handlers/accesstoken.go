@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"database/sql"
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -8,18 +10,19 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/e2b-dev/infra/packages/api/internal/api"
-	"github.com/e2b-dev/infra/packages/api/internal/utils"
+	"github.com/e2b-dev/infra/packages/auth/pkg/auth"
+	authqueries "github.com/e2b-dev/infra/packages/db/pkg/auth/queries"
+	"github.com/e2b-dev/infra/packages/shared/pkg/ginutils"
 	"github.com/e2b-dev/infra/packages/shared/pkg/keys"
-	"github.com/e2b-dev/infra/packages/shared/pkg/models/accesstoken"
 	"github.com/e2b-dev/infra/packages/shared/pkg/telemetry"
 )
 
 func (a *APIStore) PostAccessTokens(c *gin.Context) {
 	ctx := c.Request.Context()
 
-	userID := a.GetUserID(c)
+	userID := auth.MustGetUserID(c)
 
-	body, err := utils.ParseBody[api.NewAccessToken](ctx, c)
+	body, err := ginutils.ParseBody[api.NewAccessToken](ctx, c)
 	if err != nil {
 		a.sendAPIStoreError(c, http.StatusBadRequest, fmt.Sprintf("Error when parsing request: %s", err))
 
@@ -37,18 +40,16 @@ func (a *APIStore) PostAccessTokens(c *gin.Context) {
 		return
 	}
 
-	accessTokenDB, err := a.db.Client.AccessToken.
-		Create().
-		SetID(uuid.New()).
-		SetUserID(userID).
-		SetAccessToken(accessToken.PrefixedRawValue).
-		SetAccessTokenHash(accessToken.HashedValue).
-		SetAccessTokenPrefix(accessToken.Masked.Prefix).
-		SetAccessTokenLength(accessToken.Masked.ValueLength).
-		SetAccessTokenMaskPrefix(accessToken.Masked.MaskedValuePrefix).
-		SetAccessTokenMaskSuffix(accessToken.Masked.MaskedValueSuffix).
-		SetName(body.Name).
-		Save(ctx)
+	accessTokenDB, err := a.authDB.Write.CreateAccessToken(ctx, authqueries.CreateAccessTokenParams{
+		ID:                    uuid.New(),
+		UserID:                userID,
+		AccessTokenHash:       accessToken.HashedValue,
+		AccessTokenPrefix:     accessToken.Masked.Prefix,
+		AccessTokenLength:     int32(accessToken.Masked.ValueLength),
+		AccessTokenMaskPrefix: accessToken.Masked.MaskedValuePrefix,
+		AccessTokenMaskSuffix: accessToken.Masked.MaskedValueSuffix,
+		Name:                  body.Name,
+	})
 	if err != nil {
 		a.sendAPIStoreError(c, http.StatusInternalServerError, fmt.Sprintf("Error when creating access token: %s", err))
 
@@ -62,7 +63,7 @@ func (a *APIStore) PostAccessTokens(c *gin.Context) {
 		Token: accessToken.PrefixedRawValue,
 		Mask: api.IdentifierMaskingDetails{
 			Prefix:            accessTokenDB.AccessTokenPrefix,
-			ValueLength:       accessTokenDB.AccessTokenLength,
+			ValueLength:       int(accessTokenDB.AccessTokenLength),
 			MaskedValuePrefix: accessTokenDB.AccessTokenMaskPrefix,
 			MaskedValueSuffix: accessTokenDB.AccessTokenMaskSuffix,
 		},
@@ -74,7 +75,7 @@ func (a *APIStore) PostAccessTokens(c *gin.Context) {
 func (a *APIStore) DeleteAccessTokensAccessTokenID(c *gin.Context, accessTokenID string) {
 	ctx := c.Request.Context()
 
-	userID := a.GetUserID(c)
+	userID := auth.MustGetUserID(c)
 
 	accessTokenIDParsed, err := uuid.Parse(accessTokenID)
 	if err != nil {
@@ -85,11 +86,13 @@ func (a *APIStore) DeleteAccessTokensAccessTokenID(c *gin.Context, accessTokenID
 		return
 	}
 
-	n, err := a.db.Client.AccessToken.Delete().
-		Where(accesstoken.IDEQ(accessTokenIDParsed), accesstoken.UserIDEQ(userID)).
-		Exec(ctx)
-	if n < 1 {
+	_, err = a.authDB.Write.DeleteAccessToken(ctx, authqueries.DeleteAccessTokenParams{
+		ID:     accessTokenIDParsed,
+		UserID: userID,
+	})
+	if errors.Is(err, sql.ErrNoRows) {
 		c.String(http.StatusNotFound, "id not found")
+
 		return
 	} else if err != nil {
 		a.sendAPIStoreError(c, http.StatusInternalServerError, fmt.Sprintf("Error when deleting access token: %s", err))

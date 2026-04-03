@@ -46,38 +46,33 @@ job "api" {
       }
 
       env {
-        ORCHESTRATOR_PORT             = 5008
-        TEMPLATE_MANAGER_HOST         = "template-manager.service.consul:5009"
-        AWS_ENABLED                   = "true"
-        AWS_DOCKER_REPOSITORY_NAME    = "e2bdev/base"
-        AWS_REGION                   = "${AWSREGION}"
-        POSTGRES_CONNECTION_STRING    = "${CFNDBURL}"
-        SUPABASE_JWT_SECRETS          = "${CFNDBURL}"
-        CLICKHOUSE_CONNECTION_STRING   = ""
-        CLICKHOUSE_USERNAME            = ""
-        CLICKHOUSE_PASSWORD            = ""
-        CLICKHOUSE_DATABASE            = ""
-        DB_HOST                       = "${postgres_host}"
-        DB_USER                       = "${postgres_user}"
-        DB_PASSWORD                   = "${postgres_password}"
-        ENVIRONMENT                   = "${environment}"
-        POSTHOG_API_KEY               = "posthog_api_key"
-        ANALYTICS_COLLECTOR_HOST      = "analytics_collector_host"
-        ANALYTICS_COLLECTOR_API_TOKEN = "analytics_collector_api_token"
-        LOKI_ADDRESS                  = "http://loki.service.consul:3100"
-        OTEL_TRACING_PRINT            = "false"
-        LOGS_COLLECTOR_ADDRESS        = "http://localhost:30006"
-        NOMAD_TOKEN                   = "${nomad_acl_token}"
-        CONSUL_HTTP_TOKEN             = "${consul_http_token}"
-        OTEL_COLLECTOR_GRPC_ENDPOINT  = "localhost:4317"
-        ADMIN_TOKEN                   = "${admin_token}"
-        REDIS_URL                     = "${REDIS_ENDPOINT}:6379"
-        DNS_PORT                      = 5353
+        NODE_ID                        = "$${node.unique.id}"
+        POSTGRES_CONNECTION_STRING     = "${CFNDBURL}"
+        AUTH_DB_CONNECTION_STRING      = "${CFNDBURL}"
+        ENVIRONMENT                    = "${environment}"
+        ADMIN_TOKEN                    = "${admin_token}"
+        NOMAD_TOKEN                    = "${nomad_acl_token}"
+        CONSUL_HTTP_TOKEN              = "${consul_http_token}"
+        REDIS_CLUSTER_URL                      = "${REDIS_ENDPOINT}:6379"
+        REDIS_TLS_ENABLED                = "true"
+        REDIS_TLS_CA_BASE64          = ""
+        LOKI_URL                       = "http://loki.service.consul:3100"
+        DOMAIN_NAME                    = "${CFNDOMAIN}"
+        DNS_PORT                       = 5353
         SANDBOX_ACCESS_TOKEN_HASH_SEED = "${admin_token}"
-        # This is here just because it is required in some part of our code which is transitively imported
-        TEMPLATE_BUCKET_NAME          = "skip"
-        BUILD_CONTEXT_BUCKET_NAME     = "${BUCKET_E2B}"
-        BUILD_CONTEXT_BUCKET_PREFIX   = "docker-contexts/"
+        OTEL_TRACING_PRINT             = "false"
+        OTEL_COLLECTOR_GRPC_ENDPOINT   = "localhost:4317"
+        LOGS_COLLECTOR_ADDRESS         = "http://localhost:30006"
+        # Volume token config - dummy values since volumes are not yet used
+        VOLUME_TOKEN_ISSUER            = "e2b"
+        VOLUME_TOKEN_SIGNING_METHOD    = "HS256"
+        VOLUME_TOKEN_SIGNING_KEY       = "HMAC:c2tpcA=="
+        VOLUME_TOKEN_SIGNING_KEY_NAME  = "default"
+        # These are here because they are transitively required
+        TEMPLATE_BUCKET_NAME           = "${BUCKET_E2B}"
+        STORAGE_PROVIDER               = "AWSBucket"
+        ARTIFACTS_REGISTRY_PROVIDER    = "AWS_ECR"
+        AWS_REGION                     = "${AWSREGION}"
       }
 
       config {

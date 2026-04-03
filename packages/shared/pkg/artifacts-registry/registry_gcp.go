@@ -30,7 +30,7 @@ var gcpAuthConfig = authn.Basic{
 func NewGCPArtifactsRegistry(ctx context.Context) (*GCPArtifactsRegistry, error) {
 	registry, err := artifactregistry.NewClient(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("error creating artifact registry client: %v", err)
+		return nil, fmt.Errorf("error creating artifact registry client: %w", err)
 	}
 
 	return &GCPArtifactsRegistry{registry: registry}, nil
@@ -44,13 +44,13 @@ func (g *GCPArtifactsRegistry) Delete(ctx context.Context, templateId string, bu
 			return ErrImageNotExists
 		}
 
-		return fmt.Errorf("error deleting tag %s: %v", tagPath, err)
+		return fmt.Errorf("error deleting tag %s: %w", tagPath, err)
 	}
 
 	return nil
 }
 
-func (g *GCPArtifactsRegistry) GetTag(ctx context.Context, templateId string, buildId string) (string, error) {
+func (g *GCPArtifactsRegistry) GetTag(_ context.Context, templateId string, buildId string) (string, error) {
 	return fmt.Sprintf("%s-docker.pkg.dev/%s/%s/%s:%s", consts.GCPRegion, consts.GCPProject, consts.DockerRegistry, templateId, buildId), nil
 }
 
@@ -70,7 +70,7 @@ func (g *GCPArtifactsRegistry) GetImage(ctx context.Context, templateId string, 
 		return nil, fmt.Errorf("failed to get auth: %w", err)
 	}
 
-	img, err := remote.Image(ref, remote.WithAuth(auth), remote.WithPlatform(platform))
+	img, err := remote.Image(ref, remote.WithAuth(auth), remote.WithPlatform(platform), remote.WithContext(ctx))
 	if err != nil {
 		return nil, fmt.Errorf("error pulling image: %w", err)
 	}
@@ -78,7 +78,7 @@ func (g *GCPArtifactsRegistry) GetImage(ctx context.Context, templateId string, 
 	return img, nil
 }
 
-func (g *GCPArtifactsRegistry) getAuthToken(ctx context.Context) (*authn.Basic, error) {
+func (g *GCPArtifactsRegistry) getAuthToken(_ context.Context) (*authn.Basic, error) {
 	authCfg := consts.DockerAuthConfig
 	if authCfg == "" {
 		return &gcpAuthConfig, nil

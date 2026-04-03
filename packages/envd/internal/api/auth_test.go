@@ -7,13 +7,18 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/e2b-dev/infra/packages/shared/pkg/keys"
 )
 
 func TestKeyGenerationAlgorithmIsStable(t *testing.T) {
+	t.Parallel()
 	apiToken := "secret-access-token"
-	api := &API{accessToken: &apiToken}
+	secureToken := &SecureToken{}
+	err := secureToken.Set([]byte(apiToken))
+	require.NoError(t, err)
+	api := &API{accessToken: secureToken}
 
 	path := "/path/to/demo.txt"
 	username := "root"
@@ -21,7 +26,7 @@ func TestKeyGenerationAlgorithmIsStable(t *testing.T) {
 	timestamp := time.Now().Unix()
 
 	signature, err := api.generateSignature(path, username, operation, &timestamp)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.NotEmpty(t, signature)
 
 	// locally generated signature
@@ -33,15 +38,19 @@ func TestKeyGenerationAlgorithmIsStable(t *testing.T) {
 }
 
 func TestKeyGenerationAlgorithmWithoutExpirationIsStable(t *testing.T) {
+	t.Parallel()
 	apiToken := "secret-access-token"
-	api := &API{accessToken: &apiToken}
+	secureToken := &SecureToken{}
+	err := secureToken.Set([]byte(apiToken))
+	require.NoError(t, err)
+	api := &API{accessToken: secureToken}
 
 	path := "/path/to/resource.txt"
 	username := "user"
 	operation := "read"
 
 	signature, err := api.generateSignature(path, username, operation, nil)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.NotEmpty(t, signature)
 
 	// locally generated signature

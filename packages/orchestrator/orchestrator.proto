@@ -9,20 +9,20 @@ message SandboxConfig {
   // Data required for creating a new sandbox.
   string template_id = 1;
   string build_id = 2;
-  
+
   string kernel_version = 3;
   string firecracker_version = 4;
-  
+
   bool huge_pages = 5;
-  
+
   string sandbox_id = 6;
   map<string, string> env_vars = 7;
-  
+
   // Metadata about the sandbox.
   map<string, string> metadata = 8;
   optional string alias = 9;
   string envd_version = 10;
-  
+
   int64 vcpu = 11;
   int64 ram_mb = 12;
 
@@ -35,10 +35,53 @@ message SandboxConfig {
   bool snapshot = 16;
   string base_template_id = 17;
 
-  optional bool auto_pause = 18;
+  bool auto_pause = 18;
 
   optional string envd_access_token = 19;
   string execution_id = 20;
+
+  // Whether the sandbox should have access to the internet.
+  // This is optional only for backwards compatibility.
+  // After migration, the optional keyword can be removed.
+  optional bool allow_internet_access = 21;
+
+  optional SandboxNetworkConfig network = 22;
+
+  repeated SandboxVolumeMount volumeMounts = 23;
+
+  // Auto-resume policy for paused sandboxes.
+  optional SandboxAutoResumeConfig auto_resume = 24;
+}
+
+message SandboxAutoResumeConfig {
+  // Policy values are owned by the API layer today (e.g. "off", "any").
+  string policy = 1;
+  // Timeout requested on initial sandbox create (seconds).
+  uint64 timeout_seconds = 2;
+}
+
+message SandboxVolumeMount {
+  string id = 1;
+  string path = 2;
+  string type = 3;
+  string name = 4;
+}
+
+message SandboxNetworkConfig {
+  optional SandboxNetworkEgressConfig egress = 1;
+  optional SandboxNetworkIngressConfig ingress = 2;
+}
+
+message SandboxNetworkEgressConfig {
+  repeated string allowed_cidrs = 1;
+  repeated string denied_cidrs = 2;
+
+  repeated string allowed_domains = 3;
+}
+
+message SandboxNetworkIngressConfig {
+  optional string traffic_access_token = 1;
+  optional string mask_request_host = 2;
 }
 
 message SandboxCreateRequest {
@@ -55,7 +98,9 @@ message SandboxCreateResponse {
 message SandboxUpdateRequest {
   string sandbox_id = 1;
 
-  google.protobuf.Timestamp end_time = 2;
+  // All fields are optional — only set fields are applied.
+  optional google.protobuf.Timestamp end_time = 2;
+  optional SandboxNetworkEgressConfig egress = 3;
 }
 
 message SandboxDeleteRequest {
@@ -66,6 +111,14 @@ message SandboxPauseRequest {
   string sandbox_id = 1;
   string template_id = 2;
   string build_id = 3;
+}
+
+message SandboxCheckpointRequest {
+  string sandbox_id = 1;
+  string build_id = 3;
+}
+
+message SandboxCheckpointResponse {
 }
 
 message RunningSandbox {
@@ -95,6 +148,7 @@ service SandboxService {
   rpc List(google.protobuf.Empty) returns (SandboxListResponse);
   rpc Delete(SandboxDeleteRequest) returns (google.protobuf.Empty);
   rpc Pause(SandboxPauseRequest) returns (google.protobuf.Empty);
+  rpc Checkpoint(SandboxCheckpointRequest) returns (SandboxCheckpointResponse);
 
   rpc ListCachedBuilds(google.protobuf.Empty) returns (SandboxListCachedBuildsResponse);
 }

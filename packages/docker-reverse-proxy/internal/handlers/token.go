@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,7 +12,6 @@ import (
 	"time"
 
 	"github.com/e2b-dev/infra/packages/docker-reverse-proxy/internal/auth"
-	"github.com/e2b-dev/infra/packages/docker-reverse-proxy/internal/constants"
 	"github.com/e2b-dev/infra/packages/shared/pkg/consts"
 )
 
@@ -34,10 +34,11 @@ func (a *APIStore) GetToken(w http.ResponseWriter, r *http.Request) error {
 	accessToken, err := auth.ExtractAccessToken(authHeader, "Basic ")
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
-		return fmt.Errorf("error while extracting access token: %s", err)
+
+		return fmt.Errorf("error while extracting access token: %w", err)
 	}
 
-	if !auth.ValidateAccessToken(ctx, a.db.Client, accessToken) {
+	if !auth.ValidateAccessToken(ctx, a.authDb, accessToken) {
 		log.Printf("Invalid access token: '%s'\n", accessToken)
 
 		w.WriteHeader(http.StatusForbidden)
@@ -78,11 +79,11 @@ func (a *APIStore) GetToken(w http.ResponseWriter, r *http.Request) error {
 	}
 
 	// Validate if the user has access to the template
-	hasAccess, err := auth.Validate(ctx, a.db.Client, accessToken, templateID)
+	hasAccess, err := auth.Validate(ctx, a.db, accessToken, templateID)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 
-		return fmt.Errorf("error while validating access: %s", err)
+		return fmt.Errorf("error while validating access: %w", err)
 	}
 
 	if !hasAccess {
@@ -91,19 +92,12 @@ func (a *APIStore) GetToken(w http.ResponseWriter, r *http.Request) error {
 		return fmt.Errorf("access denied for env: %s", templateID)
 	}
 
-	// Get docker token from the actual registry based on cloud provider
-	var dockerToken *DockerToken
-	if constants.CurrentCloudProvider == constants.GCP {
-		dockerToken, err = getGCPToken(templateID)
-	} else if constants.CurrentCloudProvider == constants.AWS {
-		dockerToken, err = getAWSToken(templateID)
-	} else {
-		err = fmt.Errorf("unsupported cloud provider")
-	}
-
+	// Get docker token from the actual registry
+	dockerToken, err := getToken(ctx, templateID)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
-		return fmt.Errorf("error while getting docker token: %s", err)
+
+		return fmt.Errorf("error while getting docker token: %w", err)
 	}
 
 	jsonResponse := a.AuthCache.Create(templateID, dockerToken.Token, dockerToken.ExpiresIn)
@@ -114,8 +108,8 @@ func (a *APIStore) GetToken(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-// getGCPToken gets a new token from the GCP Artifact Registry for the required scope
-func getGCPToken(templateID string) (*DockerToken, error) {
+// getToken gets a new token from the actual registry for the required scope
+func getToken(ctx context.Context, templateID string) (*DockerToken, error) {
 	scope := fmt.Sprintf(
 		"?service=%s-docker.pkg.dev&scope=repository:%s/%s/%s:push,pull",
 		consts.GCPRegion,
@@ -129,7 +123,7 @@ func getGCPToken(templateID string) (*DockerToken, error) {
 		scope,
 	)
 
-	r, err := http.NewRequest(http.MethodGet, url, nil)
+	r, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request for scope - %s: %w", templateID, err)
 	}
@@ -166,27 +160,4 @@ func getGCPToken(templateID string) (*DockerToken, error) {
 	}
 
 	return parsedBody, nil
-}
-
-// getAWSToken gets a new token from AWS ECR for the required scope
-func getAWSToken(templateID string) (*DockerToken, error) {
-	// First, ensure the ECR repository exists for this template
-	err := auth.EnsureECRRepositoryExists(templateID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to ensure ECR repository exists: %w", err)
-	}
-	
-	// For AWS ECR, we use the AWS SDK to get the authorization token
-	authResponse, err := auth.GetAWSECRAuthToken()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get AWS ECR auth token: %w", err)
-	}
-
-	// 直接返回完整的 base64 编码令牌
-	log.Printf("[DEBUG] ECR Token - Got token expiring at: %s", authResponse.ExpiresAt.Format(time.RFC3339))
-	
-	return &DockerToken{
-		Token:     authResponse.Token, // 返回完整的 base64 编码令牌
-		ExpiresIn: int(time.Until(authResponse.ExpiresAt).Seconds()),
-	}, nil
 }

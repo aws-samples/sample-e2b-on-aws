@@ -2,8 +2,10 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"mime/multipart"
 	"net/http"
 	"os"
@@ -14,101 +16,99 @@ import (
 
 	"github.com/rs/zerolog"
 
+	"github.com/e2b-dev/infra/packages/envd/internal/execcontext"
 	"github.com/e2b-dev/infra/packages/envd/internal/logs"
 	"github.com/e2b-dev/infra/packages/envd/internal/permissions"
 	"github.com/e2b-dev/infra/packages/envd/internal/utils"
 )
 
-func freeDiskSpace(path string) (free uint64, err error) {
-	var stat syscall.Statfs_t
+var ErrNoDiskSpace = fmt.Errorf("not enough disk space available")
 
-	err = syscall.Statfs(path, &stat)
-	if err != nil {
-		return 0, fmt.Errorf("error getting free disk space: %w", err)
-	}
-
-	// Available blocks * size per block = available space in bytes
-	freeSpace := stat.Bavail * uint64(stat.Bsize)
-
-	return freeSpace, nil
-}
-
-func processFile(r *http.Request, path string, part *multipart.Part, user *user.User, logger zerolog.Logger) (int, error) {
+func processFile(r *http.Request, path string, part io.Reader, uid, gid int, logger zerolog.Logger) (int, error) {
 	logger.Debug().
 		Str("path", path).
 		Msg("File processing")
 
-	uid, gid, err := permissions.GetUserIds(user)
+	err := permissions.EnsureDirs(filepath.Dir(path), uid, gid)
 	if err != nil {
-		errMsg := fmt.Errorf("error getting user ids: %w", err)
+		err := fmt.Errorf("error ensuring directories: %w", err)
 
-		return http.StatusInternalServerError, errMsg
+		return http.StatusInternalServerError, err
 	}
 
-	err = permissions.EnsureDirs(filepath.Dir(path), int(uid), int(gid))
-	if err != nil {
-		errMsg := fmt.Errorf("error ensuring directories: %w", err)
-
-		return http.StatusInternalServerError, errMsg
-	}
-
-	freeSpace, err := freeDiskSpace(filepath.Dir(path))
-	if err != nil {
-		errMsg := fmt.Errorf("error checking free disk space: %w", err)
-
-		return http.StatusInternalServerError, errMsg
-	}
-
-	// Sometimes the size can be unknown resulting in ContentLength being -1 or 0.
-	// We are still comparing these values — this condition will just always evaluate false for them.
-	if int64(freeSpace) < r.ContentLength {
-		errMsg := fmt.Errorf("not enough disk space on '%s': %d bytes required, %d bytes free", filepath.Dir(path), r.ContentLength, freeSpace)
-
-		return http.StatusInsufficientStorage, errMsg
-	}
-
+	canBePreChowned := false
 	stat, err := os.Stat(path)
 	if err != nil && !os.IsNotExist(err) {
 		errMsg := fmt.Errorf("error getting file info: %w", err)
 
 		return http.StatusInternalServerError, errMsg
+	} else if err == nil {
+		if stat.IsDir() {
+			err := fmt.Errorf("path is a directory: %s", path)
+
+			return http.StatusBadRequest, err
+		}
+		canBePreChowned = true
 	}
 
-	if err == nil {
-		if stat.IsDir() {
-			errMsg := fmt.Errorf("path is a directory: %s", path)
+	hasBeenChowned := false
+	if canBePreChowned {
+		err = os.Chown(path, uid, gid)
+		if err != nil {
+			if !os.IsNotExist(err) {
+				err = fmt.Errorf("error changing file ownership: %w", err)
 
-			return http.StatusBadRequest, errMsg
+				return http.StatusInternalServerError, err
+			}
+		} else {
+			hasBeenChowned = true
 		}
 	}
 
-	file, err := os.Create(path)
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o666)
 	if err != nil {
-		errMsg := fmt.Errorf("error creating file: %w", err)
+		if errors.Is(err, syscall.ENOSPC) {
+			err = fmt.Errorf("not enough inodes available: %w", err)
 
-		return http.StatusInternalServerError, errMsg
+			return http.StatusInsufficientStorage, err
+		}
+
+		err := fmt.Errorf("error opening file: %w", err)
+
+		return http.StatusInternalServerError, err
 	}
 
 	defer file.Close()
 
-	err = os.Chown(path, int(uid), int(gid))
-	if err != nil {
-		errMsg := fmt.Errorf("error changing file ownership: %w", err)
+	if !hasBeenChowned {
+		err = os.Chown(path, uid, gid)
+		if err != nil {
+			err := fmt.Errorf("error changing file ownership: %w", err)
 
-		return http.StatusInternalServerError, errMsg
+			return http.StatusInternalServerError, err
+		}
 	}
 
-	_, readErr := file.ReadFrom(part)
-	if readErr != nil {
-		errMsg := fmt.Errorf("error reading file: %w", readErr)
+	_, err = file.ReadFrom(part)
+	if err != nil {
+		if errors.Is(err, syscall.ENOSPC) {
+			err = ErrNoDiskSpace
+			if r.ContentLength > 0 {
+				err = fmt.Errorf("attempted to write %d bytes: %w", r.ContentLength, err)
+			}
 
-		return http.StatusInternalServerError, errMsg
+			return http.StatusInsufficientStorage, err
+		}
+
+		err = fmt.Errorf("error writing file: %w", err)
+
+		return http.StatusInternalServerError, err
 	}
 
 	return http.StatusNoContent, nil
 }
 
-func resolvePath(part *multipart.Part, paths *UploadSuccess, u *user.User, params PostFilesParams) (string, error) {
+func resolvePath(part *multipart.Part, paths *UploadSuccess, u *user.User, defaultPath *string, params PostFilesParams) (string, error) {
 	var pathToResolve string
 
 	if params.Path != nil {
@@ -122,7 +122,7 @@ func resolvePath(part *multipart.Part, paths *UploadSuccess, u *user.User, param
 		}
 	}
 
-	filePath, err := permissions.ExpandAndResolve(pathToResolve, u)
+	filePath, err := permissions.ExpandAndResolve(pathToResolve, u, defaultPath)
 	if err != nil {
 		return "", fmt.Errorf("error resolving path: %w", err)
 	}
@@ -139,7 +139,7 @@ func resolvePath(part *multipart.Part, paths *UploadSuccess, u *user.User, param
 			errMsg := fmt.Errorf("you cannot upload multiple files to the same path '%s' in one upload request, only the first specified file was uploaded", filePath)
 
 			if len(alreadyUploaded) > 1 {
-				errMsg = fmt.Errorf("%s, also the following files were uploaded: %v", errMsg, strings.Join(alreadyUploaded, ", "))
+				errMsg = fmt.Errorf("%w, also the following files were uploaded: %v", errMsg, strings.Join(alreadyUploaded, ", "))
 			}
 
 			return "", errMsg
@@ -149,8 +149,40 @@ func resolvePath(part *multipart.Part, paths *UploadSuccess, u *user.User, param
 	return filePath, nil
 }
 
+func (a *API) handlePart(r *http.Request, part *multipart.Part, paths UploadSuccess, u *user.User, uid, gid int, operationID string, params PostFilesParams) (*EntryInfo, int, error) {
+	defer part.Close()
+
+	if part.FormName() != "file" {
+		return nil, http.StatusOK, nil
+	}
+
+	filePath, err := resolvePath(part, &paths, u, a.defaults.Workdir, params)
+	if err != nil {
+		return nil, http.StatusBadRequest, err
+	}
+
+	logger := a.logger.
+		With().
+		Str(string(logs.OperationIDKey), operationID).
+		Str("event_type", "file_processing").
+		Logger()
+
+	status, err := processFile(r, filePath, part, uid, gid, logger)
+	if err != nil {
+		return nil, status, err
+	}
+
+	return &EntryInfo{
+		Path: filePath,
+		Name: filepath.Base(filePath),
+		Type: File,
+	}, http.StatusOK, nil
+}
+
 func (a *API) PostFiles(w http.ResponseWriter, r *http.Request, params PostFilesParams) {
-	defer r.Body.Close()
+	// Capture original body to ensure it's always closed
+	originalBody := r.Body
+	defer originalBody.Close()
 
 	var errorCode int
 	var errMsg error
@@ -167,6 +199,15 @@ func (a *API) PostFiles(w http.ResponseWriter, r *http.Request, params PostFiles
 	if err != nil {
 		a.logger.Error().Err(err).Str(string(logs.OperationIDKey), operationID).Msg("error during auth validation")
 		jsonError(w, http.StatusUnauthorized, err)
+
+		return
+	}
+
+	username, err := execcontext.ResolveDefaultUsername(params.Username, a.defaults.User)
+	if err != nil {
+		a.logger.Error().Err(err).Str(string(logs.OperationIDKey), operationID).Msg("no user specified")
+		jsonError(w, http.StatusBadRequest, err)
+
 		return
 	}
 
@@ -176,7 +217,7 @@ func (a *API) PostFiles(w http.ResponseWriter, r *http.Request, params PostFiles
 			Str("method", r.Method+" "+r.URL.Path).
 			Str(string(logs.OperationIDKey), operationID).
 			Str("path", path).
-			Str("username", params.Username)
+			Str("username", username)
 
 		if errMsg != nil {
 			l = l.Int("error_code", errorCode)
@@ -185,18 +226,21 @@ func (a *API) PostFiles(w http.ResponseWriter, r *http.Request, params PostFiles
 		l.Msg("File write")
 	}()
 
-	f, err := r.MultipartReader()
+	// Handle gzip-encoded request body
+	body, err := getDecompressedBody(r)
 	if err != nil {
-		errMsg = fmt.Errorf("error parsing multipart form: %w", err)
-		errorCode = http.StatusInternalServerError
+		errMsg = fmt.Errorf("error decompressing request body: %w", err)
+		errorCode = http.StatusBadRequest
 		jsonError(w, errorCode, errMsg)
 
 		return
 	}
+	defer body.Close()
+	r.Body = body
 
-	u, err := user.Lookup(params.Username)
+	u, err := user.Lookup(username)
 	if err != nil {
-		errMsg = fmt.Errorf("error looking up user '%s': %w", params.Username, err)
+		errMsg = fmt.Errorf("error looking up user '%s': %w", username, err)
 		errorCode = http.StatusUnauthorized
 
 		jsonError(w, errorCode, errMsg)
@@ -204,49 +248,35 @@ func (a *API) PostFiles(w http.ResponseWriter, r *http.Request, params PostFiles
 		return
 	}
 
-	paths := UploadSuccess{}
+	uid, gid, err := permissions.GetUserIdInts(u)
+	if err != nil {
+		errMsg = fmt.Errorf("error getting user ids: %w", err)
 
-	for {
-		part, partErr := f.NextPart()
+		jsonError(w, http.StatusInternalServerError, errMsg)
 
-		if partErr == io.EOF {
-			// We're done reading the parts.
-			break
-		} else if partErr != nil {
-			errMsg = fmt.Errorf("error reading form: %w", partErr)
-			errorCode = http.StatusInternalServerError
-			jsonError(w, errorCode, errMsg)
+		return
+	}
 
-			break
-		}
+	// Use raw body upload only for application/octet-stream, default to multipart for backwards compatibility
+	contentType := r.Header.Get("Content-Type")
+	mediaType, _, _ := mime.ParseMediaType(contentType)
 
-		if part.FormName() == "file" {
-			filePath, err := resolvePath(part, &paths, u, params)
-			if err != nil {
-				errorCode = http.StatusBadRequest
-				errMsg = err
-				jsonError(w, errorCode, errMsg)
+	var paths UploadSuccess
 
-				return
-			}
+	switch {
+	case mediaType == "application/octet-stream":
+		paths, errorCode, errMsg = a.handleRawUpload(r, u, uid, gid, operationID, params)
+	case strings.HasPrefix(mediaType, "multipart/"):
+		paths, errorCode, errMsg = a.handleMultipartUpload(r, u, uid, gid, operationID, params)
+	default:
+		errorCode = http.StatusBadRequest
+		errMsg = fmt.Errorf("unsupported content type: %s, expected multipart/form-data or application/octet-stream", contentType)
+	}
 
-			status, processErr := processFile(r, filePath, part, u, a.logger.With().Str(string(logs.OperationIDKey), operationID).Str("event_type", "file_processing").Logger())
-			if processErr != nil {
-				errorCode = status
-				errMsg = processErr
-				jsonError(w, errorCode, errMsg)
+	if errMsg != nil {
+		jsonError(w, errorCode, errMsg)
 
-				return
-			}
-
-			paths = append(paths, EntryInfo{
-				Path: filePath,
-				Name: filepath.Base(filePath),
-				Type: File,
-			})
-		}
-
-		part.Close()
+		return
 	}
 
 	data, err := json.Marshal(paths)
@@ -260,4 +290,62 @@ func (a *API) PostFiles(w http.ResponseWriter, r *http.Request, params PostFiles
 
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(data)
+}
+
+func (a *API) handleMultipartUpload(r *http.Request, u *user.User, uid, gid int, operationID string, params PostFilesParams) (UploadSuccess, int, error) {
+	f, err := r.MultipartReader()
+	if err != nil {
+		return nil, http.StatusInternalServerError, fmt.Errorf("error parsing multipart form: %w", err)
+	}
+
+	paths := UploadSuccess{}
+
+	for {
+		part, partErr := f.NextPart()
+
+		if partErr == io.EOF {
+			break
+		} else if partErr != nil {
+			return nil, http.StatusInternalServerError, fmt.Errorf("error reading form: %w", partErr)
+		}
+
+		entry, status, err := a.handlePart(r, part, paths, u, uid, gid, operationID, params)
+		if err != nil {
+			return nil, status, err
+		}
+
+		if entry != nil {
+			paths = append(paths, *entry)
+		}
+	}
+
+	return paths, http.StatusOK, nil
+}
+
+func (a *API) handleRawUpload(r *http.Request, u *user.User, uid, gid int, operationID string, params PostFilesParams) (UploadSuccess, int, error) {
+	if params.Path == nil {
+		return nil, http.StatusBadRequest, fmt.Errorf("path query parameter is required for raw body upload")
+	}
+
+	filePath, err := permissions.ExpandAndResolve(*params.Path, u, a.defaults.Workdir)
+	if err != nil {
+		return nil, http.StatusBadRequest, fmt.Errorf("error resolving path: %w", err)
+	}
+
+	logger := a.logger.
+		With().
+		Str(string(logs.OperationIDKey), operationID).
+		Str("event_type", "file_processing").
+		Logger()
+
+	status, err := processFile(r, filePath, r.Body, uid, gid, logger)
+	if err != nil {
+		return nil, status, err
+	}
+
+	return UploadSuccess{{
+		Path: filePath,
+		Name: filepath.Base(filePath),
+		Type: File,
+	}}, http.StatusOK, nil
 }

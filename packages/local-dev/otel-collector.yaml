@@ -1,0 +1,73 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+
+  batch/clickhouse:
+    timeout: 5s
+    send_batch_size: 50000
+
+  filter/external_metrics:
+    metrics:
+      include:
+        match_type: regexp
+        metric_names:
+          - "e2b.*"
+
+exporters:
+  otlp_http/loki:
+    endpoint: http://loki:3100/otlp
+  otlp_http/mimir:
+    endpoint: http://mimir:9009/otlp
+  otlp/tempo:
+    endpoint: tempo:4317
+    tls:
+      insecure: true
+  clickhouse:
+    endpoint: tcp://clickhouse:9000
+    database: default
+    username: clickhouse
+    password: clickhouse
+    async_insert: true
+    create_schema: false
+    metrics_tables:
+      gauge:
+        name: "metrics_gauge"
+      sum:
+        name: "metrics_sum"
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+  pprof:
+    endpoint: 0.0.0.0:1777
+  zpages:
+    endpoint: 0.0.0.0:55679
+
+service:
+  extensions: [health_check, pprof, zpages]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlp/tempo]
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlp_http/mimir]
+    metrics/clickhouse:
+      receivers: [otlp]
+      processors:
+        - filter/external_metrics
+        - batch/clickhouse
+      exporters: [clickhouse]
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlp_http/loki]

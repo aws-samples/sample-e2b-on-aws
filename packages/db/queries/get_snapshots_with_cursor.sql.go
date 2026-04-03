@@ -7,56 +7,68 @@ package queries
 
 import (
 	"context"
+	"time"
 
-	"github.com/e2b-dev/infra/packages/db/types"
+	"github.com/e2b-dev/infra/packages/db/pkg/types"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const getSnapshotsWithCursor = `-- name: GetSnapshotsWithCursor :many
-SELECT COALESCE(ea.aliases, ARRAY[]::text[])::text[] AS aliases, s.created_at, s.env_id, s.sandbox_id, s.id, s.metadata, s.base_env_id, s.sandbox_started_at, s.env_secure, eb.id, eb.created_at, eb.updated_at, eb.finished_at, eb.status, eb.dockerfile, eb.start_cmd, eb.vcpu, eb.ram_mb, eb.free_disk_size_mb, eb.total_disk_size_mb, eb.kernel_version, eb.firecracker_version, eb.env_id, eb.envd_version, eb.ready_cmd, eb.cluster_node_id
+SELECT COALESCE(ea.aliases, ARRAY[]::text[])::text[] AS aliases, COALESCE(ea.names, ARRAY[]::text[])::text[] AS names,
+    s.created_at, s.env_id, s.sandbox_id, s.id, s.metadata, s.base_env_id, s.sandbox_started_at, s.env_secure, s.origin_node_id, s.allow_internet_access, s.auto_pause, s.team_id, s.config,
+    eb.id AS build_id,
+    eb.vcpu AS build_vcpu,
+    eb.ram_mb AS build_ram_mb,
+    eb.total_disk_size_mb AS build_total_disk_size_mb,
+    eb.envd_version AS build_envd_version,
+    eb.created_at AS build_created_at
 FROM "public"."snapshots" s
-JOIN "public"."envs" e ON e.id = s.env_id
 LEFT JOIN LATERAL (
-    SELECT ARRAY_AGG(alias ORDER BY alias) AS aliases
+    SELECT
+        ARRAY_AGG(alias ORDER BY alias) AS aliases,
+        ARRAY_AGG(CASE WHEN namespace IS NOT NULL THEN namespace || '/' || alias ELSE alias END ORDER BY alias) AS names
     FROM "public"."env_aliases"
     WHERE env_id = s.base_env_id
 ) ea ON TRUE
 JOIN LATERAL (
-    SELECT eb.id, eb.created_at, eb.updated_at, eb.finished_at, eb.status, eb.dockerfile, eb.start_cmd, eb.vcpu, eb.ram_mb, eb.free_disk_size_mb, eb.total_disk_size_mb, eb.kernel_version, eb.firecracker_version, eb.env_id, eb.envd_version, eb.ready_cmd, eb.cluster_node_id
-    FROM "public"."env_builds" eb
+    SELECT eb.id, eb.vcpu, eb.ram_mb, eb.total_disk_size_mb, eb.envd_version, eb.created_at
+    FROM "public"."env_build_assignments" eba
+    JOIN "public"."env_builds" eb ON eb.id = eba.build_id
     WHERE
-        eb.env_id = s.env_id
-        AND eb.status = 'success'
-    ORDER BY eb.created_at DESC
+        eba.env_id = s.env_id
+        AND eba.tag = 'default'
+        AND eb.status_group = 'ready'
+    ORDER BY eba.created_at DESC
     LIMIT 1
 ) eb ON TRUE
 WHERE
-    e.team_id = $2
+    s.team_id = $2
+    -- The order here is important, we want started_at descending, but sandbox_id ascending
     AND s.metadata @> $3
-    AND (
-        s.created_at < $4
-        OR
-        (s.created_at = $4 AND s.sandbox_id > $5)
-    )
-    AND NOT (s.sandbox_id = ANY ($6::text[]))
-ORDER BY s.created_at DESC, s.sandbox_id
+    AND (s.sandbox_started_at, $4::text) < ($5, s.sandbox_id)
+ORDER BY s.sandbox_started_at DESC, s.sandbox_id ASC
 LIMIT $1
 `
 
 type GetSnapshotsWithCursorParams struct {
-	Limit                 int32
-	TeamID                uuid.UUID
-	Metadata              types.JSONBStringMap
-	CursorTime            pgtype.Timestamptz
-	CursorID              string
-	SnapshotExcludeSbxIds []string
+	Limit      int32
+	TeamID     uuid.UUID
+	Metadata   types.JSONBStringMap
+	CursorID   string
+	CursorTime pgtype.Timestamptz
 }
 
 type GetSnapshotsWithCursorRow struct {
-	Aliases  []string
-	Snapshot Snapshot
-	EnvBuild EnvBuild
+	Aliases              []string
+	Names                []string
+	Snapshot             Snapshot
+	BuildID              uuid.UUID
+	BuildVcpu            int64
+	BuildRamMb           int64
+	BuildTotalDiskSizeMb *int64
+	BuildEnvdVersion     *string
+	BuildCreatedAt       time.Time
 }
 
 func (q *Queries) GetSnapshotsWithCursor(ctx context.Context, arg GetSnapshotsWithCursorParams) ([]GetSnapshotsWithCursorRow, error) {
@@ -64,9 +76,8 @@ func (q *Queries) GetSnapshotsWithCursor(ctx context.Context, arg GetSnapshotsWi
 		arg.Limit,
 		arg.TeamID,
 		arg.Metadata,
-		arg.CursorTime,
 		arg.CursorID,
-		arg.SnapshotExcludeSbxIds,
+		arg.CursorTime,
 	)
 	if err != nil {
 		return nil, err
@@ -77,6 +88,7 @@ func (q *Queries) GetSnapshotsWithCursor(ctx context.Context, arg GetSnapshotsWi
 		var i GetSnapshotsWithCursorRow
 		if err := rows.Scan(
 			&i.Aliases,
+			&i.Names,
 			&i.Snapshot.CreatedAt,
 			&i.Snapshot.EnvID,
 			&i.Snapshot.SandboxID,
@@ -85,23 +97,17 @@ func (q *Queries) GetSnapshotsWithCursor(ctx context.Context, arg GetSnapshotsWi
 			&i.Snapshot.BaseEnvID,
 			&i.Snapshot.SandboxStartedAt,
 			&i.Snapshot.EnvSecure,
-			&i.EnvBuild.ID,
-			&i.EnvBuild.CreatedAt,
-			&i.EnvBuild.UpdatedAt,
-			&i.EnvBuild.FinishedAt,
-			&i.EnvBuild.Status,
-			&i.EnvBuild.Dockerfile,
-			&i.EnvBuild.StartCmd,
-			&i.EnvBuild.Vcpu,
-			&i.EnvBuild.RamMb,
-			&i.EnvBuild.FreeDiskSizeMb,
-			&i.EnvBuild.TotalDiskSizeMb,
-			&i.EnvBuild.KernelVersion,
-			&i.EnvBuild.FirecrackerVersion,
-			&i.EnvBuild.EnvID,
-			&i.EnvBuild.EnvdVersion,
-			&i.EnvBuild.ReadyCmd,
-			&i.EnvBuild.ClusterNodeID,
+			&i.Snapshot.OriginNodeID,
+			&i.Snapshot.AllowInternetAccess,
+			&i.Snapshot.AutoPause,
+			&i.Snapshot.TeamID,
+			&i.Snapshot.Config,
+			&i.BuildID,
+			&i.BuildVcpu,
+			&i.BuildRamMb,
+			&i.BuildTotalDiskSizeMb,
+			&i.BuildEnvdVersion,
+			&i.BuildCreatedAt,
 		); err != nil {
 			return nil, err
 		}

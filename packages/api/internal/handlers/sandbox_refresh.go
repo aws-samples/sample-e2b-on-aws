@@ -8,8 +8,10 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/e2b-dev/infra/packages/api/internal/api"
-	"github.com/e2b-dev/infra/packages/api/internal/cache/instance"
+	"github.com/e2b-dev/infra/packages/api/internal/sandbox"
 	"github.com/e2b-dev/infra/packages/api/internal/utils"
+	"github.com/e2b-dev/infra/packages/auth/pkg/auth"
+	"github.com/e2b-dev/infra/packages/shared/pkg/ginutils"
 	"github.com/e2b-dev/infra/packages/shared/pkg/telemetry"
 )
 
@@ -18,11 +20,21 @@ func (a *APIStore) PostSandboxesSandboxIDRefreshes(
 	sandboxID string,
 ) {
 	ctx := c.Request.Context()
-	sandboxID = utils.ShortID(sandboxID)
 
+	var err error
+	sandboxID, err = utils.ShortID(sandboxID)
+	if err != nil {
+		a.sendAPIStoreError(c, http.StatusBadRequest, "Invalid sandbox ID")
+
+		return
+	}
+
+	telemetry.SetAttributes(ctx, telemetry.WithSandboxID(sandboxID))
+
+	team := auth.MustGetTeamInfo(c)
 	var duration time.Duration
 
-	body, err := utils.ParseBody[api.PostSandboxesSandboxIDRefreshesJSONBody](ctx, c)
+	body, err := ginutils.ParseBody[api.PostSandboxesSandboxIDRefreshesJSONBody](ctx, c)
 	if err != nil {
 		a.sendAPIStoreError(c, http.StatusBadRequest, fmt.Sprintf("Error when parsing request: %s", err))
 
@@ -32,18 +44,18 @@ func (a *APIStore) PostSandboxesSandboxIDRefreshes(
 	}
 
 	if body.Duration == nil {
-		duration = instance.InstanceExpiration
+		duration = sandbox.SandboxTimeoutDefault
 	} else {
 		duration = time.Duration(*body.Duration) * time.Second
 	}
 
-	if duration < instance.InstanceExpiration {
-		duration = instance.InstanceExpiration
+	if duration < sandbox.SandboxTimeoutDefault {
+		duration = sandbox.SandboxTimeoutDefault
 	}
 
-	apiErr := a.orchestrator.KeepAliveFor(ctx, sandboxID, duration, false)
+	_, apiErr := a.orchestrator.KeepAliveFor(ctx, team.ID, sandboxID, duration, false)
 	if apiErr != nil {
-		telemetry.ReportCriticalError(ctx, "error when refreshing sandbox", apiErr.Err)
+		telemetry.ReportError(ctx, "error when refreshing sandbox", apiErr.Err)
 		a.sendAPIStoreError(c, apiErr.Code, apiErr.ClientMsg)
 
 		return

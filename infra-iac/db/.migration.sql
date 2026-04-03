@@ -780,3 +780,1593 @@ CREATE INDEX IF NOT EXISTS envs_cluster_id
 
 ALTER TABLE env_builds
     ADD COLUMN IF NOT EXISTS cluster_node_id TEXT NULL;
+-- ============================================================
+-- Upstream migrations merged from commit 12b35da (2026-04-03)
+-- ============================================================
+
+-- Migration: 20250624232413_add_build_reason.sql
+-- +goose StatementBegin
+ALTER TABLE env_builds
+ADD COLUMN reason TEXT;
+-- +goose StatementEnd
+
+
+-- Migration: 20250708135400_snapshots_migrations.sql
+CREATE INDEX CONCURRENTLY idx_snapshots_sandbox_id ON public.snapshots (sandbox_id);
+
+
+-- Migration: 20250708135401_snapshot_pause_node_id.sql
+-- +goose StatementBegin
+ALTER TABLE snapshots ADD COLUMN origin_node_id text;
+-- +goose StatementEnd
+
+
+-- Migration: 20250714132924_cluster_sandbox_domain.sql
+-- +goose StatementBegin
+ALTER TABLE clusters
+    ADD COLUMN IF NOT EXISTS sandbox_proxy_domain TEXT;
+-- +goose StatementEnd
+
+
+-- Migration: 20250728085406_add_create_network_flag.sql
+-- +goose StatementBegin
+
+ALTER TABLE snapshots
+    ADD COLUMN allow_internet_access boolean NULL;
+-- +goose StatementEnd
+
+
+-- Migration: 20250802144312_update_firecracker_to_v1_12_1.sql
+-- +goose StatementBegin
+-- Drop firecracker version default in env_builds table
+ALTER TABLE "public"."env_builds"
+ALTER COLUMN "firecracker_version" DROP DEFAULT;
+-- +goose StatementEnd
+
+
+-- Migration: 20250815181502_change_build_reason_to_json.sql
+-- +goose StatementBegin
+
+-- First, update existing TEXT values to JSON format
+-- Convert existing text reasons to JSON with message field
+UPDATE env_builds 
+SET reason = json_build_object('message', reason)::jsonb
+WHERE reason IS NOT NULL AND reason != '';
+
+-- Now alter the column type from TEXT to JSONB
+ALTER TABLE env_builds 
+ALTER COLUMN reason TYPE jsonb 
+USING CASE 
+    WHEN reason IS NULL THEN NULL
+    WHEN reason::text = '' THEN NULL
+    ELSE reason::jsonb
+END;
+
+-- +goose StatementEnd
+
+
+-- Migration: 20250818114512_auto_pause.sql
+-- +goose StatementBegin
+
+ALTER TABLE snapshots
+    ADD COLUMN auto_pause boolean NOT NULL default false;
+-- +goose StatementEnd
+
+
+-- Migration: 20250820102103_add_snapshots_indexes.sql
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_snapshots_time_id
+  ON public.snapshots (sandbox_started_at DESC, sandbox_id);
+
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_env_builds_env_status_created
+    ON public.env_builds (env_id, status, created_at DESC);
+-- Redundant with (env_id, status, created_at DESC)
+DROP INDEX CONCURRENTLY IF EXISTS idx_envs_builds_envs;
+
+
+-- Migration: 20250824185633_build_node_not_nullable.sql
+-- +goose StatementBegin
+UPDATE "public"."env_builds" SET cluster_node_id = 'unknown' WHERE cluster_node_id IS NULL;
+ALTER TABLE "public"."env_builds" ALTER COLUMN cluster_node_id SET NOT NULL;
+-- +goose StatementEnd
+
+
+-- Migration: 20250824185634_snapshot_node_not_nullable.sql
+-- +goose StatementBegin
+UPDATE "public"."snapshots" SET origin_node_id = 'unknown' WHERE origin_node_id IS NULL;
+ALTER TABLE "public"."snapshots" ALTER COLUMN origin_node_id SET NOT NULL;
+-- +goose StatementEnd
+
+
+-- Migration: 20250825100000_remove_default_keys.sql
+-- +goose StatementBegin
+
+-- Create or replace function
+CREATE OR REPLACE FUNCTION public.post_user_signup()
+    RETURNS TRIGGER
+    LANGUAGE plpgsql
+AS $post_user_signup$
+DECLARE
+    team_id                 uuid;
+BEGIN
+    RAISE NOTICE 'Creating default team for user %', NEW.id;
+    INSERT INTO public.teams(name, tier, email) VALUES (NEW.email, 'base_v1', NEW.email) RETURNING id INTO team_id;
+    INSERT INTO public.users_teams(user_id, team_id, is_default) VALUES (NEW.id, team_id, true);
+    RAISE NOTICE 'Created default team for user % and team %', NEW.id, team_id;
+
+    PERFORM public.extra_for_post_user_signup(NEW.id, team_id);
+
+    RETURN NEW;
+END
+$post_user_signup$ SECURITY DEFINER SET search_path = public;
+
+-- +goose StatementEnd
+
+
+-- Migration: 20250825102440_add_hash_indexes.sql
+
+-- Add unique index for team_api_keys.api_key_hash for faster hash lookups and uniqueness
+CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS idx_team_api_keys_api_key_hash 
+ON team_api_keys (api_key_hash);
+
+-- Add unique index for access_tokens.access_token_hash for faster hash lookups and uniqueness
+CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS idx_access_tokens_access_token_hash 
+ON access_tokens (access_token_hash);
+
+
+-- Migration: 20250825102800_hash_existing_keys.sql
+
+-- Function to convert hex to bytes and calculate SHA256 hash
+-- +goose StatementBegin
+CREATE OR REPLACE FUNCTION hex_to_sha256(hex_str text, prefix text) RETURNS text AS $$
+DECLARE
+    bytes bytea;
+    base64_hash text;
+BEGIN
+    -- Remove the prefix and convert remaining hex to bytes
+    bytes := decode(substring(hex_str from length(prefix) + 1), 'hex');
+    -- Get base64 hash and remove padding
+    base64_hash := rtrim(encode(sha256(bytes), 'base64'), '=');
+    -- Return SHA256 hash with $sha256$ prefix and base64-encoded hash without padding
+    RETURN '$sha256$' || base64_hash;
+END;
+$$ LANGUAGE plpgsql;
+-- +goose StatementEnd
+
+-- Update existing API keys with hash and related fields
+UPDATE public.team_api_keys
+SET
+    api_key_hash = hex_to_sha256(api_key, 'e2b_'),
+    api_key_prefix = 'e2b_',
+    api_key_length = length(api_key) - 4,  -- Strip 'e2b_' prefix (4 chars)
+    api_key_mask_prefix = substring(api_key from 5 for 2),  -- Skip 'e2b_' prefix
+    api_key_mask_suffix = substring(api_key from length(api_key) - 3)
+WHERE
+    api_key IS NOT NULL
+    AND (api_key_hash IS NULL OR api_key_prefix IS NULL
+         OR api_key_length IS NULL OR api_key_mask_prefix IS NULL OR api_key_mask_suffix IS NULL);
+
+-- Update existing access tokens with hash and related fields
+UPDATE public.access_tokens
+SET
+    access_token_hash = hex_to_sha256(access_token, 'sk_e2b_'),
+    access_token_prefix = 'sk_e2b_',
+    access_token_length = length(access_token) - 7,  -- Strip 'sk_e2b_' prefix (7 chars)
+    access_token_mask_prefix = substring(access_token from 8 for 2),  -- Skip 'sk_e2b_' prefix
+    access_token_mask_suffix = substring(access_token from length(access_token) - 3)
+WHERE
+    access_token IS NOT NULL
+    AND (access_token_hash IS NULL OR access_token_prefix IS NULL
+         OR access_token_length IS NULL OR access_token_mask_prefix IS NULL OR access_token_mask_suffix IS NULL);
+
+-- Add NOT NULL constraints to the populated fields
+ALTER TABLE public.team_api_keys
+    ALTER COLUMN api_key_prefix SET NOT NULL,
+    ALTER COLUMN api_key_hash SET NOT NULL,
+    ALTER COLUMN api_key_length SET NOT NULL,
+    ALTER COLUMN api_key_mask_prefix SET NOT NULL,
+    ALTER COLUMN api_key_mask_suffix SET NOT NULL;
+
+ALTER TABLE public.access_tokens
+    ALTER COLUMN access_token_prefix SET NOT NULL,
+    ALTER COLUMN access_token_hash SET NOT NULL,
+    ALTER COLUMN access_token_length SET NOT NULL,
+    ALTER COLUMN access_token_mask_prefix SET NOT NULL,
+    ALTER COLUMN access_token_mask_suffix SET NOT NULL;
+
+-- Drop the helper functions as they are no longer needed
+DROP FUNCTION hex_to_sha256(text, text);
+
+
+-- Migration: 20250825102900_drop_mask_columns.sql
+
+-- Drop the mask columns as they're no longer necessary
+ALTER TABLE public.team_api_keys DROP COLUMN IF EXISTS api_key_mask;
+ALTER TABLE public.access_tokens DROP COLUMN IF EXISTS access_token_mask;
+
+
+-- Migration: 20250901161352_add_concurrent_template_builds_to_tier.sql
+-- +goose StatementBegin
+
+-- Add concurrent_template_builds column to tiers table
+ALTER TABLE "public"."tiers" ADD COLUMN "concurrent_template_builds" bigint NOT NULL DEFAULT 20;
+
+-- Add check constraint for concurrent_template_builds
+ALTER TABLE "public"."tiers" ADD CONSTRAINT "tiers_concurrent_template_builds_check" CHECK (concurrent_template_builds > 0);
+
+-- Add comment for the new column
+COMMENT ON COLUMN public.tiers.concurrent_template_builds
+    IS 'The number of concurrent template builds the team can run';
+
+-- +goose StatementEnd
+
+
+-- Migration: 20250905134524_fix_env_builds_non_null_fields.sql
+-- +goose StatementBegin
+UPDATE public.env_builds
+    SET reason = '{}'::jsonb
+    WHERE reason IS NULL;
+
+ALTER TABLE public.env_builds
+    ALTER COLUMN env_id SET NOT NULL,
+    ALTER COLUMN reason SET DEFAULT '{}'::jsonb,
+    ALTER COLUMN reason SET NOT NULL;
+-- +goose StatementEnd
+
+
+-- Migration: 20250910063940_make_raw_keys_nullable.sql
+-- +goose StatementBegin
+ALTER TABLE "public"."access_tokens" DROP CONSTRAINT access_tokens_pkey;
+ALTER TABLE "public"."access_tokens" ADD PRIMARY KEY (id);
+ALTER TABLE "public"."access_tokens" ALTER COLUMN "access_token" DROP NOT NULL;
+ALTER TABLE "public"."team_api_keys" ALTER COLUMN "api_key" DROP NOT NULL;
+-- +goose StatementEnd
+
+
+-- Migration: 20250910072612_access_tokens_id_non_nullable.sql
+-- +goose StatementBegin
+
+-- Add concurrent_template_builds column to tiers table
+ALTER TABLE "public"."access_tokens" ALTER COLUMN "id" SET NOT NULL;
+-- +goose StatementEnd
+
+
+-- Migration: 20250910124212_remove_raw_keys.sql
+-- +goose StatementBegin
+ALTER TABLE "public"."access_tokens" DROP COLUMN "access_token";
+ALTER TABLE "public"."team_api_keys" DROP COLUMN "api_key";
+-- +goose StatementEnd
+
+
+-- Migration: 20250923094021_add_team_id_to_snapshots.sql
+-- +goose StatementBegin
+ALTER TABLE "public"."snapshots" ADD COLUMN "team_id" uuid NULL;
+UPDATE "public"."snapshots" SET team_id = e.team_id FROM "public"."envs" e WHERE e.id = snapshots.env_id;
+ALTER TABLE "public"."snapshots"
+    ADD CONSTRAINT fk_snapshots_team
+            FOREIGN KEY (team_id)
+            REFERENCES teams(id)
+            ON UPDATE NO ACTION ON DELETE NO ACTION;
+-- +goose StatementEnd
+
+
+-- Migration: 20250923103546_add_snapshot_list_index.sql
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_snapshots_team_time_id
+    ON public.snapshots (team_id, sandbox_started_at DESC, sandbox_id);
+DROP INDEX CONCURRENTLY IF EXISTS idx_snapshots_time_id;
+
+
+-- Migration: 20250923103614_make_team_id_non_nullable.sql
+-- +goose StatementBegin
+UPDATE "public"."snapshots" SET team_id = e.team_id FROM "public"."envs" e WHERE e.id = snapshots.env_id;
+ALTER TABLE "public"."snapshots" ALTER COLUMN "team_id" SET NOT NULL;
+-- +goose StatementEnd
+
+
+-- Migration: 20251009170758_unique_snapshots.sql
+-- +goose StatementBegin
+-- Add unique constraint on sandbox_id
+ALTER TABLE "public"."snapshots"
+    ADD CONSTRAINT snapshots_sandbox_id_unique UNIQUE (sandbox_id);
+
+-- +goose StatementEnd
+
+
+-- Migration: 20251011200438_create_addons_table.sql
+-- +goose StatementBegin
+
+-- Create "addons" table
+CREATE TABLE IF NOT EXISTS "public"."addons"
+(
+    "id"                                uuid        NOT NULL DEFAULT gen_random_uuid(),
+    "team_id"                           uuid        NOT NULL,
+    "name"                              text        NOT NULL,
+    "description"                       text        NULL,
+    "extra_concurrent_sandboxes"        bigint      NOT NULL DEFAULT 0,
+    "extra_concurrent_template_builds"  bigint      NOT NULL DEFAULT 0,
+    "extra_max_vcpu"                    bigint      NOT NULL DEFAULT 0,
+    "extra_max_ram_mb"                  bigint      NOT NULL DEFAULT 0,
+    "extra_disk_mb"                     bigint      NOT NULL DEFAULT 0,
+    "valid_from"                        timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "valid_to"                          timestamptz NULL ,
+    "added_by"                          uuid        NOT NULL,
+    PRIMARY KEY ("id"),
+    CONSTRAINT "addons_teams_addons" FOREIGN KEY ("team_id") REFERENCES "public"."teams" ("id") ON UPDATE NO ACTION ON DELETE CASCADE,
+    CONSTRAINT "addons_users_addons" FOREIGN KEY ("added_by") REFERENCES "auth"."users" ("id") ON UPDATE NO ACTION ON DELETE NO ACTION,
+    CONSTRAINT "addons_valid_dates_check" CHECK (valid_to IS NULL OR valid_to > valid_from)
+);
+
+-- Enable RLS for addons table
+ALTER TABLE "public"."addons" ENABLE ROW LEVEL SECURITY;
+
+-- Create system user
+INSERT INTO "auth"."users" (id, email) VALUES ('00000000-0000-0000-0000-000000000000', 'system@e2b.dev');
+
+-- Create index on team_id for faster lookups
+CREATE INDEX IF NOT EXISTS "addons_team_id_idx" ON "public"."addons" ("team_id");
+
+
+CREATE OR REPLACE VIEW "team_limits"
+WITH (security_invoker=on) AS
+SELECT
+    t.id,
+    tier.max_length_hours,
+    (tier.concurrent_instances + a.extra_concurrent_sandboxes) as concurrent_sandboxes,
+    (tier.concurrent_template_builds + a.extra_concurrent_template_builds) as concurrent_template_builds,
+    (tier.max_vcpu + a.extra_max_vcpu) as max_vcpu,
+    (tier.max_ram_mb + a.extra_max_ram_mb) as max_ram_mb,
+    (tier.disk_mb + a.extra_disk_mb) as disk_mb
+FROM "public".teams t
+JOIN "public"."tiers" tier on t.tier = tier.id
+LEFT JOIN LATERAL (
+    SELECT COALESCE(SUM(extra_concurrent_sandboxes),0)::bigint           as extra_concurrent_sandboxes,
+           COALESCE(SUM(extra_concurrent_template_builds),0)::bigint     as extra_concurrent_template_builds,
+           COALESCE(SUM(extra_max_vcpu),0)::bigint                       as extra_max_vcpu,
+           COALESCE(SUM(extra_max_ram_mb),0)::bigint                     as extra_max_ram_mb,
+           COALESCE(SUM(extra_disk_mb),0)::bigint                        as extra_disk_mb
+    FROM "public"."addons" addon
+    WHERE addon.team_id = t.id
+      AND addon.valid_from <= now()
+      AND (addon.valid_to IS NULL OR addon.valid_to > now())
+    ) a ON true;
+-- +goose StatementEnd
+
+
+-- Migration: 20251018100653_add_build_version.sql
+-- +goose StatementBegin
+
+-- Modify "env_builds" table
+ALTER TABLE "public"."env_builds" ADD COLUMN IF NOT EXISTS "version" text NULL;
+
+-- +goose StatementEnd
+
+
+-- Migration: 20251026192416_addons_idempotency.sql
+-- +goose StatementBegin
+ALTER TABLE public.addons ADD COLUMN idempotency_key text;
+CREATE UNIQUE INDEX addons_idempotency_key_uidx
+    ON public.addons(idempotency_key) WHERE idempotency_key IS NOT NULL;
+-- +goose StatementEnd
+
+
+-- Migration: 20251030130958_add_env_index_to_snapshots.sql
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_snapshots_env_id
+    ON public.snapshots (env_id);
+
+
+-- Migration: 20251106172810_add_config_to_snapshots.sql
+-- +goose StatementBegin
+
+ALTER TABLE snapshots
+    ADD COLUMN config jsonb NULL;
+-- +goose StatementEnd
+
+
+-- Migration: 20251121101953_build_node_id_nullable.sql
+-- +goose StatementBegin
+ALTER TABLE "public"."env_builds" ALTER COLUMN cluster_node_id DROP NOT NULL;
+-- +goose StatementEnd
+
+
+-- Migration: 20251127000000_add_machine_info_to_env_builds.sql
+-- +goose StatementBegin
+
+-- Add machine info columns to env_builds table
+ALTER TABLE "public"."env_builds"
+    ADD COLUMN IF NOT EXISTS "cpu_architecture" text NULL,
+    ADD COLUMN IF NOT EXISTS "cpu_family" text NULL,
+    ADD COLUMN IF NOT EXISTS "cpu_model" text NULL,
+    ADD COLUMN IF NOT EXISTS "cpu_model_name" text NULL,
+    ADD COLUMN IF NOT EXISTS "cpu_flags" text[] NULL;
+
+-- +goose StatementEnd
+
+
+-- Migration: 20251216135834_index_snapshots_base_env_id.sql
+CREATE INDEX CONCURRENTLY IF NOT EXISTS snapshots_base_env_id_idx
+    ON public.snapshots (base_env_id);
+
+
+-- Migration: 20251217000000_create_public_users_table.sql
+-- +goose StatementBegin
+CREATE TABLE IF NOT EXISTS public.users (
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    id uuid NOT NULL,
+    email text NOT NULL,
+    PRIMARY KEY (id),
+    FOREIGN KEY (id) REFERENCES auth.users(id) ON DELETE CASCADE,
+    UNIQUE (email)
+);
+
+-- Enable row level security
+ALTER TABLE public.users ENABLE ROW LEVEL SECURITY;
+
+-- Grant INSERT permission to trigger_user
+GRANT INSERT ON public.users TO trigger_user;
+CREATE POLICY "Allow to create a new user"
+    ON public.users
+    AS PERMISSIVE
+    FOR INSERT
+    TO trigger_user
+    WITH CHECK (TRUE);
+
+-- Grant UPDATE permission to trigger_user
+-- We need to grant SELECT permission to trigger_user as well, so it can filter by id
+GRANT SELECT (id) ON public.users TO trigger_user;
+CREATE POLICY "Allow to select a user"
+    ON public.users
+    AS PERMISSIVE
+    FOR SELECT
+    TO trigger_user
+    USING (true);
+
+GRANT UPDATE ON public.users TO trigger_user;
+CREATE POLICY "Allow to update a user"
+    ON public.users
+    AS PERMISSIVE
+    FOR UPDATE
+    TO trigger_user
+    USING (true)
+    WITH CHECK (true);
+
+-- Create trigger function to update data from auth.users to public.users
+CREATE OR REPLACE FUNCTION public.sync_insert_auth_users_to_public_users_trigger() RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $func$
+BEGIN
+    INSERT INTO public.users (id, email)
+    VALUES (NEW.id, NEW.email);
+
+    RETURN NEW;
+END;
+$func$ SECURITY DEFINER SET search_path = public;
+
+-- Create trigger function to update data from auth.users to public.users
+CREATE OR REPLACE FUNCTION public.sync_update_auth_users_to_public_users_trigger() RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $func$
+BEGIN
+    UPDATE public.users
+    SET email = NEW.email,
+        updated_at = now()
+    WHERE id = NEW.id;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'User with id % does not exist in public.users', NEW.id;
+    END IF;
+
+    RETURN NEW;
+END;
+$func$ SECURITY DEFINER SET search_path = public;
+
+-- Set function owner to trigger_user
+ALTER FUNCTION public.sync_insert_auth_users_to_public_users_trigger() OWNER TO trigger_user;
+ALTER FUNCTION public.sync_update_auth_users_to_public_users_trigger() OWNER TO trigger_user;
+
+-- Create trigger on auth.users to copy data to public.users
+CREATE OR REPLACE TRIGGER sync_inserts_to_public_users
+    AFTER INSERT ON auth.users
+    FOR EACH ROW EXECUTE FUNCTION public.sync_insert_auth_users_to_public_users_trigger();
+
+
+-- Create trigger on auth.users to copy data to public.users
+CREATE OR REPLACE TRIGGER sync_updates_to_public_users
+    AFTER UPDATE ON auth.users
+    FOR EACH ROW EXECUTE FUNCTION public.sync_update_auth_users_to_public_users_trigger();
+
+-- Copy existing data from auth.users to public.users
+INSERT INTO public.users (id, email)
+SELECT id, email FROM auth.users;
+
+-- +goose StatementEnd
+
+
+-- Migration: 20251218160000_allow_m_n_builds_with_tags.sql
+-- +goose NO TRANSACTION
+
+-- +goose StatementBegin
+-- 0. Create helper function to safely cast text to UUID
+CREATE OR REPLACE FUNCTION try_cast_uuid(p_value text) RETURNS uuid AS $$
+BEGIN
+    RETURN p_value::uuid;
+EXCEPTION WHEN invalid_text_representation THEN
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql IMMUTABLE;
+-- +goose StatementEnd
+
+-- +goose StatementBegin
+-- 1. Create the new env_build_assignments table
+CREATE TABLE IF NOT EXISTS env_build_assignments (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    env_id TEXT NOT NULL,
+    build_id UUID NOT NULL,
+    tag TEXT NOT NULL,
+    source TEXT DEFAULT 'app' NOT NULL, 
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    
+    CONSTRAINT fk_env_build_assignments_env 
+        FOREIGN KEY (env_id) 
+        REFERENCES envs(id) 
+        ON DELETE CASCADE,
+    
+    CONSTRAINT fk_env_build_assignments_build 
+        FOREIGN KEY (build_id) 
+        REFERENCES env_builds(id) 
+        ON DELETE CASCADE
+);
+
+-- PARTIAL UNIQUE INDEX: 
+-- Enforces that for 'trigger' or 'migration', only ONE entry exists per env/build/tag.
+-- Does NOT restrict 'app' entries, allowing multiple assignments from code.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_legacy_assignments ON env_build_assignments (env_id, build_id, tag)
+WHERE source IN ('trigger', 'migration');
+
+ALTER TABLE "public"."env_build_assignments" ENABLE ROW LEVEL SECURITY;
+
+CREATE INDEX IF NOT EXISTS idx_env_build_assignments_env_tag_created 
+    ON env_build_assignments (env_id, tag, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_env_build_assignments_env_build 
+    ON env_build_assignments (env_id, build_id);
+-- +goose StatementEnd
+
+-- +goose StatementBegin
+-- 2. Validation Trigger: Prevent "Mixed" sources (Trigger vs App)
+-- If code ('app') creates an entry, we want to ignore or remove the 'trigger' version.
+CREATE OR REPLACE FUNCTION validate_assignment_source_takeover()
+RETURNS TRIGGER AS $$
+BEGIN
+    -- If trigger tries to insert but an 'app' record already exists, skip it
+    IF NEW.source = 'trigger' THEN
+        IF EXISTS (
+            SELECT 1 FROM env_build_assignments 
+            WHERE env_id = NEW.env_id AND build_id = NEW.build_id AND tag = NEW.tag AND source = 'app'
+        ) THEN
+            RETURN NULL; -- Silently ignore
+        END IF;
+    
+    -- If 'app' inserts, we clean up any legacy 'trigger' or 'migration' records for this identity
+    ELSIF NEW.source = 'app' THEN
+        DELETE FROM env_build_assignments 
+        WHERE env_id = NEW.env_id AND build_id = NEW.build_id AND tag = NEW.tag 
+        AND source IN ('trigger', 'migration');
+    END IF;
+    
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trigger_validate_assignment_source ON env_build_assignments;
+CREATE TRIGGER trigger_validate_assignment_source
+    BEFORE INSERT ON env_build_assignments
+    FOR EACH ROW EXECUTE FUNCTION validate_assignment_source_takeover();
+-- +goose StatementEnd
+
+-- +goose StatementBegin
+-- 3. Legacy Sync Trigger function
+CREATE OR REPLACE FUNCTION sync_env_build_assignment()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF NEW.env_id IS NOT NULL THEN
+        IF TG_OP = 'INSERT' OR (TG_OP = 'UPDATE' AND OLD.env_id != NEW.env_id) THEN
+            -- Note: ON CONFLICT refers to the partial index uq_legacy_assignments
+            INSERT INTO env_build_assignments (env_id, build_id, tag, source, created_at)
+            VALUES (NEW.env_id, NEW.id, 'default', 'trigger', CURRENT_TIMESTAMP)
+            ON CONFLICT (env_id, build_id, tag) WHERE source IN ('trigger', 'migration') DO NOTHING;
+        END IF;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+-- +goose StatementEnd
+
+-- +goose StatementBegin
+-- 4. Create trigger to automatically sync changes
+DROP TRIGGER IF EXISTS trigger_sync_env_build_assignment ON env_builds;
+CREATE TRIGGER trigger_sync_env_build_assignment
+    AFTER INSERT OR UPDATE ON env_builds
+    FOR EACH ROW
+    EXECUTE FUNCTION sync_env_build_assignment();
+-- +goose StatementEnd
+
+-- 5. Create index on env_builds.created_at to speed up migration
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_env_builds_created_at ON env_builds (created_at);
+
+-- +goose StatementBegin
+-- 6. Create procedure to migrate existing data in batches
+CREATE OR REPLACE PROCEDURE migrate_env_builds_to_assignments()
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    batch_size INT := 10000;
+    rows_affected INT;
+    total_migrated INT := 0;
+    last_created_at TIMESTAMP WITH TIME ZONE := '1970-01-01 00:00:00+00';
+    last_id UUID := '00000000-0000-0000-0000-000000000000';
+    current_max_created_at TIMESTAMP WITH TIME ZONE;
+    current_max_id UUID;
+BEGIN
+    LOOP
+        -- Get the max (created_at, id) for this batch
+        -- Using composite ordering: created_at for sequence, id as tie-breaker
+        SELECT created_at, id INTO current_max_created_at, current_max_id
+        FROM (
+            SELECT created_at, id FROM env_builds 
+            WHERE env_id IS NOT NULL 
+            AND (created_at, id) > (last_created_at, last_id)
+            ORDER BY created_at, id 
+            LIMIT batch_size
+        ) sub
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1;
+        
+        -- Exit if no more records
+        IF current_max_created_at IS NULL THEN
+            EXIT;
+        END IF;
+        
+        -- Insert the batch using composite range (handles duplicate timestamps correctly)
+        INSERT INTO env_build_assignments (env_id, build_id, tag, source, created_at)
+        SELECT 
+            eb.env_id,
+            eb.id as build_id,
+            'default' as tag,
+            'migration' as source,
+            eb.created_at
+        FROM env_builds eb
+        WHERE eb.env_id IS NOT NULL
+        AND (eb.created_at, eb.id) > (last_created_at, last_id)
+        AND (eb.created_at, eb.id) <= (current_max_created_at, current_max_id)
+        ON CONFLICT (env_id, build_id, tag) WHERE source IN ('trigger', 'migration') DO NOTHING;
+        
+        GET DIAGNOSTICS rows_affected = ROW_COUNT;
+        total_migrated := total_migrated + rows_affected;
+        last_created_at := current_max_created_at;
+        last_id := current_max_id;
+        
+        COMMIT;
+        RAISE NOTICE 'Migrated batch, processed up to created_at: %, id: % (total rows: %)', last_created_at, last_id, total_migrated;
+    END LOOP;
+    
+    RAISE NOTICE 'Migration complete. Total rows migrated: %', total_migrated;
+END;
+$$;
+-- +goose StatementEnd
+
+-- +goose StatementBegin
+-- 7. Run the migration procedure
+CALL migrate_env_builds_to_assignments();
+-- +goose StatementEnd
+
+-- 8. Drop temporary index after migration
+DROP INDEX CONCURRENTLY IF EXISTS idx_env_builds_created_at;
+
+-- +goose StatementBegin
+-- 9. Clean up the migration procedure
+DROP PROCEDURE IF EXISTS migrate_env_builds_to_assignments();
+-- +goose StatementEnd
+
+
+-- Migration: 20251218170000_optimize_build_assignment_indexes.sql
+-- +goose NO TRANSACTION
+
+-- Add index on build_id for efficient lookups by build
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_env_build_assignments_build
+    ON env_build_assignments (build_id);
+
+-- Drop the composite (env_id, build_id) index as it's now redundant:
+-- - env_id lookups are covered by idx_env_build_assignments_env_tag_created (env_id, tag, created_at DESC)
+-- - build_id lookups are covered by the new idx_env_build_assignments_build
+DROP INDEX CONCURRENTLY IF EXISTS idx_env_build_assignments_env_build;
+
+
+-- Migration: 20260121175429_add_team_slug.sql
+-- +goose StatementBegin
+
+/*
+This migration adds team slugs and profile pictures to support user-friendly URLs and team branding.
+
+It performs the following steps:
+
+1. Adds a new column to the teams table:
+   - slug: A URL-friendly version of the team name (e.g. "acme-inc")
+
+2. Creates a slug generation function that:
+   - Takes a team name and converts it to a URL-friendly format
+   - Removes special characters, accents, and spaces
+   - Handles email addresses by only using the part before @
+   - Converts to lowercase and replaces spaces with hyphens
+
+3. Installs the unaccent PostgreSQL extension for proper accent handling
+
+4. Generates initial slugs for all existing teams:
+   - Uses the team name as base for the slug
+   - If multiple teams would have the same slug, appends part of the team ID
+     to ensure uniqueness
+
+5. Sets up automatic slug generation for new teams:
+   - Creates a trigger that runs before team insertion
+   - Generates a unique slug using random suffixes if needed
+   - Only generates a slug if one isn't explicitly provided
+
+6. Enforces slug uniqueness with a database constraint
+*/
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns 
+    WHERE table_schema = 'public' 
+    AND table_name = 'teams' 
+    AND column_name = 'slug'
+  ) THEN
+
+    ALTER TABLE teams
+    ADD COLUMN slug TEXT;
+
+    CREATE EXTENSION IF NOT EXISTS unaccent;
+
+    CREATE OR REPLACE FUNCTION generate_team_slug(name TEXT)
+    RETURNS TEXT AS $func$
+    DECLARE
+      base_name TEXT;
+    BEGIN
+      base_name := SPLIT_PART(name, '@', 1);
+
+      RETURN LOWER(
+        REGEXP_REPLACE(
+          REGEXP_REPLACE(
+            UNACCENT(TRIM(base_name)),
+            '[^a-zA-Z0-9\s-]',
+            '',
+            'g'
+          ),
+          '\s+',
+          '-',
+          'g'
+        )
+      );
+    END;
+    $func$ LANGUAGE plpgsql;
+
+    WITH numbered_teams AS (
+      SELECT
+        id,
+        name,
+        generate_team_slug(name) as base_slug,
+        ROW_NUMBER() OVER (PARTITION BY generate_team_slug(name) ORDER BY created_at) as slug_count
+      FROM teams
+      WHERE slug IS NULL
+    )
+    UPDATE teams
+    SET slug =
+      CASE
+        WHEN t.slug_count = 1 THEN t.base_slug
+        ELSE t.base_slug || '-' || SUBSTRING(teams.id::text, 1, 4)
+      END
+    FROM numbered_teams t
+    WHERE teams.id = t.id;
+
+    CREATE OR REPLACE FUNCTION generate_team_slug_trigger()
+    RETURNS TRIGGER AS $func$
+    DECLARE
+      base_slug TEXT;
+      test_slug TEXT;
+      suffix TEXT;
+    BEGIN
+      IF NEW.slug IS NULL THEN
+        base_slug := generate_team_slug(NEW.name);
+        test_slug := base_slug;
+
+        WHILE EXISTS (SELECT 1 FROM teams WHERE slug = test_slug) LOOP
+          suffix := SUBSTRING(gen_random_uuid()::text, 1, 4);
+          test_slug := base_slug || '-' || suffix;
+        END LOOP;
+
+        NEW.slug := test_slug;
+      END IF;
+      RETURN NEW;
+    END;
+    $func$ LANGUAGE plpgsql;
+
+    CREATE TRIGGER team_slug_trigger
+    BEFORE INSERT ON teams
+    FOR EACH ROW
+    EXECUTE FUNCTION generate_team_slug_trigger();
+
+    ALTER TABLE teams
+    ADD CONSTRAINT teams_slug_unique UNIQUE (slug);
+
+    ALTER TABLE teams
+    ALTER COLUMN slug SET NOT NULL;
+
+  END IF;
+END $$;
+
+-- +goose StatementEnd
+
+
+-- Migration: 20260121175430_add_env_aliases_namespace.sql
+-- +goose NO TRANSACTION
+
+/*
+This migration adds namespace support to env_aliases for team-scoped template aliases.
+
+It performs the following steps:
+
+1. Adds a nullable namespace column to env_aliases table
+   - Existing aliases keep namespace=NULL so they can be found via fallback logic
+   - New aliases created by new code will have namespace set to the team's slug
+
+2. Creates an index on (alias, namespace) for efficient lookups
+*/
+
+ALTER TABLE "public"."env_aliases" ADD COLUMN IF NOT EXISTS "namespace" text NULL;
+
+CREATE INDEX CONCURRENTLY IF NOT EXISTS "idx_env_aliases_alias_namespace" 
+ON "public"."env_aliases" ("alias", "namespace");
+
+
+-- Migration: 20260127120000_add_env_aliases_uuid_pkey.sql
+-- +goose NO TRANSACTION
+
+-- 1. Create the unique index FIRST (before any destructive operations)
+-- This ensures we have constraint protection throughout the migration.
+-- Using 'NULLS NOT DISTINCT' so (alias, NULL) is treated as a unique pair.
+CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS idx_env_aliases_alias_namespace_unique 
+  ON public.env_aliases (alias, namespace) 
+  NULLS NOT DISTINCT;
+
+-- 2. Drop the old non-unique index (now redundant)
+DROP INDEX CONCURRENTLY IF EXISTS idx_env_aliases_alias_namespace;
+
+-- 3. Add the id column with default (existing rows get auto-populated)
+ALTER TABLE public.env_aliases ADD COLUMN IF NOT EXISTS id UUID DEFAULT gen_random_uuid() NOT NULL;
+
+-- 4. Swap primary key (atomic operation)
+ALTER TABLE public.env_aliases 
+  DROP CONSTRAINT env_aliases_pkey,
+  ADD CONSTRAINT env_aliases_uuid_pkey PRIMARY KEY (id);
+
+
+-- Migration: 20260129105527_populate_env_aliases_namespace.sql
+-- +goose StatementBegin
+
+/*
+Phase 2: Populate namespace for existing aliases.
+
+This migration populates the namespace column for existing aliases:
+1. For PRIVATE templates: Update namespace from NULL to the team's slug
+2. For PUBLIC templates: Keep the NULL entry (for backward compatibility with bare alias access)
+   AND insert a new entry with the team's namespace (for namespace/alias access)
+*/
+
+-- For PRIVATE templates: update namespace to team slug
+UPDATE public.env_aliases ea
+SET namespace = t.slug
+FROM public.envs e
+JOIN public.teams t ON t.id = e.team_id
+WHERE ea.env_id = e.id
+  AND ea.namespace IS NULL
+  AND e.public = FALSE;
+
+-- For PUBLIC templates: insert new row with namespace (keep NULL entry for backward compat)
+INSERT INTO public.env_aliases (alias, env_id, is_renamable, namespace)
+SELECT ea.alias, ea.env_id, ea.is_renamable, t.slug
+FROM public.env_aliases ea
+JOIN public.envs e ON e.id = ea.env_id
+JOIN public.teams t ON t.id = e.team_id
+WHERE ea.namespace IS NULL
+  AND e.public = TRUE
+ON CONFLICT (alias, namespace) DO NOTHING;
+
+-- +goose StatementEnd
+
+
+-- Migration: 20260204172712_remove_build_assignment_triggers.sql
+-- +goose NO TRANSACTION
+
+-- +goose StatementBegin
+-- Remove triggers used during the transition period for build assignments.
+-- The application now directly manages env_build_assignments, so these are no longer needed.
+
+-- Drop the sync trigger that auto-created assignments when env_builds were updated
+DROP TRIGGER IF EXISTS trigger_sync_env_build_assignment ON env_builds;
+
+-- Drop the validation trigger that handled 'app' vs 'trigger' source conflicts
+DROP TRIGGER IF EXISTS trigger_validate_assignment_source ON env_build_assignments;
+
+-- Drop the functions used by these triggers
+DROP FUNCTION IF EXISTS sync_env_build_assignment();
+DROP FUNCTION IF EXISTS validate_assignment_source_takeover();
+-- +goose StatementEnd
+
+-- Drop the index on env_id since we're no longer using it
+DROP INDEX CONCURRENTLY IF EXISTS idx_env_builds_env_status_created;
+
+-- +goose StatementBegin
+-- Drop the foreign key constraint and make env_id nullable (will be removed in a future migration)
+ALTER TABLE env_builds DROP CONSTRAINT IF EXISTS env_builds_envs_builds;
+ALTER TABLE env_builds ALTER COLUMN env_id DROP NOT NULL;
+
+-- Add a backfill trigger that populates env_id from assignments for backward compatibility
+-- This allows old code to read env_id while new code no longer writes it
+CREATE OR REPLACE FUNCTION backfill_env_id_from_assignment()
+RETURNS TRIGGER AS $$
+BEGIN
+    UPDATE env_builds SET env_id = NEW.env_id WHERE id = NEW.build_id AND env_id IS NULL;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trigger_backfill_env_id
+    AFTER INSERT ON env_build_assignments
+    FOR EACH ROW EXECUTE FUNCTION backfill_env_id_from_assignment();
+-- +goose StatementEnd
+
+
+-- Migration: 20260210120000_add_env_builds_created_at_index.sql
+-- +goose NO TRANSACTION
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_env_builds_created_at ON env_builds (created_at DESC);
+
+
+-- Migration: 20260210120001_add_env_and_build_source_columns.sql
+-- +goose NO TRANSACTION
+
+-- +goose StatementBegin
+-- Add source column to envs table to track where the env came from
+-- 'template' = built (default)
+-- 'snapshot' = created from pause/resume
+ALTER TABLE "public"."envs"
+    ADD COLUMN IF NOT EXISTS "source" text NOT NULL DEFAULT 'template';
+
+-- Create trigger first so any concurrent snapshot inserts are handled
+CREATE OR REPLACE FUNCTION sync_env_source_on_snapshot_insert() RETURNS TRIGGER AS $$
+BEGIN
+    UPDATE "public"."envs" SET source = 'snapshot' WHERE id = NEW.env_id;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_sync_env_source_on_snapshot ON "public"."snapshots";
+CREATE TRIGGER trg_sync_env_source_on_snapshot
+AFTER INSERT ON "public"."snapshots"
+FOR EACH ROW EXECUTE FUNCTION sync_env_source_on_snapshot_insert();
+-- +goose StatementEnd
+
+-- Backfill existing snapshot envs in batches of 10k to avoid long-held locks
+-- +goose StatementBegin
+CREATE OR REPLACE PROCEDURE backfill_env_source() AS $$
+DECLARE
+    affected INT;
+BEGIN
+    LOOP
+        UPDATE "public"."envs" e
+        SET source = 'snapshot'
+        FROM (
+            SELECT e2.id
+            FROM "public"."envs" e2
+            JOIN "public"."snapshots" s ON s.env_id = e2.id
+            WHERE e2.source != 'snapshot'
+            LIMIT 10000
+        ) sub
+        WHERE e.id = sub.id;
+
+        GET DIAGNOSTICS affected = ROW_COUNT;
+        COMMIT;
+        EXIT WHEN affected = 0;
+        RAISE NOTICE 'backfill_env_source: updated % rows, sleeping 10s before next batch...', affected;
+        PERFORM pg_sleep(10);
+    END LOOP;
+END;
+$$ LANGUAGE plpgsql;
+-- +goose StatementEnd
+
+CALL backfill_env_source();
+DROP PROCEDURE backfill_env_source();
+
+
+-- Migration: 20260210120002_add_status_group_column.sql
+ALTER TABLE public.env_builds ADD COLUMN IF NOT EXISTS status_group text;
+
+-- +goose StatementBegin
+CREATE OR REPLACE FUNCTION compute_status_group() RETURNS TRIGGER AS $$
+BEGIN
+  NEW.status_group := CASE
+    WHEN NEW.status IN ('pending', 'waiting') THEN 'pending'
+    WHEN NEW.status IN ('in_progress', 'building', 'snapshotting') THEN 'in_progress'
+    WHEN NEW.status IN ('ready', 'uploaded', 'success') THEN 'ready'
+    ELSE 'failed'
+  END;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+-- +goose StatementEnd
+
+CREATE OR REPLACE TRIGGER trg_compute_status_group
+  BEFORE INSERT OR UPDATE OF status ON public.env_builds
+  FOR EACH ROW EXECUTE FUNCTION compute_status_group();
+
+-- +goose StatementBegin
+CREATE OR REPLACE PROCEDURE backfill_status_group() AS $$
+DECLARE
+  batch_size INT := 50000;
+  rows_updated INT;
+BEGIN
+  LOOP
+    UPDATE public.env_builds
+    SET status_group = CASE
+        WHEN status IN ('pending', 'waiting') THEN 'pending'
+        WHEN status IN ('in_progress', 'building', 'snapshotting') THEN 'in_progress'
+        WHEN status IN ('ready', 'uploaded', 'success') THEN 'ready'
+        ELSE 'failed'
+      END
+    WHERE id IN (
+      SELECT id FROM public.env_builds
+      WHERE status_group IS NULL
+      LIMIT batch_size
+    );
+    GET DIAGNOSTICS rows_updated = ROW_COUNT;
+    COMMIT;
+    EXIT WHEN rows_updated = 0;
+    RAISE NOTICE 'backfill_status_group: updated % rows, sleeping 10s before next batch...', rows_updated;
+    PERFORM pg_sleep(10);
+  END LOOP;
+END;
+$$ LANGUAGE plpgsql;
+-- +goose StatementEnd
+
+CALL backfill_status_group();
+DROP PROCEDURE backfill_status_group();
+
+ALTER TABLE public.env_builds
+  ADD CONSTRAINT chk_status_group_not_null
+  CHECK (status_group IS NOT NULL) NOT VALID;
+
+ALTER TABLE public.env_builds
+  VALIDATE CONSTRAINT chk_status_group_not_null;
+
+ALTER TABLE public.env_builds
+  ALTER COLUMN status_group SET NOT NULL;
+
+ALTER TABLE public.env_builds
+  DROP CONSTRAINT chk_status_group_not_null;
+
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_env_builds_status_group
+  ON public.env_builds(status_group);
+
+
+-- Migration: 20260211120000_add_snapshot_templates.sql
+-- +goose NO TRANSACTION
+
+-- +goose StatementBegin
+-- Create snapshot_templates table to track which sandbox a snapshot template was created from
+CREATE TABLE IF NOT EXISTS "public"."snapshot_templates" (
+    env_id text NOT NULL PRIMARY KEY REFERENCES envs(id) ON DELETE CASCADE,
+    sandbox_id text NOT NULL,
+    created_at timestamp with time zone DEFAULT now()
+);
+
+ALTER TABLE "public"."snapshot_templates" ENABLE ROW LEVEL SECURITY;
+-- +goose StatementEnd
+
+-- Create index for looking up snapshot templates by source sandbox
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_snapshot_templates_sandbox_id
+    ON "public"."snapshot_templates" (sandbox_id);
+
+
+-- Migration: 20260216120000_add_envs_team_id_source_index.sql
+-- +goose NO TRANSACTION
+
+-- Composite index for queries that filter envs by team_id and source
+-- (e.g. ListTeamSnapshotTemplates, GetTeamTemplates).
+-- Supersedes the single-column idx_teams_envs (team_id) index.
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_envs_team_id_source
+    ON "public"."envs" (team_id, source);
+
+DROP INDEX CONCURRENTLY IF EXISTS idx_teams_envs;
+
+
+-- Migration: 20260218120000_add_team_id_to_env_builds.sql
+-- +goose NO TRANSACTION
+
+ALTER TABLE public.env_builds ADD COLUMN IF NOT EXISTS team_id uuid;
+
+-- +goose StatementBegin
+-- Trigger to auto-populate team_id when a build is assigned to an env.
+-- Mirrors the existing backfill_env_id_from_assignment() trigger pattern.
+CREATE OR REPLACE FUNCTION backfill_team_id_from_assignment()
+RETURNS TRIGGER AS $$
+BEGIN
+    UPDATE env_builds
+    SET team_id = (SELECT team_id FROM envs WHERE id = NEW.env_id)
+    WHERE id = NEW.build_id AND team_id IS NULL;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+-- +goose StatementEnd
+
+CREATE OR REPLACE TRIGGER trigger_backfill_team_id
+    AFTER INSERT ON env_build_assignments
+    FOR EACH ROW EXECUTE FUNCTION backfill_team_id_from_assignment();
+
+-- +goose StatementBegin
+-- Cursor-based backfill: walks env_builds by (created_at, id) so each batch only scans
+-- forward, giving O(N) total work without needing a temporary index.
+-- Resumable: on restart, skips to the first unprocessed row instead of re-scanning from epoch.
+-- Uses env_build_assignments -> envs to resolve team_id (NOT the legacy env_builds.env_id column).
+CREATE OR REPLACE PROCEDURE backfill_env_builds_team_id() AS $$
+DECLARE
+  batch_size INT := 50000;
+  rows_updated INT;
+  total_updated INT := 0;
+  last_created_at TIMESTAMP WITH TIME ZONE := '1970-01-01 00:00:00+00';
+  last_id UUID := '00000000-0000-0000-0000-000000000000';
+  current_max_created_at TIMESTAMP WITH TIME ZONE;
+  current_max_id UUID;
+  resume_at TIMESTAMP WITH TIME ZONE;
+  resume_id UUID;
+BEGIN
+  RAISE NOTICE 'backfill_env_builds_team_id: starting backfill with batch_size %', batch_size;
+
+  -- Resume: skip rows already backfilled by a previous (interrupted) run.
+  -- Uses idx_env_builds_created_at (backward scan) + idx_env_build_assignments_build.
+  SELECT eb.created_at, eb.id INTO resume_at, resume_id
+  FROM public.env_builds eb
+  WHERE eb.team_id IS NULL
+    AND EXISTS (
+      SELECT 1 FROM public.env_build_assignments eba
+      JOIN public.envs e ON e.id = eba.env_id
+      WHERE eba.build_id = eb.id
+    )
+  ORDER BY eb.created_at, eb.id
+  LIMIT 1;
+
+  IF resume_at IS NULL THEN
+    RAISE NOTICE 'backfill_env_builds_team_id: no rows to backfill';
+    RETURN;
+  END IF;
+
+  -- Position cursor to the row immediately before the first unprocessed row
+  -- so the loop's > comparison includes it.
+  SELECT eb.created_at, eb.id INTO last_created_at, last_id
+  FROM public.env_builds eb
+  WHERE (eb.created_at, eb.id) < (resume_at, resume_id)
+  ORDER BY eb.created_at DESC, eb.id DESC
+  LIMIT 1;
+
+  IF NOT FOUND THEN
+    last_created_at := '1970-01-01 00:00:00+00';
+    last_id := '00000000-0000-0000-0000-000000000000';
+  END IF;
+
+  RAISE NOTICE 'backfill_env_builds_team_id: resuming from cursor (%, %)', last_created_at, last_id;
+
+  LOOP
+    SELECT created_at, id INTO current_max_created_at, current_max_id
+    FROM (
+      SELECT created_at, id FROM public.env_builds
+      WHERE (created_at, id) > (last_created_at, last_id)
+      ORDER BY created_at, id
+      LIMIT batch_size
+    ) sub
+    ORDER BY created_at DESC, id DESC
+    LIMIT 1;
+
+    EXIT WHEN current_max_created_at IS NULL;
+
+    RAISE NOTICE 'backfill_env_builds_team_id: selected batch window up to created_at: %, id: %',
+      current_max_created_at, current_max_id;
+
+    UPDATE public.env_builds eb
+    SET team_id = sub.team_id
+    FROM (
+      SELECT eb2.id, e2.team_id
+      FROM public.env_builds eb2
+      JOIN public.env_build_assignments eba ON eba.build_id = eb2.id
+      JOIN public.envs e2 ON e2.id = eba.env_id
+      WHERE eb2.team_id IS NULL
+        AND (eb2.created_at, eb2.id) > (last_created_at, last_id)
+        AND (eb2.created_at, eb2.id) <= (current_max_created_at, current_max_id)
+    ) sub
+    WHERE eb.id = sub.id;
+
+    GET DIAGNOSTICS rows_updated = ROW_COUNT;
+    total_updated := total_updated + rows_updated;
+    last_created_at := current_max_created_at;
+    last_id := current_max_id;
+    COMMIT;
+    RAISE NOTICE 'backfill_env_builds_team_id: updated % rows in batch, total: %, up to created_at: %, id: %',
+      rows_updated, total_updated, last_created_at, last_id;
+    IF rows_updated > 0 THEN
+      RAISE NOTICE 'backfill_env_builds_team_id: sleeping 10s before next batch...';
+      PERFORM pg_sleep(10);
+    END IF;
+  END LOOP;
+  RAISE NOTICE 'backfill_env_builds_team_id: complete, % rows updated', total_updated;
+END;
+$$ LANGUAGE plpgsql;
+-- +goose StatementEnd
+
+CALL backfill_env_builds_team_id();
+DROP PROCEDURE backfill_env_builds_team_id();
+
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_env_builds_team_status_pagination
+  ON public.env_builds (team_id, created_at DESC, id DESC) INCLUDE (status, status_group);
+
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_env_builds_team_env_created_id
+  ON public.env_builds (team_id, env_id, created_at DESC, id DESC);
+
+DROP INDEX CONCURRENTLY IF EXISTS idx_env_builds_created_at;
+
+
+-- Migration: 20260225120000_add_env_builds_team_status_group_index.sql
+-- +goose NO TRANSACTION
+
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_env_builds_team_status_group
+  ON public.env_builds (team_id, status_group);
+
+
+-- Migration: 20260228120000_snapshot_template_origin_node.sql
+ALTER TABLE "public"."snapshot_templates"
+    ADD COLUMN "origin_node_id" TEXT,
+    ADD COLUMN "build_id" UUID;
+
+
+-- Migration: 20260304120000_volumes.sql
+-- +goose StatementBegin
+CREATE TABLE IF NOT EXISTS volumes (
+    id          UUID                        PRIMARY KEY     DEFAULT gen_random_uuid(),
+    team_id     UUID                        NOT NULL,
+    name        VARCHAR(250)                NOT NULL,
+    volume_type VARCHAR(250)                NOT NULL,
+    created_at  TIMESTAMP WITH TIME ZONE    NOT NULL        DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT fk_volumes_teams
+        FOREIGN KEY (team_id)
+        REFERENCES teams(id),
+
+    CONSTRAINT volumes_teams_uq
+        UNIQUE (team_id, name)
+);
+-- +goose StatementEnd
+
+-- +goose StatementBegin
+ALTER TABLE "public"."volumes" ENABLE ROW LEVEL SECURITY;
+-- +goose StatementEnd
+
+
+-- Migration: 20260305120000_add_env_builds_team_active_partial_index.sql
+-- +goose NO TRANSACTION
+
+-- Partial index for efficiently finding active (pending/in_progress) builds per team.
+-- Used by GetInProgressTemplateBuildsByTeam (get_inprogress_builds.sql).
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_env_builds_team_active
+    ON env_builds (team_id)
+    WHERE status_group IN ('pending', 'in_progress');
+
+
+-- Migration: 20260305130000_create_active_template_builds.sql
+
+CREATE TABLE IF NOT EXISTS public.active_template_builds (
+    build_id uuid PRIMARY KEY,
+    team_id uuid NOT NULL,
+    template_id text NOT NULL,
+    tags text[] NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_active_template_builds_team_created_at
+    ON public.active_template_builds (team_id, created_at DESC);
+
+ALTER TABLE "public"."active_template_builds" ENABLE ROW LEVEL SECURITY;
+
+
+-- Migration: 20260309120000_add_team_sandbox_scheduling_labels.sql
+ALTER TABLE "public"."teams"
+    ADD COLUMN "sandbox_scheduling_labels" text[] NOT NULL DEFAULT '{}';
+
+
+-- Migration: 20260310120000_add_snapshots_metadata_gin_index.sql
+
+-- Set default first so new rows never get NULL metadata while backfill runs.
+ALTER TABLE public.snapshots ALTER COLUMN metadata SET DEFAULT '{}'::jsonb;
+
+-- Install a trigger that converts SQL NULL and JSON 'null' to '{}' on insert/update,
+-- so concurrent writes during the backfill can't re-introduce NULLs.
+-- +goose StatementBegin
+CREATE OR REPLACE FUNCTION fix_snapshots_metadata_json_null()
+RETURNS trigger AS $$
+BEGIN
+  IF NEW.metadata IS NULL OR NEW.metadata = 'null'::jsonb THEN
+    NEW.metadata := '{}'::jsonb;
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+-- +goose StatementEnd
+
+DROP TRIGGER IF EXISTS trg_snapshots_fix_json_null_metadata ON public.snapshots;
+CREATE TRIGGER trg_snapshots_fix_json_null_metadata
+  BEFORE INSERT OR UPDATE OF metadata ON public.snapshots
+  FOR EACH ROW
+  EXECUTE FUNCTION fix_snapshots_metadata_json_null();
+
+-- Backfill NULL metadata to empty jsonb in batches.
+-- Each iteration picks an arbitrary batch of NULLs (no ordering on random UUIDs).
+-- +goose StatementBegin
+CREATE OR REPLACE PROCEDURE backfill_snapshots_metadata() AS $$
+DECLARE
+  batch_size INT := 50000;
+  rows_updated INT;
+BEGIN
+  LOOP
+    UPDATE public.snapshots
+    SET metadata = '{}'::jsonb
+    WHERE id IN (
+      SELECT id FROM public.snapshots
+      WHERE metadata IS NULL
+      LIMIT batch_size
+      FOR UPDATE SKIP LOCKED
+    );
+
+    GET DIAGNOSTICS rows_updated = ROW_COUNT;
+    EXIT WHEN rows_updated = 0;
+
+    COMMIT;
+    RAISE NOTICE 'backfill_snapshots_metadata: updated % rows, sleeping 10s...', rows_updated;
+    PERFORM pg_sleep(10);
+  END LOOP;
+END;
+$$ LANGUAGE plpgsql;
+-- +goose StatementEnd
+
+CALL backfill_snapshots_metadata();
+DROP PROCEDURE backfill_snapshots_metadata();
+
+ALTER TABLE public.snapshots ALTER COLUMN metadata SET NOT NULL;
+
+CREATE EXTENSION IF NOT EXISTS btree_gin;
+
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_snapshots_team_metadata_gin
+    ON public.snapshots USING gin (team_id, metadata);
+
+
+-- Migration: 20260312120000_fix_snapshots_jsonb_null_metadata.sql
+
+-- Fix rows where metadata contains the JSON literal 'null' (not SQL NULL).
+-- These are not caught by the previous IS NULL backfill but fail @> '{}' checks.
+-- +goose StatementBegin
+CREATE OR REPLACE PROCEDURE fix_snapshots_jsonb_null_metadata() AS $$
+DECLARE
+  batch_size INT := 50000;
+  rows_updated INT;
+BEGIN
+  LOOP
+    UPDATE public.snapshots
+    SET metadata = '{}'::jsonb
+    WHERE id IN (
+      SELECT id FROM public.snapshots
+      WHERE metadata = 'null'::jsonb
+      LIMIT batch_size
+      FOR UPDATE SKIP LOCKED
+    );
+
+    GET DIAGNOSTICS rows_updated = ROW_COUNT;
+    EXIT WHEN rows_updated = 0;
+
+    COMMIT;
+    RAISE NOTICE 'fix_snapshots_jsonb_null_metadata: updated % rows, sleeping 10s...', rows_updated;
+    PERFORM pg_sleep(10);
+  END LOOP;
+END;
+$$ LANGUAGE plpgsql;
+-- +goose StatementEnd
+
+CALL fix_snapshots_jsonb_null_metadata();
+DROP PROCEDURE fix_snapshots_jsonb_null_metadata();
+
+-- Add a trigger that silently converts JSON null to '{}' on insert/update,
+-- so old code that still writes 'null'::jsonb won't break.
+-- +goose StatementBegin
+CREATE OR REPLACE FUNCTION fix_snapshots_metadata_json_null()
+RETURNS trigger AS $$
+BEGIN
+  IF NEW.metadata IS NULL OR NEW.metadata = 'null'::jsonb THEN
+    NEW.metadata := '{}'::jsonb;
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+-- +goose StatementEnd
+
+DROP TRIGGER IF EXISTS trg_snapshots_fix_json_null_metadata ON public.snapshots;
+CREATE TRIGGER trg_snapshots_fix_json_null_metadata
+  BEFORE INSERT OR UPDATE OF metadata ON public.snapshots
+  FOR EACH ROW
+  EXECUTE FUNCTION fix_snapshots_metadata_json_null();
+
+
+-- Migration: 20260313120000_fix_snapshots_created_at.sql
+
+-- Set default first so new rows get created_at while backfill runs.
+ALTER TABLE public.snapshots ALTER COLUMN created_at SET DEFAULT now();
+
+-- Backfill NULL created_at from the corresponding envs.created_at in batches.
+-- +goose StatementBegin
+CREATE OR REPLACE PROCEDURE backfill_snapshots_created_at() AS $$
+DECLARE
+  batch_size INT := 50000;
+  rows_updated INT;
+BEGIN
+  LOOP
+    UPDATE public.snapshots s
+    SET created_at = e.created_at
+    FROM public.envs e
+    WHERE s.env_id = e.id
+      AND s.id IN (
+        SELECT id FROM public.snapshots
+        WHERE created_at IS NULL
+        LIMIT batch_size
+        FOR UPDATE SKIP LOCKED
+      );
+
+    GET DIAGNOSTICS rows_updated = ROW_COUNT;
+    EXIT WHEN rows_updated = 0;
+
+    COMMIT;
+    RAISE NOTICE 'backfill_snapshots_created_at: updated % rows, sleeping 10s...', rows_updated;
+    PERFORM pg_sleep(10);
+  END LOOP;
+END;
+$$ LANGUAGE plpgsql;
+-- +goose StatementEnd
+
+CALL backfill_snapshots_created_at();
+DROP PROCEDURE backfill_snapshots_created_at();
+
+
+-- Migration: 20260314120000_fix_snapshots_metadata_sql_null_trigger.sql
+
+-- Update the trigger to also handle SQL NULL (not just JSON 'null' literal).
+-- The NOT NULL constraint on metadata rejects SQL NULLs, but the BEFORE trigger
+-- runs first and can convert them to '{}' before the constraint is checked.
+-- +goose StatementBegin
+CREATE OR REPLACE FUNCTION fix_snapshots_metadata_json_null()
+RETURNS trigger AS $$
+BEGIN
+  IF NEW.metadata IS NULL OR NEW.metadata = 'null'::jsonb THEN
+    NEW.metadata := '{}'::jsonb;
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+-- +goose StatementEnd
+
+
+-- Migration: 20260316120000_users_teams_uuid_pkey.sql
+-- +goose NO TRANSACTION
+
+-- 1. Add new UUID column with default (existing rows get auto-populated)
+ALTER TABLE public.users_teams ADD COLUMN IF NOT EXISTS uuid_id UUID DEFAULT gen_random_uuid() NOT NULL;
+
+-- 2. Build unique index concurrently to avoid holding ACCESS EXCLUSIVE lock during index scan
+CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS users_teams_uuid_id_idx
+  ON public.users_teams (uuid_id);
+
+-- 3. Swap primary key using the pre-built index (brief metadata lock only)
+ALTER TABLE public.users_teams
+  DROP CONSTRAINT users_teams_pkey,
+  ADD CONSTRAINT users_teams_pkey PRIMARY KEY USING INDEX users_teams_uuid_id_idx;
+
+
+-- Migration: 20260316130000_repoint_user_fks_to_public_users.sql
+-- +goose NO TRANSACTION
+
+-- Phase 1: DDL changes (brief ACCESS EXCLUSIVE per table, no row scanning)
+
+ALTER TABLE public.users DROP CONSTRAINT IF EXISTS users_id_fkey;
+
+ALTER TABLE public.access_tokens
+  DROP CONSTRAINT access_tokens_users_access_tokens,
+  ADD CONSTRAINT access_tokens_users_access_tokens
+    FOREIGN KEY (user_id) REFERENCES public.users(id) ON UPDATE NO ACTION ON DELETE CASCADE
+    NOT VALID;
+
+ALTER TABLE public.users_teams
+  DROP CONSTRAINT users_teams_users_users,
+  ADD CONSTRAINT users_teams_users_users
+    FOREIGN KEY (user_id) REFERENCES public.users(id) ON UPDATE NO ACTION ON DELETE CASCADE
+    NOT VALID;
+
+ALTER TABLE public.team_api_keys
+  DROP CONSTRAINT team_api_keys_users_created_api_keys,
+  ADD CONSTRAINT team_api_keys_users_created_api_keys
+    FOREIGN KEY (created_by) REFERENCES public.users(id) ON UPDATE NO ACTION ON DELETE SET NULL
+    NOT VALID;
+
+ALTER TABLE public.envs
+  DROP CONSTRAINT envs_users_created_envs,
+  ADD CONSTRAINT envs_users_created_envs
+    FOREIGN KEY (created_by) REFERENCES public.users(id) ON UPDATE NO ACTION ON DELETE SET NULL
+    NOT VALID;
+
+ALTER TABLE public.users_teams
+  DROP CONSTRAINT users_teams_added_by_user,
+  ADD CONSTRAINT users_teams_added_by_user
+    FOREIGN KEY (added_by) REFERENCES public.users(id) ON UPDATE NO ACTION ON DELETE SET NULL
+    NOT VALID;
+
+ALTER TABLE public.addons
+  DROP CONSTRAINT addons_users_addons,
+  ADD CONSTRAINT addons_users_addons
+    FOREIGN KEY (added_by) REFERENCES public.users(id) ON UPDATE NO ACTION ON DELETE NO ACTION
+    NOT VALID;
+
+-- Phase 2: Move post_user_signup from auth.users to public.users.
+-- This eliminates the trigger ordering concern: the sync trigger fires on auth.users
+-- and inserts into public.users, which then fires post_user_signup naturally.
+DROP TRIGGER IF EXISTS post_user_signup ON auth.users;
+
+CREATE TRIGGER post_user_signup
+    AFTER INSERT ON public.users
+    FOR EACH ROW EXECUTE FUNCTION public.post_user_signup();
+
+-- Phase 3: Add delete-sync trigger so auth.users deletions propagate to public.users
+-- (which then cascades to access_tokens, users_teams, etc. via the re-pointed FKs).
+GRANT DELETE ON public.users TO trigger_user;
+
+CREATE POLICY "Allow to delete a user"
+    ON public.users
+    AS PERMISSIVE
+    FOR DELETE
+    TO trigger_user
+    USING (true);
+
+-- +goose StatementBegin
+CREATE OR REPLACE FUNCTION public.sync_delete_auth_users_to_public_users_trigger() RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $func$
+BEGIN
+    DELETE FROM public.users WHERE id = OLD.id;
+    RETURN OLD;
+END;
+$func$ SECURITY DEFINER SET search_path = public;
+-- +goose StatementEnd
+
+ALTER FUNCTION public.sync_delete_auth_users_to_public_users_trigger() OWNER TO trigger_user;
+
+CREATE TRIGGER sync_deletes_to_public_users
+    AFTER DELETE ON auth.users
+    FOR EACH ROW EXECUTE FUNCTION public.sync_delete_auth_users_to_public_users_trigger();
+
+-- Phase 4: Validate constraints (ShareUpdateExclusiveLock only, allows concurrent DML)
+ALTER TABLE public.access_tokens VALIDATE CONSTRAINT access_tokens_users_access_tokens;
+ALTER TABLE public.users_teams VALIDATE CONSTRAINT users_teams_users_users;
+ALTER TABLE public.team_api_keys VALIDATE CONSTRAINT team_api_keys_users_created_api_keys;
+ALTER TABLE public.envs VALIDATE CONSTRAINT envs_users_created_envs;
+ALTER TABLE public.users_teams VALIDATE CONSTRAINT users_teams_added_by_user;
+ALTER TABLE public.addons VALIDATE CONSTRAINT addons_users_addons;
+
+

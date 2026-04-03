@@ -8,59 +8,34 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
-	"go.opentelemetry.io/otel/attribute"
 
-	"github.com/e2b-dev/infra/packages/api/internal/auth"
-	authcache "github.com/e2b-dev/infra/packages/api/internal/cache/auth"
-	template_manager "github.com/e2b-dev/infra/packages/api/internal/template-manager"
+	"github.com/e2b-dev/infra/packages/api/internal/db"
+	"github.com/e2b-dev/infra/packages/api/internal/orchestrator"
+	"github.com/e2b-dev/infra/packages/api/internal/sandbox"
 	"github.com/e2b-dev/infra/packages/api/internal/utils"
-	"github.com/e2b-dev/infra/packages/shared/pkg/db"
+	"github.com/e2b-dev/infra/packages/auth/pkg/auth"
+	"github.com/e2b-dev/infra/packages/db/queries"
+	"github.com/e2b-dev/infra/packages/shared/pkg/logger"
 	"github.com/e2b-dev/infra/packages/shared/pkg/telemetry"
 )
 
-func (a *APIStore) deleteSnapshot(ctx context.Context, sandboxID string, teamID uuid.UUID, teamClusterID *uuid.UUID) error {
-	env, builds, err := a.db.GetSnapshotBuilds(ctx, sandboxID, teamID)
+func (a *APIStore) deleteSnapshot(ctx context.Context, sandboxID string, teamID uuid.UUID) error {
+	snapshot, err := a.throttledGetSnapshotBuilds(ctx, teamID, sandboxID)
 	if err != nil {
 		return err
 	}
 
-	dbErr := a.db.DeleteEnv(ctx, env.ID)
+	aliasKeys, dbErr := a.sqlcDB.DeleteTemplate(ctx, queries.DeleteTemplateParams{
+		TeamID:     teamID,
+		TemplateID: snapshot.TemplateID,
+	})
 	if dbErr != nil {
-		return fmt.Errorf("error deleting env from db: %w", dbErr)
+		return fmt.Errorf("error deleting template from db: %w", dbErr)
 	}
 
-	go func() {
-		// remove any snapshots when the sandbox is not running
-		deleteCtx, span := a.Tracer.Start(context.Background(), "delete-snapshot")
-		defer span.End()
-		span.SetAttributes(telemetry.WithSandboxID(sandboxID))
-		span.SetAttributes(telemetry.WithTemplateID(env.ID))
-
-		envBuildIDs := make([]template_manager.DeleteBuild, 0)
-		for _, build := range builds {
-			envBuildIDs = append(
-				envBuildIDs,
-				template_manager.DeleteBuild{
-					BuildID:    build.ID,
-					TemplateID: *build.EnvID,
-
-					ClusterID:     teamClusterID,
-					ClusterNodeID: build.ClusterNodeID,
-				},
-			)
-		}
-
-		if len(envBuildIDs) == 0 {
-			return
-		}
-
-		deleteJobErr := a.templateManager.DeleteBuilds(deleteCtx, envBuildIDs)
-		if deleteJobErr != nil {
-			telemetry.ReportError(deleteCtx, "error deleting snapshot builds", deleteJobErr, telemetry.WithSandboxID(sandboxID))
-		}
-	}()
-
-	a.templateCache.Invalidate(env.ID)
+	a.templateCache.InvalidateAllTags(context.WithoutCancel(ctx), snapshot.TemplateID)
+	a.templateCache.InvalidateAliasesByTemplateID(context.WithoutCancel(ctx), snapshot.TemplateID, aliasKeys)
+	a.snapshotCache.Invalidate(context.WithoutCancel(ctx), sandboxID)
 
 	return nil
 }
@@ -70,68 +45,72 @@ func (a *APIStore) DeleteSandboxesSandboxID(
 	sandboxID string,
 ) {
 	ctx := c.Request.Context()
-	sandboxID = utils.ShortID(sandboxID)
 
-	team := c.Value(auth.TeamContextKey).(authcache.AuthTeamInfo).Team
+	var err error
+	sandboxID, err = utils.ShortID(sandboxID)
+	if err != nil {
+		a.sendAPIStoreError(c, http.StatusBadRequest, "Invalid sandbox ID")
+
+		return
+	}
+
+	team := auth.MustGetTeamInfo(c)
 	teamID := team.ID
 
 	telemetry.SetAttributes(ctx,
-		attribute.String("instance.id", sandboxID),
+		telemetry.WithSandboxID(sandboxID),
 		telemetry.WithTeamID(teamID.String()),
 	)
 
 	telemetry.ReportEvent(ctx, "killing sandbox")
 
-	sbx, err := a.orchestrator.GetSandbox(sandboxID)
-	if err == nil {
-		if *sbx.TeamID != teamID {
-			telemetry.ReportCriticalError(ctx, "sandbox does not belong to team", fmt.Errorf("sandbox '%s' does not belong to team '%s'", sandboxID, teamID.String()))
+	killedOrRemoved := false
 
-			a.sendAPIStoreError(c, http.StatusUnauthorized, fmt.Sprintf("Error deleting sandbox - sandbox '%s' does not belong to your team '%s'", sandboxID, teamID.String()))
+	err = a.orchestrator.RemoveSandbox(ctx, teamID, sandboxID, sandbox.RemoveOpts{Action: sandbox.StateActionKill})
+	switch {
+	case err == nil:
+		killedOrRemoved = true
+	case errors.Is(err, orchestrator.ErrSandboxNotFound):
+		logger.L().Debug(ctx, "Running sandbox not found", logger.WithSandboxID(sandboxID))
+	case errors.Is(err, orchestrator.ErrSandboxOperationFailed):
+		a.sendAPIStoreError(c, http.StatusInternalServerError, fmt.Sprintf("Error killing sandbox: %s", err))
 
-			return
-		}
-
-		// remove running sandbox from the orchestrator
-		sandboxExists := a.orchestrator.DeleteInstance(ctx, sandboxID, false)
-		if !sandboxExists {
-			telemetry.ReportError(ctx, "sandbox not found", fmt.Errorf("sandbox '%s' not found", sandboxID), telemetry.WithSandboxID(sandboxID))
-			a.sendAPIStoreError(c, http.StatusNotFound, fmt.Sprintf("Error deleting sandbox - sandbox '%s' was not found", sandboxID))
-
-			return
-		}
-
-		// remove any snapshots of the sandbox
-		err := a.deleteSnapshot(ctx, sandboxID, teamID, team.ClusterID)
-		if err != nil && !errors.Is(err, db.EnvNotFound{}) {
-			telemetry.ReportError(ctx, "error deleting sandbox", err)
-			a.sendAPIStoreError(c, http.StatusInternalServerError, fmt.Sprintf("Error deleting sandbox: %s", err))
-
-			return
-		}
-
-		telemetry.ReportEvent(ctx, "deleted sandbox from orchestrator")
-
-		c.Status(http.StatusNoContent)
+		return
+	default:
+		telemetry.ReportError(ctx, "error killing sandbox", err)
+		a.sendAPIStoreError(c, http.StatusInternalServerError, fmt.Sprintf("Error killing sandbox: %s", err))
 
 		return
 	}
 
 	// remove any snapshots when the sandbox is not running
-	deleteSnapshotErr := a.deleteSnapshot(ctx, sandboxID, teamID, team.ClusterID)
-	if errors.Is(deleteSnapshotErr, db.EnvNotFound{}) {
-		telemetry.ReportError(ctx, "snapshot for sandbox not found", fmt.Errorf("snapshot for sandbox '%s' not found", sandboxID), telemetry.WithSandboxID(sandboxID))
-		a.sendAPIStoreError(c, http.StatusNotFound, fmt.Sprintf("Error deleting sandbox - sandbox '%s' not found", sandboxID))
-
-		return
-	}
-
-	if deleteSnapshotErr != nil {
+	deleteSnapshotErr := a.deleteSnapshot(ctx, sandboxID, teamID)
+	switch {
+	case errors.Is(deleteSnapshotErr, db.ErrSnapshotNotFound):
+		// no snapshot found, nothing to do
+	case deleteSnapshotErr != nil:
 		telemetry.ReportError(ctx, "error deleting sandbox", deleteSnapshotErr)
 		a.sendAPIStoreError(c, http.StatusInternalServerError, fmt.Sprintf("Error deleting sandbox: %s", deleteSnapshotErr))
 
 		return
+	default:
+		killedOrRemoved = true
 	}
 
-	c.Status(http.StatusNoContent)
+	if killedOrRemoved {
+		c.Status(http.StatusNoContent)
+	} else {
+		logger.L().Debug(ctx, "Sandbox not found for deletion", logger.WithSandboxID(sandboxID))
+		a.sendAPIStoreError(c, http.StatusNotFound, utils.SandboxNotFoundMsg(sandboxID))
+	}
+}
+
+// throttledGetSnapshotBuilds runs GetSnapshotBuilds gated by the snapshot build query semaphore.
+func (a *APIStore) throttledGetSnapshotBuilds(ctx context.Context, teamID uuid.UUID, sandboxID string) (db.SnapshotBuilds, error) {
+	if err := a.snapshotBuildQuerySem.Acquire(ctx, 1); err != nil {
+		return db.SnapshotBuilds{}, err
+	}
+	defer a.snapshotBuildQuerySem.Release(1)
+
+	return db.GetSnapshotBuilds(ctx, a.sqlcDB, teamID, sandboxID)
 }

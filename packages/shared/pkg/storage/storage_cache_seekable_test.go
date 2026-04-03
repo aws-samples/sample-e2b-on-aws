@@ -1,0 +1,819 @@
+package storage
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"io"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
+
+	storagemocks "github.com/e2b-dev/infra/packages/shared/pkg/storage/mocks"
+)
+
+func TestCachedFileObjectProvider_MakeChunkFilename(t *testing.T) {
+	t.Parallel()
+
+	c := cachedSeekable{path: "/a/b/c", chunkSize: 1024, tracer: noopTracer}
+	filename := c.makeChunkFilename(1024 * 4)
+	assert.Equal(t, "/a/b/c/000000000004-1024.bin", filename)
+}
+
+func TestCachedFileObjectProvider_Size(t *testing.T) {
+	t.Parallel()
+
+	t.Run("can be cached successfully", func(t *testing.T) {
+		t.Parallel()
+
+		const expectedSize int64 = 1024
+
+		inner := storagemocks.NewMockSeekable(t)
+		inner.EXPECT().Size(mock.Anything).Return(expectedSize, nil)
+
+		c := cachedSeekable{path: t.TempDir(), inner: inner, tracer: noopTracer}
+
+		// first call will write to cache
+		size, err := c.Size(t.Context())
+		require.NoError(t, err)
+		assert.Equal(t, expectedSize, size)
+
+		// sleep, cache writing is async
+		c.wg.Wait()
+
+		// second call must come from cache
+		c.inner = nil
+
+		size, err = c.Size(t.Context())
+		require.NoError(t, err)
+		assert.Equal(t, expectedSize, size)
+	})
+}
+
+func TestCachedFileObjectProvider_WriteFromFileSystem(t *testing.T) {
+	t.Parallel()
+
+	t.Run("can be cached successfully", func(t *testing.T) {
+		t.Parallel()
+
+		tempDir := t.TempDir()
+		cacheDir := filepath.Join(tempDir, "cache")
+		tempFilename := filepath.Join(tempDir, "temp.bin")
+		data := []byte("hello world")
+
+		err := os.MkdirAll(cacheDir, os.ModePerm)
+		require.NoError(t, err)
+
+		err = os.WriteFile(tempFilename, data, 0o644)
+		require.NoError(t, err)
+
+		inner := storagemocks.NewMockSeekable(t)
+		inner.EXPECT().
+			StoreFile(mock.Anything, mock.Anything).
+			Return(nil)
+
+		featureFlags := storagemocks.NewMockFeatureFlagsClient(t)
+		featureFlags.EXPECT().BoolFlag(mock.Anything, mock.Anything).Return(true)
+		featureFlags.EXPECT().IntFlag(mock.Anything, mock.Anything).Return(10)
+
+		c := cachedSeekable{path: cacheDir, inner: inner, chunkSize: 1024, flags: featureFlags, tracer: noopTracer}
+
+		// write temp file
+		err = c.StoreFile(t.Context(), tempFilename)
+		require.NoError(t, err)
+
+		// file is written asynchronously, wait for it to finish
+		c.wg.Wait()
+
+		c.inner = nil
+
+		// size should be cached
+		size, err := c.Size(t.Context())
+		require.NoError(t, err)
+		assert.Equal(t, int64(len(data)), size)
+
+		// verify that the size has been cached
+		buff := make([]byte, len(data))
+		bytesRead, err := c.ReadAt(t.Context(), buff, 0)
+		require.NoError(t, err)
+		assert.Equal(t, data, buff)
+		assert.Equal(t, len(data), bytesRead)
+	})
+}
+
+func TestCachedFileObjectProvider_WriteTo(t *testing.T) {
+	t.Parallel()
+
+	t.Run("read from cache when the file exists", func(t *testing.T) {
+		t.Parallel()
+
+		tempDir := t.TempDir()
+
+		tempPath := filepath.Join(tempDir, "a", "b", "c")
+		c := cachedSeekable{path: tempPath, chunkSize: 3, tracer: noopTracer}
+
+		// create cache file
+		cacheFilename := c.makeChunkFilename(0)
+		dirName := filepath.Dir(cacheFilename)
+		err := os.MkdirAll(dirName, 0o755)
+		require.NoError(t, err)
+		err = os.WriteFile(cacheFilename, []byte{1, 2, 3}, 0o600)
+		require.NoError(t, err)
+
+		buffer := make([]byte, 3)
+		read, err := c.ReadAt(t.Context(), buffer, 0)
+		require.NoError(t, err)
+		assert.Equal(t, []byte{1, 2, 3}, buffer)
+		assert.Equal(t, 3, read)
+	})
+
+	t.Run("short cache file returns EOF via ReadAt", func(t *testing.T) {
+		t.Parallel()
+
+		tempDir := t.TempDir()
+
+		c := cachedSeekable{path: tempDir, chunkSize: 10, tracer: noopTracer}
+
+		// Plant a 3-byte cache file (valid last chunk).
+		chunkPath := c.makeChunkFilename(0)
+		require.NoError(t, os.MkdirAll(filepath.Dir(chunkPath), 0o755))
+		require.NoError(t, os.WriteFile(chunkPath, []byte{1, 2, 3}, 0o600))
+
+		// ReadAt on a file shorter than the buffer returns (n, io.EOF)
+		// per the io.ReaderAt contract. This is a cache hit — the caller
+		// sees the data with EOF indicating end of file.
+		buffer := make([]byte, 10)
+		read, err := c.ReadAt(t.Context(), buffer, 0)
+		require.ErrorIs(t, err, io.EOF)
+		assert.Equal(t, 3, read)
+		assert.Equal(t, []byte{1, 2, 3}, buffer[:read])
+	})
+
+	t.Run("consecutive ReadAt calls should cache", func(t *testing.T) {
+		t.Parallel()
+
+		fakeData := []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
+		fakeStorageObjectProvider := storagemocks.NewMockSeekable(t)
+
+		fakeStorageObjectProvider.EXPECT().
+			ReadAt(mock.Anything, mock.Anything, mock.Anything).
+			RunAndReturn(func(_ context.Context, buff []byte, off int64) (int, error) {
+				start := off
+				end := off + int64(len(buff))
+				end = min(end, int64(len(fakeData)))
+				copy(buff, fakeData[start:end])
+
+				return int(end - start), nil
+			})
+
+		tempDir := t.TempDir()
+		c := cachedSeekable{
+			path:      tempDir,
+			chunkSize: 3,
+			inner:     fakeStorageObjectProvider,
+			tracer:    noopTracer,
+		}
+
+		// first read goes to source
+		buffer := make([]byte, 3)
+		read, err := c.ReadAt(t.Context(), buffer, 3)
+		require.NoError(t, err)
+		assert.Equal(t, []byte{4, 5, 6}, buffer)
+		assert.Equal(t, 3, read)
+
+		// we write asynchronously, so let's wait until we're done
+		c.wg.Wait()
+
+		// second read pulls from cache
+		c.inner = nil // prevent remote reads, force cache read
+		buffer = make([]byte, 3)
+		read, err = c.ReadAt(t.Context(), buffer, 3)
+		require.NoError(t, err)
+		assert.Equal(t, []byte{4, 5, 6}, buffer)
+		assert.Equal(t, 3, read)
+	})
+
+	t.Run("WriteTo calls should read from cache", func(t *testing.T) {
+		t.Parallel()
+
+		fakeData := []byte{1, 2, 3}
+
+		fakeStorageObjectProvider := storagemocks.NewMockBlob(t)
+		fakeStorageObjectProvider.EXPECT().
+			WriteTo(mock.Anything, mock.Anything).
+			RunAndReturn(func(_ context.Context, dst io.Writer) (int64, error) {
+				n, err := dst.Write(fakeData)
+
+				return int64(n), err
+			})
+
+		tempDir := t.TempDir()
+		c := cachedBlob{
+			path:      tempDir,
+			chunkSize: 3,
+			inner:     fakeStorageObjectProvider,
+			tracer:    noopTracer,
+		}
+
+		// write to both local and remote storage
+		data, err := GetBlob(t.Context(), &c)
+		require.NoError(t, err)
+		assert.Equal(t, fakeData, data)
+
+		// WriteTo is async, wait for the write to finish
+		c.wg.Wait()
+
+		// second read should go straight to local
+		c.inner = nil
+		data, err = GetBlob(t.Context(), &c)
+		require.NoError(t, err)
+		assert.Equal(t, fakeData, data)
+	})
+}
+
+func TestCachedFileObjectProvider_validateReadAtParams(t *testing.T) {
+	t.Parallel()
+
+	testcases := map[string]struct {
+		chunkSize, bufferSize, offset int64
+		expected                      error
+	}{
+		"buffer is empty": {
+			chunkSize:  1,
+			bufferSize: 0,
+			offset:     0,
+			expected:   ErrBufferTooSmall,
+		},
+		"buffer is smaller than chunk size": {
+			chunkSize:  10,
+			bufferSize: 5,
+			offset:     0,
+		},
+		"offset is unaligned": {
+			chunkSize:  10,
+			bufferSize: 10,
+			offset:     3,
+			expected:   ErrOffsetUnaligned,
+		},
+		"buffer is too large (unaligned)": {
+			chunkSize:  10,
+			bufferSize: 11,
+			expected:   ErrBufferTooLarge,
+		},
+		"buffer is too large (aligned)": {
+			chunkSize:  10,
+			bufferSize: 20,
+			expected:   ErrBufferTooLarge,
+		},
+	}
+
+	for name, tc := range testcases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			c := cachedSeekable{
+				chunkSize: tc.chunkSize,
+				tracer:    noopTracer,
+			}
+			err := c.validateReadAtParams(tc.bufferSize, tc.offset)
+			if tc.expected == nil {
+				require.NoError(t, err)
+			} else {
+				require.ErrorIs(t, err, tc.expected)
+			}
+		})
+	}
+}
+
+func TestCachedSeekableObjectProvider_ReadAt(t *testing.T) {
+	t.Parallel()
+
+	t.Run("failed but returns count on short read", func(t *testing.T) {
+		t.Parallel()
+
+		c := cachedSeekable{chunkSize: 10, tracer: noopTracer}
+		errTarget := errors.New("find me")
+		mockSeeker := storagemocks.NewMockSeekable(t)
+		mockSeeker.EXPECT().ReadAt(mock.Anything, mock.Anything, mock.Anything).Return(5, errTarget)
+		c.inner = mockSeeker
+
+		buff := make([]byte, 10)
+		count, err := c.ReadAt(t.Context(), buff, 0)
+		require.ErrorIs(t, err, errTarget)
+		assert.Equal(t, 5, count)
+	})
+
+	t.Run("zero byte read with EOF is not cached", func(t *testing.T) {
+		t.Parallel()
+
+		tempDir := t.TempDir()
+		mockSeeker := storagemocks.NewMockSeekable(t)
+		mockSeeker.EXPECT().
+			ReadAt(mock.Anything, mock.Anything, mock.Anything).
+			Return(0, io.EOF)
+
+		c := cachedSeekable{
+			path:      tempDir,
+			chunkSize: 10,
+			inner:     mockSeeker,
+			tracer:    noopTracer,
+		}
+
+		buff := make([]byte, 10)
+		count, err := c.ReadAt(t.Context(), buff, 0)
+		require.ErrorIs(t, err, io.EOF)
+		assert.Equal(t, 0, count)
+
+		c.wg.Wait()
+
+		chunkPath := c.makeChunkFilename(0)
+		_, err = os.Stat(chunkPath)
+		assert.True(t, os.IsNotExist(err), "zero-byte read should not be cached")
+	})
+
+	t.Run("zero byte read without EOF is not cached", func(t *testing.T) {
+		t.Parallel()
+
+		tempDir := t.TempDir()
+		mockSeeker := storagemocks.NewMockSeekable(t)
+		mockSeeker.EXPECT().
+			ReadAt(mock.Anything, mock.Anything, mock.Anything).
+			Return(0, nil)
+
+		c := cachedSeekable{
+			path:      tempDir,
+			chunkSize: 10,
+			inner:     mockSeeker,
+			tracer:    noopTracer,
+		}
+
+		buff := make([]byte, 10)
+		count, err := c.ReadAt(t.Context(), buff, 0)
+		require.NoError(t, err)
+		assert.Equal(t, 0, count)
+
+		c.wg.Wait()
+
+		chunkPath := c.makeChunkFilename(0)
+		_, err = os.Stat(chunkPath)
+		assert.True(t, os.IsNotExist(err), "zero-byte read should not be cached")
+	})
+
+	t.Run("short read without EOF is not cached", func(t *testing.T) {
+		t.Parallel()
+
+		tempDir := t.TempDir()
+		mockSeeker := storagemocks.NewMockSeekable(t)
+		mockSeeker.EXPECT().
+			ReadAt(mock.Anything, mock.Anything, mock.Anything).
+			RunAndReturn(func(_ context.Context, buff []byte, _ int64) (int, error) {
+				// Simulate a truncated upstream response: return fewer
+				// bytes than requested with no error and no EOF.
+				copy(buff[:2], []byte{0xAA, 0xBB})
+
+				return 2, nil
+			})
+
+		c := cachedSeekable{
+			path:      tempDir,
+			chunkSize: 10,
+			inner:     mockSeeker,
+			tracer:    noopTracer,
+		}
+
+		buff := make([]byte, 10)
+		count, err := c.ReadAt(t.Context(), buff, 0)
+		require.NoError(t, err)
+		assert.Equal(t, 2, count)
+
+		c.wg.Wait()
+
+		// Verify no cache file was written.
+		chunkPath := c.makeChunkFilename(0)
+		_, err = os.Stat(chunkPath)
+		assert.True(t, os.IsNotExist(err), "truncated data should not be cached")
+	})
+
+	t.Run("short read with EOF is cached", func(t *testing.T) {
+		t.Parallel()
+
+		tempDir := t.TempDir()
+		mockSeeker := storagemocks.NewMockSeekable(t)
+		mockSeeker.EXPECT().
+			ReadAt(mock.Anything, mock.Anything, mock.Anything).
+			RunAndReturn(func(_ context.Context, buff []byte, _ int64) (int, error) {
+				// Last chunk: fewer bytes than the buffer with EOF.
+				copy(buff[:3], []byte{1, 2, 3})
+
+				return 3, io.EOF
+			})
+
+		c := cachedSeekable{
+			path:      tempDir,
+			chunkSize: 10,
+			inner:     mockSeeker,
+			tracer:    noopTracer,
+		}
+
+		buff := make([]byte, 10)
+		count, err := c.ReadAt(t.Context(), buff, 0)
+		require.ErrorIs(t, err, io.EOF)
+		assert.Equal(t, 3, count)
+
+		c.wg.Wait()
+
+		// Verify the data was cached.
+		chunkPath := c.makeChunkFilename(0)
+		cached, err := os.ReadFile(chunkPath)
+		require.NoError(t, err)
+		assert.Equal(t, []byte{1, 2, 3}, cached)
+	})
+
+	t.Run("full read without EOF is cached", func(t *testing.T) {
+		t.Parallel()
+
+		tempDir := t.TempDir()
+		data := []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
+		mockSeeker := storagemocks.NewMockSeekable(t)
+		mockSeeker.EXPECT().
+			ReadAt(mock.Anything, mock.Anything, mock.Anything).
+			RunAndReturn(func(_ context.Context, buff []byte, _ int64) (int, error) {
+				copy(buff, data)
+
+				return len(data), nil
+			})
+
+		c := cachedSeekable{
+			path:      tempDir,
+			chunkSize: 10,
+			inner:     mockSeeker,
+			tracer:    noopTracer,
+		}
+
+		buff := make([]byte, 10)
+		count, err := c.ReadAt(t.Context(), buff, 0)
+		require.NoError(t, err)
+		assert.Equal(t, 10, count)
+
+		c.wg.Wait()
+
+		// Verify the data was cached.
+		chunkPath := c.makeChunkFilename(0)
+		cached, err := os.ReadFile(chunkPath)
+		require.NoError(t, err)
+		assert.Equal(t, data, cached)
+	})
+}
+
+func TestIsCompleteRead(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		n, expected int
+		err         error
+		want        bool
+	}{
+		"full read, no error":      {n: 10, expected: 10, err: nil, want: true},
+		"full read, with EOF":      {n: 10, expected: 10, err: io.EOF, want: true},
+		"short read, with EOF":     {n: 3, expected: 10, err: io.EOF, want: true},
+		"short read, no error":     {n: 3, expected: 10, err: nil, want: false},
+		"short read, other error":  {n: 3, expected: 10, err: errors.New("fail"), want: false},
+		"zero bytes, with EOF":     {n: 0, expected: 10, err: io.EOF, want: false},
+		"zero bytes, no error":     {n: 0, expected: 10, err: nil, want: false},
+		"zero expected, zero read": {n: 0, expected: 0, err: nil, want: true},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			got := isCompleteRead(tc.n, tc.expected, tc.err)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestCachedSeekable_ReadAt_PreservesEOF(t *testing.T) {
+	t.Parallel()
+
+	t.Run("EOF from inner is returned to caller unchanged", func(t *testing.T) {
+		t.Parallel()
+
+		tempDir := t.TempDir()
+		mockSeeker := storagemocks.NewMockSeekable(t)
+		mockSeeker.EXPECT().
+			ReadAt(mock.Anything, mock.Anything, mock.Anything).
+			RunAndReturn(func(_ context.Context, buff []byte, _ int64) (int, error) {
+				copy(buff[:3], []byte{1, 2, 3})
+
+				return 3, io.EOF
+			})
+
+		c := cachedSeekable{
+			path:      tempDir,
+			chunkSize: 10,
+			inner:     mockSeeker,
+			tracer:    noopTracer,
+		}
+
+		buff := make([]byte, 10)
+		n, err := c.ReadAt(t.Context(), buff, 0)
+		assert.Equal(t, 3, n)
+		require.ErrorIs(t, err, io.EOF, "cachedSeekable must not swallow io.EOF")
+
+		c.wg.Wait()
+	})
+
+	t.Run("nil error from inner is returned to caller unchanged", func(t *testing.T) {
+		t.Parallel()
+
+		tempDir := t.TempDir()
+		mockSeeker := storagemocks.NewMockSeekable(t)
+		mockSeeker.EXPECT().
+			ReadAt(mock.Anything, mock.Anything, mock.Anything).
+			RunAndReturn(func(_ context.Context, buff []byte, _ int64) (int, error) {
+				copy(buff, []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10})
+
+				return 10, nil
+			})
+
+		c := cachedSeekable{
+			path:      tempDir,
+			chunkSize: 10,
+			inner:     mockSeeker,
+			tracer:    noopTracer,
+		}
+
+		buff := make([]byte, 10)
+		n, err := c.ReadAt(t.Context(), buff, 0)
+		assert.Equal(t, 10, n)
+		require.NoError(t, err, "cachedSeekable must not inject errors on full read")
+
+		c.wg.Wait()
+	})
+}
+
+func TestCachedSeekable_ReadAt_SkipCacheWriteback(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	data := []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
+	mockSeeker := storagemocks.NewMockSeekable(t)
+	mockSeeker.EXPECT().
+		ReadAt(mock.Anything, mock.Anything, mock.Anything).
+		RunAndReturn(func(_ context.Context, buff []byte, _ int64) (int, error) {
+			copy(buff, data)
+
+			return len(data), nil
+		})
+
+	c := cachedSeekable{
+		path:      tempDir,
+		chunkSize: 10,
+		inner:     mockSeeker,
+		tracer:    noopTracer,
+	}
+
+	ctx := WithSkipCacheWriteback(t.Context())
+	buff := make([]byte, 10)
+	n, err := c.ReadAt(ctx, buff, 0)
+	require.NoError(t, err)
+	assert.Equal(t, 10, n)
+
+	c.wg.Wait()
+
+	chunkPath := c.makeChunkFilename(0)
+	_, err = os.Stat(chunkPath)
+	assert.True(t, os.IsNotExist(err), "cache writeback should be skipped")
+}
+
+func TestCachedSeekable_OpenRangeReader(t *testing.T) {
+	t.Parallel()
+
+	t.Run("cache miss then full read populates cache for next call", func(t *testing.T) {
+		t.Parallel()
+
+		tempDir := t.TempDir()
+		data := []byte("hello")
+
+		mockSeeker := storagemocks.NewMockSeekable(t)
+		mockSeeker.EXPECT().
+			OpenRangeReader(mock.Anything, int64(0), int64(len(data))).
+			Return(io.NopCloser(bytes.NewReader(data)), nil).
+			Once()
+
+		c := cachedSeekable{
+			path:      tempDir,
+			chunkSize: 10,
+			inner:     mockSeeker,
+			tracer:    noopTracer,
+		}
+
+		// First call: cache miss, reads from inner.
+		rc, err := c.OpenRangeReader(t.Context(), 0, int64(len(data)))
+		require.NoError(t, err)
+
+		got, err := io.ReadAll(rc)
+		require.NoError(t, err)
+		assert.Equal(t, data, got)
+		require.NoError(t, rc.Close())
+
+		c.wg.Wait()
+
+		// Second call: should serve from NFS cache, inner not called again.
+		c.inner = nil
+		rc2, err := c.OpenRangeReader(t.Context(), 0, int64(len(data)))
+		require.NoError(t, err)
+
+		got2, err := io.ReadAll(rc2)
+		require.NoError(t, err)
+		assert.Equal(t, data, got2)
+		require.NoError(t, rc2.Close())
+	})
+
+	t.Run("skip cache writeback returns inner directly", func(t *testing.T) {
+		t.Parallel()
+
+		tempDir := t.TempDir()
+		data := []byte("hello")
+
+		mockSeeker := storagemocks.NewMockSeekable(t)
+		mockSeeker.EXPECT().
+			OpenRangeReader(mock.Anything, int64(0), int64(len(data))).
+			RunAndReturn(func(_ context.Context, _ int64, _ int64) (io.ReadCloser, error) {
+				return io.NopCloser(bytes.NewReader(data)), nil
+			}).
+			Times(2)
+
+		c := cachedSeekable{
+			path:      tempDir,
+			chunkSize: 10,
+			inner:     mockSeeker,
+			tracer:    noopTracer,
+		}
+
+		ctx := WithSkipCacheWriteback(t.Context())
+
+		rc, err := c.OpenRangeReader(ctx, 0, int64(len(data)))
+		require.NoError(t, err)
+
+		got, err := io.ReadAll(rc)
+		require.NoError(t, err)
+		assert.Equal(t, data, got)
+		require.NoError(t, rc.Close())
+
+		c.wg.Wait()
+
+		// Cache should still be empty — second call hits inner again.
+		chunkPath := c.makeChunkFilename(0)
+		_, err = os.Stat(chunkPath)
+		assert.True(t, os.IsNotExist(err), "skip writeback should not populate cache")
+
+		rc2, err := c.OpenRangeReader(ctx, 0, int64(len(data)))
+		require.NoError(t, err)
+
+		got2, err := io.ReadAll(rc2)
+		require.NoError(t, err)
+		assert.Equal(t, data, got2)
+		require.NoError(t, rc2.Close())
+	})
+
+	t.Run("truncated inner read does not populate cache", func(t *testing.T) {
+		t.Parallel()
+
+		tempDir := t.TempDir()
+
+		mockSeeker := storagemocks.NewMockSeekable(t)
+		mockSeeker.EXPECT().
+			OpenRangeReader(mock.Anything, int64(0), int64(5)).
+			Return(io.NopCloser(bytes.NewReader([]byte{0xAA, 0xBB})), nil)
+
+		c := cachedSeekable{
+			path:      tempDir,
+			chunkSize: 10,
+			inner:     mockSeeker,
+			tracer:    noopTracer,
+		}
+
+		rc, err := c.OpenRangeReader(t.Context(), 0, 5)
+		require.NoError(t, err)
+
+		got, err := io.ReadAll(rc)
+		require.NoError(t, err)
+		assert.Equal(t, []byte{0xAA, 0xBB}, got)
+		require.NoError(t, rc.Close())
+
+		c.wg.Wait()
+
+		chunkPath := c.makeChunkFilename(0)
+		_, err = os.Stat(chunkPath)
+		assert.True(t, os.IsNotExist(err), "truncated data should not be cached")
+	})
+}
+
+func TestCacheWriteThroughReader(t *testing.T) {
+	t.Parallel()
+
+	newTestCache := func(t *testing.T) cachedSeekable {
+		t.Helper()
+
+		return cachedSeekable{
+			path:      t.TempDir(),
+			chunkSize: 10,
+			tracer:    noopTracer,
+		}
+	}
+
+	t.Run("complete read is cached", func(t *testing.T) {
+		t.Parallel()
+
+		c := newTestCache(t)
+		data := []byte("hello")
+		inner := io.NopCloser(bytes.NewReader(data))
+
+		r := &cacheWriteThroughReader{
+			inner:       inner,
+			buf:         bytes.NewBuffer(make([]byte, 0, len(data))),
+			cache:       &c,
+			ctx:         t.Context(),
+			off:         0,
+			expectedLen: int64(len(data)),
+			chunkPath:   c.makeChunkFilename(0),
+		}
+
+		got, err := io.ReadAll(r)
+		require.NoError(t, err)
+		assert.Equal(t, data, got)
+
+		require.NoError(t, r.Close())
+		c.wg.Wait()
+
+		cached, err := os.ReadFile(c.makeChunkFilename(0))
+		require.NoError(t, err)
+		assert.Equal(t, data, cached)
+	})
+
+	t.Run("truncated upstream fully consumed is not cached", func(t *testing.T) {
+		t.Parallel()
+
+		c := newTestCache(t)
+		// Inner has only 2 bytes but expectedLen is 5. The reader is
+		// fully consumed (EOF is reached), yet the total doesn't match
+		// the expected length so it must not be cached.
+		inner := io.NopCloser(bytes.NewReader([]byte{0xAA, 0xBB}))
+
+		r := &cacheWriteThroughReader{
+			inner:       inner,
+			buf:         bytes.NewBuffer(make([]byte, 0, 5)),
+			cache:       &c,
+			ctx:         t.Context(),
+			off:         0,
+			expectedLen: 5,
+			chunkPath:   c.makeChunkFilename(0),
+		}
+
+		got, err := io.ReadAll(r)
+		require.NoError(t, err)
+		assert.Equal(t, []byte{0xAA, 0xBB}, got)
+
+		require.NoError(t, r.Close())
+		c.wg.Wait()
+
+		_, err = os.Stat(c.makeChunkFilename(0))
+		assert.True(t, os.IsNotExist(err), "truncated data should not be cached")
+	})
+
+	t.Run("partially consumed reader closed early is not cached", func(t *testing.T) {
+		t.Parallel()
+
+		c := newTestCache(t)
+		data := []byte("hello")
+		inner := io.NopCloser(bytes.NewReader(data))
+
+		r := &cacheWriteThroughReader{
+			inner:       inner,
+			buf:         bytes.NewBuffer(make([]byte, 0, len(data))),
+			cache:       &c,
+			ctx:         t.Context(),
+			off:         0,
+			expectedLen: int64(len(data)),
+			chunkPath:   c.makeChunkFilename(0),
+		}
+
+		// Read only 2 of 5 bytes, then close without reaching EOF.
+		buf := make([]byte, 2)
+		n, err := r.Read(buf)
+		require.NoError(t, err)
+		assert.Equal(t, 2, n)
+
+		require.NoError(t, r.Close())
+		c.wg.Wait()
+
+		_, err = os.Stat(c.makeChunkFilename(0))
+		assert.True(t, os.IsNotExist(err), "partially read data should not be cached")
+	})
+}

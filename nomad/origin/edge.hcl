@@ -64,30 +64,15 @@ job "client-proxy" {
 
       env {
         NODE_ID = "$${node.unique.id}"
-        NODE_IP = "$${attr.unique.network.ip-address}"
+        HEALTH_PORT = "3001"
+        PROXY_PORT  = "3002"
 
-        EDGE_PORT         = 3001
-        EDGE_SECRET       = "${admin_token}"
-        PROXY_PORT        = 3002
-        ORCHESTRATOR_PORT = 5008
+        REDIS_CLUSTER_URL = "${REDIS_ENDPOINT}:6379"
+        REDIS_TLS_ENABLED                = "true"
+        REDIS_TLS_CA_BASE64          = ""
 
-        SERVICE_DISCOVERY_ORCHESTRATOR_PROVIDER             = "DNS"
-        SERVICE_DISCOVERY_ORCHESTRATOR_DNS_RESOLVER_ADDRESS = "127.0.0.1:8600" // consul dns resolver
-        SERVICE_DISCOVERY_ORCHESTRATOR_DNS_QUERY            = "orchestrator.service.consul,template-manager.service.consul"
-
-        SERVICE_DISCOVERY_EDGE_PROVIDER             = "DNS"
-        SERVICE_DISCOVERY_EDGE_DNS_RESOLVER_ADDRESS = "127.0.0.1:8600" // consul dns resolver
-        SERVICE_DISCOVERY_EDGE_DNS_QUERY            = "edge-api.service.consul"
-
-        ENVIRONMENT = "dev"
-
-        // use legacy dns resolution for orchestrator services
-        USE_PROXY_CATALOG_RESOLUTION = "true"
-
-        OTEL_COLLECTOR_GRPC_ENDPOINT  = "localhost:4317"
-        LOGS_COLLECTOR_ADDRESS        = "analytics_collector_host"
-        REDIS_URL                     = "${REDIS_ENDPOINT}:6379"
-        LOKI_URL                      = "http://loki.service.consul:3100"
+        OTEL_COLLECTOR_GRPC_ENDPOINT = "localhost:4317"
+        LOGS_COLLECTOR_ADDRESS       = "http://localhost:30006"
       }
 
       config {

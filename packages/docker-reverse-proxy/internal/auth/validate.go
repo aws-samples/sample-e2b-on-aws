@@ -7,44 +7,43 @@ import (
 	"log"
 	"strings"
 
-	"github.com/e2b-dev/infra/packages/shared/pkg/models"
-	"github.com/e2b-dev/infra/packages/shared/pkg/models/accesstoken"
-	"github.com/e2b-dev/infra/packages/shared/pkg/models/env"
-	"github.com/e2b-dev/infra/packages/shared/pkg/models/envbuild"
-	"github.com/e2b-dev/infra/packages/shared/pkg/models/user"
+	"github.com/e2b-dev/infra/packages/db/client"
+	authdb "github.com/e2b-dev/infra/packages/db/pkg/auth"
+	"github.com/e2b-dev/infra/packages/db/queries"
+	"github.com/e2b-dev/infra/packages/shared/pkg/keys"
 )
 
-func Validate(ctx context.Context, db *models.Client, token, envID string) (bool, error) {
-	u, err := db.User.Query().Where(user.HasAccessTokensWith(accesstoken.AccessToken(token))).WithTeams().Only(ctx)
+func Validate(ctx context.Context, sqlcDB *client.Client, token, envID string) (bool, error) {
+	hashedToken, err := keys.VerifyKey(keys.AccessTokenPrefix, token)
 	if err != nil {
 		return false, err
 	}
 
-	e, err := db.Env.Query().Where(
-		env.ID(envID),
-		env.HasBuildsWith(envbuild.StatusEQ(envbuild.StatusWaiting)),
-	).Only(ctx)
+	exists, err := sqlcDB.ExistsWaitingTemplateBuild(ctx, queries.ExistsWaitingTemplateBuildParams{
+		TemplateID:      envID,
+		AccessTokenHash: hashedToken,
+	})
 	if err != nil {
 		return false, err
 	}
 
-	for _, team := range u.Edges.Teams {
-		if team.ID == e.TeamID {
-			return true, nil
-		}
-	}
-
-	return false, nil
+	return exists, nil
 }
 
-func ValidateAccessToken(ctx context.Context, db *models.Client, accessToken string) bool {
-	exists, err := db.AccessToken.Query().Where(accesstoken.AccessToken(accessToken)).Exist(ctx)
+func ValidateAccessToken(ctx context.Context, db *authdb.Client, accessToken string) bool {
+	hashedToken, err := keys.VerifyKey(keys.AccessTokenPrefix, accessToken)
 	if err != nil {
-		log.Printf("Error while checking access token: %s\n", err.Error())
 		return false
 	}
 
-	return exists
+	_, err = db.Read.GetUserIDFromAccessToken(ctx, hashedToken)
+	if err != nil {
+		log.Printf("Error while checking access token: %s\n", err.Error())
+
+		return false
+	}
+
+	return true
 }
 
 func ExtractAccessToken(authHeader, authType string) (string, error) {
@@ -52,7 +51,7 @@ func ExtractAccessToken(authHeader, authType string) (string, error) {
 
 	loginInfo, err := base64.StdEncoding.DecodeString(encodedLoginInfo)
 	if err != nil {
-		return "", fmt.Errorf("error while decoding login info for %s: %s", encodedLoginInfo, err)
+		return "", fmt.Errorf("error while decoding login info for %s: %w", encodedLoginInfo, err)
 	}
 
 	loginInfoParts := strings.Split(string(loginInfo), ":")

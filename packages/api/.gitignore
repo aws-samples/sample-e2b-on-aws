@@ -1,5 +1,8 @@
 bin
 mkfcenv.tar.gz
 .env
-.shared
-.db
+/.clickhouse
+/.db
+/.shared
+/private.pem
+/public.pem

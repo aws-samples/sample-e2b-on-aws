@@ -1,37 +1,43 @@
+ENV := $(shell cat ../../.last_used_env || echo "not-set")
+-include ../../.env.${ENV}
+
 BUILD := $(shell git rev-parse --short HEAD)
 LDFLAGS=-ldflags "-X=main.commitSHA=$(BUILD)"
+
+AWS_BUCKET_PREFIX ?= $(PREFIX)$(AWS_ACCOUNT_ID)-
+GCP_BUCKET_PREFIX ?= $(GCP_PROJECT_ID)-
+
+# Architecture for builds. Defaults to amd64; override for ARM64 builds.
+# (e.g., BUILD_ARCH=arm64 make build-local)
+BUILD_ARCH ?= amd64
+# Docker platform string. Override for cross-platform builds:
+#   BUILD_PLATFORM=linux/arm64 make start-docker
+BUILD_PLATFORM ?= linux/$(BUILD_ARCH)
 
 .PHONY: init
 init:
 	brew install protobuf
 
 upload:
-	./upload.sh $(GCP_PROJECT_ID)
+	chmod +x bin/envd
+ifeq ($(PROVIDER),aws)
+	aws s3 cp ./bin/envd "s3://${AWS_BUCKET_PREFIX}fc-env-pipeline/envd" --profile ${AWS_PROFILE} --cache-control "no-cache, max-age=0"
+else
+	gsutil -h "Cache-Control:no-cache, max-age=0" cp bin/envd "gs://${GCP_BUCKET_PREFIX}fc-env-pipeline/envd"
+endif
 
 build:
-	$(eval ARCHITECTURE := $(shell grep "^CFNARCHITECTURE=" /opt/config.properties | cut -d= -f2 || echo "amd64"))
-	@if [ "$(ARCHITECTURE)" = "arm64" ]; then \
-		echo "Building for arm64 architecture"; \
-		CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -a -o bin/envd ${LDFLAGS}; \
-	else \
-		echo "Building for x86_64 architecture"; \
-	    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -a -o bin/envd ${LDFLAGS}; \
-	fi
+	CGO_ENABLED=0 GOOS=linux GOARCH=$(BUILD_ARCH) go build -a -o bin/envd ${LDFLAGS}
 
 build-debug:
-	$(eval ARCHITECTURE := $(shell grep "^CFNARCHITECTURE=" /opt/config.properties | cut -d= -f2 || echo "amd64"))
-	@if [ "$(ARCHITECTURE)" = "arm64" ]; then \
-		echo "Building for arm64 architecture"; \
-		CGO_ENABLED=1 GOARCH=arm64 go build -race -gcflags=all="-N -l" -o bin/debug/envd ${LDFLAGS}; \
-	else \
-		echo "Building for x86_64 architecture"; \
-		CGO_ENABLED=1 GOARCH=amd64 go build -race -gcflags=all="-N -l" -o bin/debug/envd ${LDFLAGS}; \
-	fi
+	CGO_ENABLED=1 go build -race -gcflags=all="-N -l" -o bin/debug/envd ${LDFLAGS}
 
 start-docker:
-	DOCKER_BUILDKIT=1 docker build -t envd-debug . -f debug.Dockerfile
+	make build
+	DOCKER_BUILDKIT=1 docker build --platform $(BUILD_PLATFORM) -t envd-debug . -f debug.Dockerfile
 	docker run \
 	--name envd \
+	--platform $(BUILD_PLATFORM) \
 	-p 49983:49983 \
 	-p 2345:2345 \
 	-p 9999:9999 \
@@ -39,20 +45,20 @@ start-docker:
 	-p 8001:8001 \
 	--rm \
 	-i envd-debug \
-	/usr/bin/envd -debug
+	/usr/bin/envd -isnotfc
 
 build-and-upload:
 	make build
-	$(eval BUCKET_E2B := $(shell grep BUCKET_E2B /opt/config.properties | cut -d'=' -f2))
-	@echo "Using bucket: $(BUCKET_E2B)"
-	aws s3 cp bin/envd s3://$(BUCKET_E2B)/fc-env-pipeline/envd
+	make upload
 
 .PHONY: generate
 generate:
 	go generate ./...
-	cd spec && go tool buf generate --template buf.gen.yaml
-	cd spec && go tool buf generate --template buf.gen.shared.yaml
 
 .PHONY: test
 test:
-	go test -v ./...
+	go test -race -v ./...
+
+.PHONY: lint
+lint:
+	golangci-lint run --fix ./...

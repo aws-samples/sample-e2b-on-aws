@@ -1,94 +1,123 @@
 package handlers
 
 import (
+	"context"
 	"fmt"
 	"net/http"
-	"slices"
-	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/grafana/loki/pkg/loghttp"
-	"github.com/grafana/loki/pkg/logproto"
 	"go.opentelemetry.io/otel/attribute"
 
 	"github.com/e2b-dev/infra/packages/api/internal/api"
-	"github.com/e2b-dev/infra/packages/api/internal/auth"
-	authcache "github.com/e2b-dev/infra/packages/api/internal/cache/auth"
+	"github.com/e2b-dev/infra/packages/api/internal/clusters"
 	"github.com/e2b-dev/infra/packages/api/internal/utils"
+	"github.com/e2b-dev/infra/packages/auth/pkg/auth"
+	"github.com/e2b-dev/infra/packages/auth/pkg/types"
+	clustersshared "github.com/e2b-dev/infra/packages/shared/pkg/clusters"
+	"github.com/e2b-dev/infra/packages/shared/pkg/logs"
 	"github.com/e2b-dev/infra/packages/shared/pkg/telemetry"
+	sharedutils "github.com/e2b-dev/infra/packages/shared/pkg/utils"
 )
 
-const (
-	oldestLogsLimit = 168 * time.Hour // 7 days
-)
-
-func (a *APIStore) GetSandboxesSandboxIDLogs(
-	c *gin.Context,
-	sandboxID string,
-	params api.GetSandboxesSandboxIDLogsParams,
-) {
+func (a *APIStore) GetSandboxesSandboxIDLogs(c *gin.Context, sandboxID string, params api.GetSandboxesSandboxIDLogsParams) {
 	ctx := c.Request.Context()
-	sandboxID = utils.ShortID(sandboxID)
 
-	teamID := c.Value(auth.TeamContextKey).(authcache.AuthTeamInfo).Team.ID
+	var err error
+	sandboxID, err = utils.ShortID(sandboxID)
+	if err != nil {
+		a.sendAPIStoreError(c, http.StatusBadRequest, "Invalid sandbox ID")
+
+		return
+	}
+
+	team := auth.MustGetTeamInfo(c)
 
 	telemetry.SetAttributes(ctx,
 		attribute.String("instance.id", sandboxID),
-		telemetry.WithTeamID(teamID.String()),
+		telemetry.WithTeamID(team.ID.String()),
 	)
 
-	var start time.Time
+	logs, apiErr := a.getSandboxLogs(ctx, team, sandboxID, params.Start, nil, params.Limit, nil, nil, nil)
+	if apiErr != nil {
+		a.sendAPIStoreError(c, apiErr.Code, apiErr.ClientMsg)
+		telemetry.ReportErrorByCode(ctx, apiErr.Code, "error when returning logs for sandbox", apiErr.Err)
 
-	end := time.Now()
-
-	if params.Start != nil {
-		start = time.UnixMilli(int64(*params.Start))
-	} else {
-		start = end.Add(-oldestLogsLimit)
+		return
 	}
 
-	// Sanitize ID
-	// https://grafana.com/blog/2021/01/05/how-to-escape-special-characters-with-lokis-logql/
-	id := strings.ReplaceAll(sandboxID, "`", "")
-	query := fmt.Sprintf("{teamID=`%s`, sandboxID=`%s`, category!=\"metrics\"}", teamID.String(), id)
+	c.JSON(http.StatusOK, logs)
+}
 
-	res, err := a.lokiClient.QueryRange(query, int(*params.Limit), start, end, logproto.FORWARD, time.Duration(0), time.Duration(0), true)
+func (a *APIStore) GetV2SandboxesSandboxIDLogs(c *gin.Context, sandboxID api.SandboxID, params api.GetV2SandboxesSandboxIDLogsParams) {
+	ctx := c.Request.Context()
+
+	var err error
+	sandboxID, err = utils.ShortID(sandboxID)
 	if err != nil {
-		telemetry.ReportCriticalError(ctx, "error when returning logs for sandbox", err)
-		a.sendAPIStoreError(c, http.StatusNotFound, fmt.Sprintf("Error returning logs for sandbox '%s'", sandboxID))
+		a.sendAPIStoreError(c, http.StatusBadRequest, "Invalid sandbox ID")
 
 		return
 	}
 
-	switch res.Data.Result.Type() {
-	case loghttp.ResultTypeStream:
-		value := res.Data.Result.(loghttp.Streams)
+	team := auth.MustGetTeamInfo(c)
 
-		logs := make([]api.SandboxLog, 0)
+	telemetry.SetAttributes(ctx,
+		attribute.String("instance.id", sandboxID),
+		telemetry.WithTeamID(team.ID.String()),
+	)
 
-		for _, stream := range value {
-			for _, entry := range stream.Entries {
-				logs = append(logs, api.SandboxLog{
-					Timestamp: entry.Timestamp,
-					Line:      entry.Line,
-				})
-			}
+	direction := api.LogsDirectionBackward
+	if params.Direction != nil {
+		direction = *params.Direction
+	}
+
+	var cursor *time.Time
+	if params.Cursor != nil {
+		cursor = sharedutils.ToPtr(time.UnixMilli(*params.Cursor))
+	}
+
+	start, end := clusters.LogQueryWindow(cursor, direction)
+
+	startMs := start.UnixMilli()
+	endMs := end.UnixMilli()
+
+	logs, apiErr := a.getSandboxLogs(ctx, team, sandboxID, &startMs, &endMs, params.Limit, &direction, apiToLogLevel(params.Level), params.Search)
+	if apiErr != nil {
+		a.sendAPIStoreError(c, apiErr.Code, apiErr.ClientMsg)
+		telemetry.ReportErrorByCode(ctx, apiErr.Code, "error when returning logs for sandbox", apiErr.Err)
+
+		return
+	}
+
+	c.JSON(http.StatusOK, api.SandboxLogsV2Response{Logs: logs.LogEntries})
+}
+
+func (a *APIStore) getSandboxLogs(
+	ctx context.Context,
+	team *types.Team,
+	sandboxID string,
+	start *int64,
+	end *int64,
+	limit *int32,
+	direction *api.LogsDirection,
+	level *logs.LogLevel,
+	search *string,
+) (api.SandboxLogs, *api.APIError) {
+	clusterID := clustersshared.WithClusterFallback(team.ClusterID)
+	cluster, ok := a.clusters.GetClusterById(clusterID)
+	if !ok {
+		return api.SandboxLogs{}, &api.APIError{
+			Err:       fmt.Errorf("cluster with ID '%s' not found", clusterID),
+			ClientMsg: "Failed to get cluster",
+			Code:      http.StatusInternalServerError,
 		}
-
-		// Sort logs by timestamp (they are returned by the time they arrived in Loki)
-		slices.SortFunc(logs, func(a, b api.SandboxLog) int {
-			return a.Timestamp.Compare(b.Timestamp)
-		})
-
-		c.JSON(http.StatusOK, &api.SandboxLogs{
-			Logs: logs,
-		})
-
-	default:
-		telemetry.ReportCriticalError(ctx, "unexpected value type", fmt.Errorf("unexpected value type %T", res.Data.Result.Type()))
-		a.sendAPIStoreError(c, http.StatusInternalServerError, fmt.Sprintf("Error returning logs for sandbox '%s", sandboxID))
-
-		return
 	}
+
+	logs, apiErr := cluster.GetResources().GetSandboxLogs(ctx, team.ID.String(), sandboxID, start, end, limit, direction, level, search)
+	if apiErr != nil {
+		return api.SandboxLogs{}, apiErr
+	}
+
+	return logs, nil
 }

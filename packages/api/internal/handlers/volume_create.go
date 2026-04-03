@@ -1,0 +1,191 @@
+package handlers
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net/http"
+	"regexp"
+
+	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
+
+	"github.com/e2b-dev/infra/packages/api/internal/api"
+	"github.com/e2b-dev/infra/packages/api/internal/clusters"
+	"github.com/e2b-dev/infra/packages/db/pkg/dberrors"
+	"github.com/e2b-dev/infra/packages/db/queries"
+	clustershared "github.com/e2b-dev/infra/packages/shared/pkg/clusters"
+	"github.com/e2b-dev/infra/packages/shared/pkg/featureflags"
+	"github.com/e2b-dev/infra/packages/shared/pkg/ginutils"
+	"github.com/e2b-dev/infra/packages/shared/pkg/grpc/orchestrator"
+	"github.com/e2b-dev/infra/packages/shared/pkg/telemetry"
+)
+
+func (a *APIStore) PostVolumes(c *gin.Context) {
+	ctx := c.Request.Context()
+
+	// get team
+	team, apiErr := a.GetTeam(ctx, c, nil)
+	if apiErr != nil {
+		a.sendAPIStoreError(c, apiErr.Code, apiErr.ClientMsg)
+		telemetry.ReportCriticalError(ctx, "error when getting team", apiErr.Err)
+
+		return
+	}
+
+	telemetry.SetAttributes(ctx,
+		telemetry.WithTeamID(team.ID.String()),
+	)
+
+	if !a.featureFlags.BoolFlag(ctx, featureflags.PersistentVolumesFlag) {
+		a.sendAPIStoreError(c, http.StatusForbidden, "use of volumes is not enabled")
+
+		return
+	}
+
+	// parse body
+	body, err := ginutils.ParseBody[api.PostVolumesJSONRequestBody](ctx, c)
+	if err != nil {
+		a.sendAPIStoreError(c, http.StatusBadRequest, fmt.Sprintf("Error when parsing request: %s", err))
+
+		telemetry.ReportCriticalError(ctx, "error when parsing request", err)
+
+		return
+	}
+
+	telemetry.ReportEvent(ctx, "Parsed body")
+
+	// validate body
+	if !isValidVolumeName(body.Name) {
+		a.sendAPIStoreError(c, http.StatusBadRequest, "Invalid volume name")
+		telemetry.ReportError(ctx, "invalid volume name", nil)
+
+		return
+	}
+
+	ctx = featureflags.AddToContext(ctx, featureflags.VolumeContext(body.Name))
+
+	volumeType := a.getVolumeType(ctx)
+	if volumeType == "" {
+		a.sendAPIStoreError(c, http.StatusInternalServerError, "No persistent volume type is configured")
+		telemetry.ReportCriticalError(ctx, "default persistent volume type is not configured", nil)
+
+		return
+	}
+
+	clusterID := clustershared.WithClusterFallback(team.ClusterID)
+
+	client, tx, err := a.sqlcDB.WithTx(ctx)
+	if err != nil {
+		a.sendAPIStoreError(c, http.StatusInternalServerError, "Failed to create transaction")
+		telemetry.ReportCriticalError(ctx, "Failed to create transaction", err)
+
+		return
+	}
+	defer func(ctx context.Context) {
+		_ = tx.Rollback(ctx)
+	}(context.WithoutCancel(ctx))
+
+	volume, err := client.CreateVolume(ctx, queries.CreateVolumeParams{
+		TeamID:     team.ID,
+		Name:       body.Name,
+		VolumeType: volumeType,
+	})
+
+	switch {
+	case dberrors.IsUniqueConstraintViolation(err):
+		a.sendAPIStoreError(c, http.StatusBadRequest, fmt.Sprintf("Volume with name '%s' already exists", body.Name))
+		telemetry.ReportError(ctx, "volume already exists", err)
+
+		return
+	case err != nil:
+		a.sendAPIStoreError(c, http.StatusInternalServerError, "Error when creating volume")
+		telemetry.ReportCriticalError(ctx, "error when creating volume", err)
+
+		return
+	default:
+	}
+
+	if err := a.createVolume(ctx, clusterID, volume); err != nil {
+		if errors.Is(err, ErrClusterNotFound) {
+			a.sendAPIStoreError(c, http.StatusServiceUnavailable, "Cluster not found")
+			telemetry.ReportError(ctx, "cluster not found", err)
+
+			return
+		}
+
+		if errors.Is(err, ErrUnknownVolumeType) {
+			a.sendAPIStoreError(c, http.StatusInternalServerError, "Unknown volume type")
+			telemetry.ReportError(ctx, "Unknown volume type", err)
+
+			return
+		}
+
+		a.sendAPIStoreError(c, http.StatusInternalServerError, "Error when creating directory")
+		telemetry.ReportCriticalError(ctx, "error when creating directory", err)
+
+		return
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		go func(ctx context.Context) {
+			if err := a.deleteVolume(ctx, clusterID, volume); err != nil {
+				telemetry.ReportCriticalError(ctx, "failed to clean up volume after failing to commit transaction", err)
+			}
+		}(context.WithoutCancel(ctx))
+
+		a.sendAPIStoreError(c, http.StatusInternalServerError, "Failed to commit transaction")
+		telemetry.ReportCriticalError(ctx, "failed to commit transaction", err)
+
+		return
+	}
+
+	a.posthog.IdentifyAnalyticsTeam(ctx, team.ID.String(), team.Name)
+	properties := a.posthog.GetPackageToPosthogProperties(&c.Request.Header)
+	a.posthog.CreateAnalyticsTeamEvent(ctx, team.ID.String(), "created_volume", properties.
+		Set("volume_id", volume.ID.String()).
+		Set("volume_name", volume.Name).
+		Set("volume_type", volumeType),
+	)
+
+	token, err := generateVolumeContentToken(a.config.VolumesToken, volume, team)
+	if err != nil {
+		a.sendAPIStoreError(c, http.StatusInternalServerError, "Volume created, but failed to generate volume content token")
+		telemetry.ReportCriticalError(ctx, "Failed to generate volume content token", err)
+
+		return
+	}
+
+	result := api.VolumeAndToken{
+		VolumeID: volume.ID.String(),
+		Name:     volume.Name,
+		Token:    token,
+	}
+
+	c.JSON(http.StatusCreated, result)
+}
+
+func (a *APIStore) getVolumeType(ctx context.Context) string {
+	volumeType := a.featureFlags.StringFlag(ctx, featureflags.DefaultPersistentVolumeType)
+	if volumeType == "" {
+		volumeType = a.config.DefaultPersistentVolumeType
+	}
+
+	return volumeType
+}
+
+var validVolumeNameRegex = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+
+func isValidVolumeName(name string) bool {
+	return validVolumeNameRegex.MatchString(name)
+}
+
+func (a *APIStore) createVolume(ctx context.Context, clusterID uuid.UUID, volume queries.Volume) error {
+	return a.executeOnOrchestratorByClusterID(ctx, clusterID, func(ctx context.Context, client *clusters.GRPCClient) error {
+		_, err := client.Volumes.CreateVolume(ctx, &orchestrator.CreateVolumeRequest{
+			Volume: toVolumeKey(volume),
+		})
+
+		return err
+	})
+}

@@ -12,51 +12,47 @@ import (
 	rpc "github.com/e2b-dev/infra/packages/envd/internal/services/spec/filesystem"
 )
 
-func (Service) Move(ctx context.Context, req *connect.Request[rpc.MoveRequest]) (*connect.Response[rpc.MoveResponse], error) {
-	u, err := permissions.GetAuthUser(ctx)
+func (s Service) Move(ctx context.Context, req *connect.Request[rpc.MoveRequest]) (*connect.Response[rpc.MoveResponse], error) {
+	u, err := permissions.GetAuthUser(ctx, s.defaults.User)
 	if err != nil {
 		return nil, err
 	}
 
-	source, err := permissions.ExpandAndResolve(req.Msg.GetSource(), u)
+	source, err := permissions.ExpandAndResolve(req.Msg.GetSource(), u, s.defaults.Workdir)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
 
-	destination, err := permissions.ExpandAndResolve(req.Msg.GetDestination(), u)
+	destination, err := permissions.ExpandAndResolve(req.Msg.GetDestination(), u, s.defaults.Workdir)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
 
-	entry, err := os.Stat(source)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("source path not found: %w", err))
-		}
-
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("error statting source: %w", err))
-	}
-
-	uid, gid, userErr := permissions.GetUserIds(u)
+	uid, gid, userErr := permissions.GetUserIdInts(u)
 	if userErr != nil {
 		return nil, connect.NewError(connect.CodeInternal, userErr)
 	}
 
-	userErr = permissions.EnsureDirs(filepath.Dir(destination), int(uid), int(gid))
+	userErr = permissions.EnsureDirs(filepath.Dir(destination), uid, gid)
 	if userErr != nil {
 		return nil, connect.NewError(connect.CodeInternal, userErr)
 	}
 
 	err = os.Rename(source, destination)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("source file not found: %w", err))
+		}
+
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("error renaming: %w", err))
 	}
 
+	entry, err := entryInfo(destination)
+	if err != nil {
+		return nil, err
+	}
+
 	return connect.NewResponse(&rpc.MoveResponse{
-		Entry: &rpc.EntryInfo{
-			Name: filepath.Base(destination),
-			Type: getEntryType(entry),
-			Path: destination,
-		},
+		Entry: entry,
 	}), nil
 }

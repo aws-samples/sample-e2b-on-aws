@@ -6,11 +6,13 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/pkg/errors"
-	"go.uber.org/zap"
 
+	"github.com/e2b-dev/infra/packages/db/pkg/types"
 	templatemanagergrpc "github.com/e2b-dev/infra/packages/shared/pkg/grpc/template-manager"
-	"github.com/e2b-dev/infra/packages/shared/pkg/models/envbuild"
+	"github.com/e2b-dev/infra/packages/shared/pkg/logger"
 )
+
+var _ templateManagerClient = (*fakeTemplateManagerClient)(nil)
 
 type fakeTemplateManagerClient struct {
 	setStatusError   error
@@ -20,22 +22,23 @@ type fakeTemplateManagerClient struct {
 	getStatusErr      error
 }
 
-func (f fakeTemplateManagerClient) SetStatus(ctx context.Context, templateID string, buildID uuid.UUID, status envbuild.Status, reason string) error {
+func (f fakeTemplateManagerClient) SetStatus(context.Context, uuid.UUID, types.BuildStatusGroup, *templatemanagergrpc.TemplateBuildStatusReason) error {
 	return f.setStatusError
 }
 
-func (f fakeTemplateManagerClient) SetFinished(ctx context.Context, templateID string, buildID uuid.UUID, rootfsSize int64, envdVersion string) error {
+func (f fakeTemplateManagerClient) SetFinished(context.Context, uuid.UUID, int64, string) error {
 	return f.setFinishedError
 }
 
-func (f fakeTemplateManagerClient) GetStatus(ctx context.Context, buildID uuid.UUID, templateID string, clusterID *uuid.UUID, clusterNodeID *string) (*templatemanagergrpc.TemplateBuildStatusResponse, error) {
+func (f fakeTemplateManagerClient) GetStatus(context.Context, uuid.UUID, string, uuid.UUID, string) (*templatemanagergrpc.TemplateBuildStatusResponse, error) {
 	return f.getStatusResponse, f.getStatusErr
 }
 
 func TestPollBuildStatus_setStatus(t *testing.T) {
+	t.Parallel()
 	type fields struct {
 		buildID               uuid.UUID
-		templateManagerClient *fakeTemplateManagerClient
+		templateManagerClient templateManagerClient
 	}
 
 	tests := []struct {
@@ -96,11 +99,12 @@ func TestPollBuildStatus_setStatus(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			c := &PollBuildStatus{
 				client: tt.fields.templateManagerClient,
-				logger: zap.NewNop(),
+				logger: logger.NewNopLogger(),
 			}
-			err := c.setStatus(context.TODO())
+			err := c.setStatus(t.Context())
 			if tt.wantErr {
 				if err == nil {
 					t.Errorf("PollBuildStatus.getSetStatusFn() = %v", err)
@@ -119,8 +123,9 @@ func TestPollBuildStatus_setStatus(t *testing.T) {
 }
 
 func TestPollBuildStatus_dispatchBasedOnStatus(t *testing.T) {
+	t.Parallel()
 	type fields struct {
-		templateManagerClient *fakeTemplateManagerClient
+		templateManagerClient templateManagerClient
 	}
 	type args struct {
 		status *templatemanagergrpc.TemplateBuildStatusResponse
@@ -267,12 +272,13 @@ func TestPollBuildStatus_dispatchBasedOnStatus(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			c := &PollBuildStatus{
 				client: tt.fields.templateManagerClient,
-				logger: zap.NewNop(),
+				logger: logger.NewNopLogger(),
 			}
 
-			err, completed := c.dispatchBasedOnStatus(context.TODO(), tt.args.status)
+			completed, err := c.dispatchBasedOnStatus(t.Context(), tt.args.status)
 			if tt.wantErr {
 				if err == nil {
 					t.Errorf("Expected error, got no error")

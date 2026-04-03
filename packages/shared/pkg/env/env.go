@@ -3,6 +3,8 @@ package env
 import (
 	"os"
 	"strconv"
+
+	"github.com/e2b-dev/infra/packages/shared/pkg/utils"
 )
 
 var environment = GetEnv("ENVIRONMENT", "prod")
@@ -24,6 +26,7 @@ func GetEnv(key, defaultValue string) string {
 	if len(value) == 0 {
 		return defaultValue
 	}
+
 	return value
 }
 
@@ -38,4 +41,12 @@ func GetEnvAsInt(key string, defaultValue int) (int, error) {
 	}
 
 	return defaultValue, nil
+}
+
+func GetNodeID() string {
+	return utils.RequiredEnv("NODE_ID", "Node ID of the instance node is required")
+}
+
+func LogsCollectorAddress() string {
+	return os.Getenv("LOGS_COLLECTOR_ADDRESS")
 }

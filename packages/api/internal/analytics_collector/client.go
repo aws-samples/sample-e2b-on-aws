@@ -5,29 +5,26 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
-	"os"
-	"strings"
 
-	"go.uber.org/zap"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/protobuf/types/known/emptypb"
-)
 
-var host = strings.TrimSpace(os.Getenv("ANALYTICS_COLLECTOR_HOST"))
+	e2bgrpc "github.com/e2b-dev/infra/packages/shared/pkg/grpc"
+)
 
 type Analytics struct {
 	client     AnalyticsCollectorClient
 	connection *grpc.ClientConn
 }
 
-func NewAnalytics() (*Analytics, error) {
+func NewAnalytics(host, grpcAPIKey string) (*Analytics, error) {
 	var client AnalyticsCollectorClient
 	var connection *grpc.ClientConn
 
-	if host == "" {
-		zap.L().Info("Running dummy implementation of analytics collector client, no host provided")
-	} else {
+	// Run dummy client if host is not provided
+	if host != "" {
 		systemRoots, err := x509.SystemCertPool()
 		if err != nil {
 			errMsg := fmt.Errorf("failed to read system root certificate pool: %w", err)
@@ -42,7 +39,8 @@ func NewAnalytics() (*Analytics, error) {
 
 		conn, err := grpc.NewClient(
 			fmt.Sprintf("%s:443", host),
-			grpc.WithPerRPCCredentials(&gRPCApiKey{}),
+			grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
+			grpc.WithPerRPCCredentials(newGRPCAPIKey(grpcAPIKey)),
 			grpc.WithAuthority(host),
 			grpc.WithTransportCredentials(cred),
 		)
@@ -68,6 +66,10 @@ func (a *Analytics) Close() error {
 	}
 
 	return nil
+}
+
+func (a *Analytics) Init(ctx context.Context) {
+	e2bgrpc.ObserveConnection(ctx, a.connection, "analytics-collector")
 }
 
 func (a *Analytics) InstanceStarted(ctx context.Context, in *InstanceStartedEvent, opts ...grpc.CallOption) (*emptypb.Empty, error) {

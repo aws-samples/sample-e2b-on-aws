@@ -1,6 +1,7 @@
 package analyticscollector
 
 import (
+	"context"
 	"log"
 	"net/http"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/e2b-dev/infra/packages/api/internal/utils"
+	"github.com/e2b-dev/infra/packages/shared/pkg/logger"
 )
 
 const (
@@ -26,12 +28,11 @@ type PosthogClient struct {
 	client posthog.Client
 }
 
-func NewPosthogClient() (*PosthogClient, error) {
-	posthogAPIKey := os.Getenv("POSTHOG_API_KEY")
+func NewPosthogClient(ctx context.Context, posthogAPIKey string) (*PosthogClient, error) {
 	posthogLogger := posthog.StdLogger(log.New(os.Stderr, "posthog ", log.LstdFlags))
 
 	if strings.TrimSpace(posthogAPIKey) == "" {
-		zap.L().Info("No Posthog API key provided, silencing logs")
+		logger.L().Info(ctx, "No Posthog API key provided, silencing logs")
 
 		writer := &utils.NoOpWriter{}
 		posthogLogger = posthog.StdLogger(log.New(writer, "posthog ", log.LstdFlags))
@@ -44,7 +45,7 @@ func NewPosthogClient() (*PosthogClient, error) {
 		Logger:    posthogLogger,
 	})
 	if err != nil {
-		zap.L().Fatal("error initializing Posthog client", zap.Error(err))
+		logger.L().Fatal(ctx, "error initializing Posthog client", zap.Error(err))
 	}
 
 	return &PosthogClient{
@@ -56,7 +57,7 @@ func (p *PosthogClient) Close() error {
 	return p.client.Close()
 }
 
-func (p *PosthogClient) IdentifyAnalyticsTeam(teamID string, teamName string) {
+func (p *PosthogClient) IdentifyAnalyticsTeam(ctx context.Context, teamID string, teamName string) {
 	err := p.client.Enqueue(posthog.GroupIdentify{
 		Type: teamGroup,
 		Key:  teamID,
@@ -66,11 +67,11 @@ func (p *PosthogClient) IdentifyAnalyticsTeam(teamID string, teamName string) {
 	},
 	)
 	if err != nil {
-		zap.L().Error("error when setting group property in Posthog", zap.Error(err))
+		logger.L().Error(ctx, "error when setting group property in Posthog", zap.Error(err))
 	}
 }
 
-func (p *PosthogClient) CreateAnalyticsTeamEvent(teamID, event string, properties posthog.Properties) {
+func (p *PosthogClient) CreateAnalyticsTeamEvent(ctx context.Context, teamID, event string, properties posthog.Properties) {
 	err := p.client.Enqueue(posthog.Capture{
 		DistinctId: placeholderTeamGroupUser,
 		Event:      event,
@@ -79,11 +80,11 @@ func (p *PosthogClient) CreateAnalyticsTeamEvent(teamID, event string, propertie
 			Set("team", teamID),
 	})
 	if err != nil {
-		zap.L().Error("error when sending event to Posthog", zap.Error(err))
+		logger.L().Error(ctx, "error when sending event to Posthog", zap.Error(err))
 	}
 }
 
-func (p *PosthogClient) CreateAnalyticsUserEvent(userID string, teamID string, event string, properties posthog.Properties) {
+func (p *PosthogClient) CreateAnalyticsUserEvent(ctx context.Context, userID string, teamID string, event string, properties posthog.Properties) {
 	err := p.client.Enqueue(posthog.Capture{
 		DistinctId: userID,
 		Event:      event,
@@ -92,7 +93,7 @@ func (p *PosthogClient) CreateAnalyticsUserEvent(userID string, teamID string, e
 			Set("team", teamID),
 	})
 	if err != nil {
-		zap.L().Error("error when sending event to Posthog", zap.Error(err))
+		logger.L().Error(ctx, "error when sending event to Posthog", zap.Error(err))
 	}
 }
 

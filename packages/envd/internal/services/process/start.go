@@ -11,7 +11,6 @@ import (
 
 	"connectrpc.com/connect"
 
-	"github.com/e2b-dev/infra/packages/envd/internal/host"
 	"github.com/e2b-dev/infra/packages/envd/internal/logs"
 	"github.com/e2b-dev/infra/packages/envd/internal/permissions"
 	"github.com/e2b-dev/infra/packages/envd/internal/services/process/handler"
@@ -32,12 +31,12 @@ func (s *Service) InitializeStartProcess(ctx context.Context, user *user.User, r
 	handlerL := s.logger.With().Str(string(logs.OperationIDKey), ctx.Value(logs.OperationIDKey).(string)).Logger()
 
 	startProcCtx, startProcCancel := context.WithCancel(ctx)
-	proc, err := handler.New(startProcCtx, user, req, &handlerL, nil, startProcCancel)
+	proc, err := handler.New(startProcCtx, user, req, &handlerL, s.defaults, s.cgroupManager, startProcCancel)
 	if err != nil {
 		return err
 	}
 
-	pid, err := proc.Start()
+	pid, err := proc.Start(0)
 	if err != nil {
 		return err
 	}
@@ -61,18 +60,14 @@ func (s *Service) handleStart(ctx context.Context, req *connect.Request[rpc.Star
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
 
-	s.logger.Trace().Str(string(logs.OperationIDKey), ctx.Value(logs.OperationIDKey).(string)).Msg("Process start: Waiting for clock to sync")
-	host.WaitForSync()
-	s.logger.Trace().Str(string(logs.OperationIDKey), ctx.Value(logs.OperationIDKey).(string)).Msg("Process start: Clock synced")
-
 	handlerL := s.logger.With().Str(string(logs.OperationIDKey), ctx.Value(logs.OperationIDKey).(string)).Logger()
 
-	u, err := permissions.GetAuthUser(ctx)
+	u, err := permissions.GetAuthUser(ctx, s.defaults.User)
 	if err != nil {
 		return err
 	}
 
-	timeout, err := determineTimeoutFromHeader(stream.Conn().RequestHeader())
+	requestTimeout, err := determineTimeoutFromHeader(stream.Conn().RequestHeader())
 	if err != nil {
 		return connect.NewError(connect.CodeInvalidArgument, err)
 	}
@@ -80,11 +75,19 @@ func (s *Service) handleStart(ctx context.Context, req *connect.Request[rpc.Star
 	// Create a new context with a timeout if provided.
 	// We do not want the command to be killed if the request context is cancelled
 	procCtx, cancelProc := context.Background(), func() {}
-	if timeout > 0 { // zero timeout means no timeout
-		procCtx, cancelProc = context.WithTimeout(procCtx, timeout)
+	if requestTimeout > 0 { // zero timeout means no timeout
+		procCtx, cancelProc = context.WithTimeout(procCtx, requestTimeout)
 	}
 
-	proc, err := handler.New(procCtx, u, req.Msg, &handlerL, s.envs, cancelProc)
+	proc, err := handler.New( //nolint:contextcheck // TODO: fix this later
+		procCtx,
+		u,
+		req.Msg,
+		&handlerL,
+		s.defaults,
+		s.cgroupManager,
+		cancelProc,
+	)
 	if err != nil {
 		// Ensure the process cancel is called to cleanup resources.
 		cancelProc()
@@ -149,10 +152,12 @@ func (s *Service) handleStart(ctx context.Context, req *connect.Request[rpc.Star
 				})
 				if streamErr != nil {
 					cancel(connect.NewError(connect.CodeUnknown, fmt.Errorf("error sending keepalive: %w", streamErr)))
+
 					return
 				}
 			case <-ctx.Done():
 				cancel(ctx.Err())
+
 				return
 			case event, ok := <-data:
 				if !ok {
@@ -166,6 +171,7 @@ func (s *Service) handleStart(ctx context.Context, req *connect.Request[rpc.Star
 				})
 				if streamErr != nil {
 					cancel(connect.NewError(connect.CodeUnknown, fmt.Errorf("error sending data event: %w", streamErr)))
+
 					return
 				}
 
@@ -198,7 +204,7 @@ func (s *Service) handleStart(ctx context.Context, req *connect.Request[rpc.Star
 		}
 	}()
 
-	pid, err := proc.Start()
+	pid, err := proc.Start(requestTimeout)
 	if err != nil {
 		return connect.NewError(connect.CodeInvalidArgument, err)
 	}

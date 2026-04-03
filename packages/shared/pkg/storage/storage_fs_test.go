@@ -1,97 +1,98 @@
 package storage
 
 import (
-	"bytes"
-	"context"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 // helper to create a FileSystemStorageProvider rooted in a temp directory.
-func newTempProvider(t *testing.T) *FileSystemStorageProvider {
+func newTempProvider(t *testing.T) *fsStorage {
 	t.Helper()
 
 	base := t.TempDir()
-	p, err := NewFileSystemStorageProvider(base)
-	require.NoError(t, err)
+	p := newFileSystemStorage(StorageConfig{
+		GetLocalBasePath: func() string { return base },
+	})
+
 	return p
 }
 
-func TestOpenObject_ReadWrite_Size_ReadAt(t *testing.T) {
+func TestOpenObject_Write_Exists_WriteTo(t *testing.T) {
+	t.Parallel()
 	p := newTempProvider(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
-	obj, err := p.OpenObject(ctx, filepath.Join("sub", "file.txt"))
+	obj, err := p.OpenBlob(ctx, filepath.Join("sub", "file.txt"), MetadataObjectType)
 	require.NoError(t, err)
 
-	const contents = "hello world"
-	// write via ReadFrom
-	n, err := obj.ReadFrom(strings.NewReader(contents))
+	contents := []byte("hello world")
+	// write via Write
+	err = obj.Put(t.Context(), contents)
 	require.NoError(t, err)
-	require.Equal(t, int64(len(contents)), n)
 
 	// check Size
-	size, err := obj.Size()
+	exists, err := obj.Exists(t.Context())
 	require.NoError(t, err)
-	require.Equal(t, int64(len(contents)), size)
+	require.True(t, exists)
 
 	// read the entire file back via WriteTo
-	var buf bytes.Buffer
-	n, err = obj.WriteTo(&buf)
+	data, err := GetBlob(t.Context(), obj)
 	require.NoError(t, err)
-	require.Equal(t, int64(len(contents)), n)
-	require.Equal(t, contents, buf.String())
-
-	// read a slice via ReadAt ("world")
-	part := make([]byte, 5)
-	nRead, err := obj.ReadAt(part, 6)
-	require.NoError(t, err)
-	require.Equal(t, 5, nRead)
-	require.Equal(t, "world", string(part))
+	require.Equal(t, contents, data)
 }
 
-func TestWriteFromFileSystem(t *testing.T) {
+func TestFSPut(t *testing.T) {
+	t.Parallel()
 	p := newTempProvider(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// create a separate source file on disk
 	srcPath := filepath.Join(t.TempDir(), "src.txt")
 	const payload = "copy me please"
 	require.NoError(t, os.WriteFile(srcPath, []byte(payload), 0o600))
 
-	obj, err := p.OpenObject(ctx, "copy/dst.txt")
+	obj, err := p.OpenBlob(ctx, "copy/dst.txt", UnknownObjectType)
 	require.NoError(t, err)
-	require.NoError(t, obj.WriteFromFileSystem(srcPath))
 
-	var buf bytes.Buffer
-	_, err = obj.WriteTo(&buf)
+	require.NoError(t, obj.Put(t.Context(), []byte(payload)))
+
+	data, err := GetBlob(t.Context(), obj)
 	require.NoError(t, err)
-	require.Equal(t, payload, buf.String())
+	require.Equal(t, payload, string(data))
 }
 
 func TestDelete(t *testing.T) {
+	t.Parallel()
 	p := newTempProvider(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
-	obj, err := p.OpenObject(ctx, "to/delete.txt")
+	obj, err := p.OpenBlob(ctx, "to/delete.txt", 0)
 	require.NoError(t, err)
 
-	_, err = obj.ReadFrom(strings.NewReader("bye"))
+	err = obj.Put(t.Context(), []byte("bye"))
 	require.NoError(t, err)
-	require.NoError(t, obj.Delete())
+
+	exists, err := obj.Exists(t.Context())
+	require.NoError(t, err)
+	assert.True(t, exists)
+
+	err = p.DeleteObjectsWithPrefix(t.Context(), "to/delete.txt")
+	require.NoError(t, err)
 
 	// subsequent Size call should fail with ErrorObjectNotExist
-	_, err = obj.Size()
-	require.ErrorIs(t, err, ErrorObjectNotExist)
+	exists, err = obj.Exists(t.Context())
+	require.NoError(t, err)
+	assert.False(t, exists)
 }
 
 func TestDeleteObjectsWithPrefix(t *testing.T) {
+	t.Parallel()
 	p := newTempProvider(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	paths := []string{
 		"data/a.txt",
@@ -99,9 +100,9 @@ func TestDeleteObjectsWithPrefix(t *testing.T) {
 		"data/sub/c.txt",
 	}
 	for _, pth := range paths {
-		obj, err := p.OpenObject(ctx, pth)
+		obj, err := p.OpenBlob(ctx, pth, UnknownObjectType)
 		require.NoError(t, err)
-		_, err = obj.ReadFrom(strings.NewReader("x"))
+		err = obj.Put(t.Context(), []byte("x"))
 		require.NoError(t, err)
 	}
 
@@ -116,13 +117,13 @@ func TestDeleteObjectsWithPrefix(t *testing.T) {
 }
 
 func TestWriteToNonExistentObject(t *testing.T) {
+	t.Parallel()
 	p := newTempProvider(t)
 
-	ctx := context.Background()
-	obj, err := p.OpenObject(ctx, "missing/file.txt")
+	ctx := t.Context()
+	obj, err := p.OpenBlob(ctx, "missing/file.txt", UnknownObjectType)
 	require.NoError(t, err)
 
-	var sink bytes.Buffer
-	_, err = obj.WriteTo(&sink)
-	require.ErrorIs(t, err, ErrorObjectNotExist)
+	_, err = GetBlob(t.Context(), obj)
+	require.ErrorIs(t, err, ErrObjectNotExist)
 }

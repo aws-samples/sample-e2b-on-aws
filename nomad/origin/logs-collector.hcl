@@ -1,7 +1,7 @@
 job "logs-collector" {
   datacenters = ["${aws_az1}", "${aws_az2}"]
   type        = "system"
-  node_pool    = "all"
+  node_pool   = "all"
 
   priority = 85
 
