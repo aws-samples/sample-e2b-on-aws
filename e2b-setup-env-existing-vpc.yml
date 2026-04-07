@@ -535,6 +535,18 @@ Resources:
                   StringEquals:
                     iam:PassedToService:
                       - ec2.amazonaws.com
+              - Sid: IAMCreateServiceLinkedRole
+                Effect: Allow
+                Action:
+                  - iam:CreateServiceLinkedRole
+                Resource:
+                  - "arn:aws:iam::*:role/aws-service-role/autoscaling.amazonaws.com/*"
+                  - "arn:aws:iam::*:role/aws-service-role/elasticloadbalancing.amazonaws.com/*"
+                Condition:
+                  StringEquals:
+                    iam:AWSServiceName:
+                      - autoscaling.amazonaws.com
+                      - elasticloadbalancing.amazonaws.com
               - Sid: LogsAndMonitoring
                 Effect: Allow
                 Action:
