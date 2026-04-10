@@ -56,8 +56,8 @@ locals {
   clusters = {
     # Server nodes run Consul and Nomad servers
     server = {
-      instance_type_x86    = var.environment == "prod" ? "m6i.xlarge" : "t3.xlarge"
-      instance_type_arm    = var.environment == "prod" ? "m7g.xlarge" : "t4g.xlarge"
+      instance_type_x86    = var.environment == "prod" ? "m6i.4xlarge" : "t3.xlarge"
+      instance_type_arm    = var.environment == "prod" ? "m7g.4xlarge" : "t4g.xlarge"
       desired_capacity = 3
       max_size         = 3
       min_size         = 3
@@ -72,8 +72,8 @@ locals {
     }
     # API nodes run the API service
     api = {
-      instance_type_x86    = var.environment == "prod" ? "m6i.xlarge" : "t3.xlarge"
-      instance_type_arm    = var.environment == "prod" ? "m7g.xlarge" : "t4g.xlarge"
+      instance_type_x86    = var.environment == "prod" ? "m6i.4xlarge" : "t3.xlarge"
+      instance_type_arm    = var.environment == "prod" ? "m7g.4xlarge" : "t4g.xlarge"
       desired_capacity = 1
       max_size         = 1
       min_size         = 1
