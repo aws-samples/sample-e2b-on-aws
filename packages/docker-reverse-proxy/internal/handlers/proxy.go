@@ -19,17 +19,15 @@ func (a *APIStore) Proxy(w http.ResponseWriter, req *http.Request) {
 
 	// Validate the token by checking if the generated token is in the cache
 	authHeader := req.Header.Get("Authorization")
-	log.Printf("[DEBUG] Proxy - Auth header: %s", authHeader)
 	e2bToken := strings.TrimPrefix(authHeader, "Bearer ")
 	token, err := a.AuthCache.Get(e2bToken)
 	if err != nil {
-		log.Printf("Error while getting token for %s: %s, header: %s\n", path, err, authHeader)
+		log.Printf("Error while getting token for %s: %s\n", path, err)
 		utils.SetDockerUnauthorizedHeaders(w)
 		return
 	}
 
-	log.Printf("[DEBUG] Proxy - Found token in cache for template ID: %s, docker token (first 10 chars): %s...", 
-		token.TemplateID, token.DockerToken[:10])
+	log.Printf("[DEBUG] Proxy - Found token in cache for template ID: %s", token.TemplateID)
 
 	// Handle based on cloud provider
 	if constants.CurrentCloudProvider == constants.GCP {

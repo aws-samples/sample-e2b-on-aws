@@ -38,7 +38,7 @@ func (a *APIStore) GetToken(w http.ResponseWriter, r *http.Request) error {
 	}
 
 	if !auth.ValidateAccessToken(ctx, a.db.Client, accessToken) {
-		log.Printf("Invalid access token: '%s'\n", accessToken)
+		log.Printf("Access token validation failed")
 
 		w.WriteHeader(http.StatusForbidden)
 		w.Write([]byte("invalid access token"))

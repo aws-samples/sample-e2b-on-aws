@@ -14,7 +14,7 @@ func (a *APIStore) LoginWithToken(w http.ResponseWriter, r *http.Request) error 
 	e2bToken := strings.TrimPrefix(authHeader, "Bearer ")
 	_, err := a.AuthCache.Get(e2bToken)
 	if err != nil {
-		log.Printf("Error while logging with access token: %s, header: %s\n", err, authHeader)
+		log.Printf("Error while logging with access token: %s\n", err)
 		utils.SetDockerUnauthorizedHeaders(w)
 
 		return err
