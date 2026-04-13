@@ -219,6 +219,52 @@ func isPrivateECR(ref string) bool {
 	return strings.Contains(ref, ".dkr.ecr.") && strings.Contains(ref, ".amazonaws.com")
 }
 
+// getLatestImageTag returns the most recently pushed image tag for a template.
+// Returns empty string if no images exist.
+func (g *AWSArtifactsRegistry) getLatestImageTag(ctx context.Context, templateID string) (string, error) {
+	repoName := fmt.Sprintf("%s/%s", g.repositoryName, templateID)
+
+	res, err := g.client.DescribeImages(ctx, &ecr.DescribeImagesInput{
+		RepositoryName: &repoName,
+		Filter: &types.DescribeImagesFilter{
+			TagStatus: types.TagStatusTagged,
+		},
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to describe images for %s: %w", repoName, err)
+	}
+
+	if len(res.ImageDetails) == 0 {
+		return "", nil
+	}
+
+	// Find the most recently pushed image
+	var latest *types.ImageDetail
+	for i := range res.ImageDetails {
+		img := &res.ImageDetails[i]
+		if img.ImagePushedAt == nil || len(img.ImageTags) == 0 {
+			continue
+		}
+		if latest == nil || img.ImagePushedAt.After(*latest.ImagePushedAt) {
+			latest = img
+		}
+	}
+
+	if latest == nil {
+		return "", nil
+	}
+
+	// Get the repository URI
+	repoRes, err := g.client.DescribeRepositories(ctx, &ecr.DescribeRepositoriesInput{
+		RepositoryNames: []string{repoName},
+	})
+	if err != nil || len(repoRes.Repositories) == 0 {
+		return "", fmt.Errorf("failed to get repository URI for %s: %w", repoName, err)
+	}
+
+	return fmt.Sprintf("%s:%s", *repoRes.Repositories[0].RepositoryUri, latest.ImageTags[0]), nil
+}
+
 func (g *AWSArtifactsRegistry) getAuthToken(ctx context.Context) (*authn.Basic, error) {
 	res, err := g.client.GetAuthorizationToken(ctx, &ecr.GetAuthorizationTokenInput{})
 	if err != nil {
