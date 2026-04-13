@@ -16,9 +16,6 @@ import (
 
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
-	containerregistry "github.com/google/go-containerregistry/pkg/v1"
-	"github.com/google/go-containerregistry/pkg/v1/daemon"
-	"github.com/google/go-containerregistry/pkg/v1/tarball"
 	"go.uber.org/zap"
 
 	"github.com/e2b-dev/infra/packages/shared/pkg/storage"
@@ -208,17 +205,16 @@ func (g *AWSArtifactsRegistry) BuildAndPushImage(
 	// 3. Try to pull previous build image for cache
 	cacheFrom := g.pullCacheImage(ctx, templateID)
 
-	// 4. Build using Docker daemon with BuildKit + cache-from + streaming output
+	// 4. Build using Docker daemon with cache-from + streaming output
 	buildArgs := []string{"build"}
-	// Enable inline cache metadata so the pushed image can serve as cache source
-	buildArgs = append(buildArgs, "--build-arg", "BUILDKIT_INLINE_CACHE=1")
 	if cacheFrom != "" {
 		buildArgs = append(buildArgs, "--cache-from", cacheFrom)
 	}
 	buildArgs = append(buildArgs, "-t", localTag, contextDir)
 
 	cmd := exec.CommandContext(ctx, "docker", buildArgs...)
-	cmd.Env = append(os.Environ(), "DOCKER_BUILDKIT=1")
+	// Explicitly disable BuildKit — the API container only has docker-cli without buildx
+	cmd.Env = append(os.Environ(), "DOCKER_BUILDKIT=0")
 
 	if err := runCmdWithStreamingLogs(cmd, templateID, "docker build"); err != nil {
 		return fmt.Errorf("docker build failed: %w", err)
@@ -365,27 +361,48 @@ func (g *AWSArtifactsRegistry) tagAndPush(ctx context.Context, localTag, targetT
 }
 
 // runCmdWithStreamingLogs runs a command and streams its stdout/stderr to zap logger.
+// On failure, the error includes the last lines of output for diagnostics.
 func runCmdWithStreamingLogs(cmd *exec.Cmd, templateID, cmdName string) error {
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return fmt.Errorf("failed to create stdout pipe: %w", err)
-	}
-	cmd.Stderr = cmd.Stdout // merge stderr into stdout
+	// Use io.Pipe to merge stdout and stderr into a single reader
+	pr, pw := io.Pipe()
+	cmd.Stdout = pw
+	cmd.Stderr = pw
 
 	if err := cmd.Start(); err != nil {
+		pw.Close()
 		return fmt.Errorf("%s start failed: %w", cmdName, err)
 	}
 
-	scanner := bufio.NewScanner(stdout)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	for scanner.Scan() {
-		zap.L().Info(cmdName,
-			zap.String("templateID", templateID),
-			zap.String("output", scanner.Text()))
-	}
+	// Keep last N lines for error reporting
+	const tailSize = 30
+	tailLines := make([]string, 0, tailSize)
 
-	if err := cmd.Wait(); err != nil {
-		return err
+	scanner := bufio.NewScanner(pr)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+
+	// Read output in a goroutine since we need to close the writer after Wait()
+	scanDone := make(chan struct{})
+	go func() {
+		defer close(scanDone)
+		for scanner.Scan() {
+			line := scanner.Text()
+			zap.L().Info(cmdName,
+				zap.String("templateID", templateID),
+				zap.String("output", line))
+			if len(tailLines) >= tailSize {
+				tailLines = tailLines[1:]
+			}
+			tailLines = append(tailLines, line)
+		}
+	}()
+
+	err := cmd.Wait()
+	pw.Close() // signal EOF to scanner
+	<-scanDone // wait for scanner to finish
+
+	if err != nil {
+		tail := strings.Join(tailLines, "\n")
+		return fmt.Errorf("%s: %w\noutput (last %d lines):\n%s", cmdName, err, len(tailLines), tail)
 	}
 
 	return nil
@@ -411,43 +428,6 @@ func cleanupOldImages(templateID, keepTag string) {
 			}
 		}
 	}
-}
-
-// loadImageFromDaemon loads an image from the Docker daemon.
-// It first tries the daemon package, then falls back to saving and loading via tarball.
-func loadImageFromDaemon(ctx context.Context, tag string) (containerregistry.Image, error) {
-	ref, err := name.NewTag(tag)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse image tag '%s': %w", tag, err)
-	}
-
-	img, err := daemon.Image(ref)
-	if err == nil {
-		return img, nil
-	}
-
-	zap.L().Warn("Failed to load image from daemon directly, falling back to tarball",
-		zap.String("tag", tag), zap.Error(err))
-
-	// Fallback: save to tarball and load
-	tmpFile, err := os.CreateTemp("", "docker-image-*.tar")
-	if err != nil {
-		return nil, fmt.Errorf("failed to create temp file for image export: %w", err)
-	}
-	defer os.Remove(tmpFile.Name())
-	tmpFile.Close()
-
-	cmd := exec.CommandContext(ctx, "docker", "save", "-o", tmpFile.Name(), tag)
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return nil, fmt.Errorf("docker save failed: %w\noutput: %s", err, string(output))
-	}
-
-	img, err = tarball.ImageFromPath(tmpFile.Name(), &ref)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load image from tarball: %w", err)
-	}
-
-	return img, nil
 }
 
 // extractTarGz extracts a .tar.gz file into the destination directory.
