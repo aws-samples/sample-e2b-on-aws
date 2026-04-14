@@ -41,11 +41,11 @@ else
     echo "AWS CLI is already installed"
 fi
 
-CI_VERSION="v1.10"
-KERNEL_VERSION="6.1.102"
+CI_VERSION="v1.15"
+KERNEL_VERSION="6.1.158"
 KERNEL_FOLDER="vmlinux-${KERNEL_VERSION}"
-FC_VERSION="v1.10.1"
-FC_FOLDER="v1.10.1_1fcdaec"
+FC_VERSION="v1.15.1"
+FC_FOLDER="v1.15.1_b2d9ccc"
 
 # Create subdirectories
 mkdir -p "${TEMP_DIR}/kernels/${KERNEL_FOLDER}"
@@ -58,7 +58,7 @@ ARCHITECTURE=$(grep "^CFNARCHITECTURE=" "$CONFIG_FILE" | cut -d'=' -f2)
 # Download kernel and fc
 if [ "$ARCHITECTURE" = "arm64" ]; then
     # Download kernel
-	curl -L https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/$CI_VERSION/aarch64/vmlinux-$KERNEL_VERSION -o ${TEMP_DIR}/kernels/${KERNEL_FOLDER}/vmlinux.bin
+	curl -L https://github.com/e2b-dev/fc-kernels/releases/download/v0.0.12/vmlinux-${KERNEL_VERSION}-arm64.bin -o ${TEMP_DIR}/kernels/${KERNEL_FOLDER}/vmlinux.bin
 	# Download firecracker
 	curl -L ${fc_url}/download/${FC_VERSION}/firecracker-${FC_VERSION}-aarch64.tgz | tar -xz
     mv release-${FC_VERSION}-aarch64/firecracker-${FC_VERSION}-aarch64 \
@@ -66,7 +66,7 @@ if [ "$ARCHITECTURE" = "arm64" ]; then
     rm -rf release-${latest_version}-aarch64
 else
     # Download kernel
-	curl -L https://storage.googleapis.com/e2b-prod-public-builds/kernels/vmlinux-6.1.102/vmlinux.bin -o ${TEMP_DIR}/kernels/${KERNEL_FOLDER}/vmlinux.bin
+	curl -L https://github.com/e2b-dev/fc-kernels/releases/download/v0.0.12/vmlinux-${KERNEL_VERSION}-amd64.bin -o ${TEMP_DIR}/kernels/${KERNEL_FOLDER}/vmlinux.bin
 	# Download firecracker
 	curl -L ${fc_url}/download/${FC_VERSION}/firecracker-${FC_VERSION}-x86_64.tgz | tar -xz
     mv release-${FC_VERSION}-x86_64/firecracker-${FC_VERSION}-x86_64 \
