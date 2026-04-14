@@ -6,6 +6,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/e2b-dev/infra/packages/shared/pkg/grpc/orchestrator"
+	templatemanager "github.com/e2b-dev/infra/packages/shared/pkg/grpc/template-manager"
 	"github.com/e2b-dev/infra/packages/shared/pkg/id"
 	"github.com/e2b-dev/infra/packages/shared/pkg/storage"
 	"github.com/e2b-dev/infra/packages/shared/pkg/storage/header"
@@ -39,6 +40,12 @@ type TemplateConfig struct {
 
 	// Command to run to check if the template is ready.
 	ReadyCmd string
+
+	// Source image for the build (e.g. "ubuntu:22.04"). If empty, uses ECR artifact registry.
+	FromImage string
+
+	// Build steps to execute inside the FC VM (RUN, COPY, ENV, WORKDIR).
+	Steps []*templatemanager.TemplateStep
 }
 
 // Real size in MB of rootfs after building the template

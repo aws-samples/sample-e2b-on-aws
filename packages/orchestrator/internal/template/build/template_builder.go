@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"go.opentelemetry.io/otel/trace"
@@ -234,6 +235,52 @@ func (b *TemplateBuilder) Build(ctx context.Context, template *TemplateConfig) (
 		b.proxy.RemoveFromPool(sbx.Metadata.Config.ExecutionId)
 	}()
 
+	// Env variables from the Docker image
+	envVars := oci.ParseEnvs(buildConfig.Env)
+
+	// Execute build steps inside the running FC VM
+	if len(template.Steps) > 0 {
+		postProcessor.WriteMsg(fmt.Sprintf("Executing %d build steps", len(template.Steps)))
+		for i, step := range template.Steps {
+			stepType := strings.ToUpper(step.Type)
+			switch stepType {
+			case "RUN":
+				if len(step.Args) < 1 {
+					return nil, fmt.Errorf("step %d: RUN requires command argument", i)
+				}
+				postProcessor.WriteMsg(fmt.Sprintf("[step %d] RUN %s", i, step.Args[0]))
+				err = b.runCommand(ctx, postProcessor, fmt.Sprintf("step-%d-run", i),
+					sbx.Metadata.Config.SandboxId, step.Args[0], "root", nil, envVars)
+			case "COPY", "ADD":
+				if len(step.Args) < 2 {
+					return nil, fmt.Errorf("step %d: %s requires source and destination arguments", i, stepType)
+				}
+				postProcessor.WriteMsg(fmt.Sprintf("[step %d] %s %s %s", i, stepType, step.Args[0], step.Args[1]))
+				err = b.copyFilesToSandbox(ctx, sbx.Metadata.Config.SandboxId, step)
+			case "ENV":
+				for _, arg := range step.Args {
+					parts := strings.SplitN(arg, "=", 2)
+					if len(parts) == 2 {
+						envVars[parts[0]] = parts[1]
+					}
+				}
+				continue
+			case "WORKDIR":
+				if len(step.Args) > 0 {
+					postProcessor.WriteMsg(fmt.Sprintf("[step %d] WORKDIR %s", i, step.Args[0]))
+					err = b.runCommand(ctx, postProcessor, fmt.Sprintf("step-%d-workdir", i),
+						sbx.Metadata.Config.SandboxId, fmt.Sprintf("mkdir -p %s", step.Args[0]), "root", nil, envVars)
+				}
+			default:
+				return nil, fmt.Errorf("step %d: unsupported step type %q", i, stepType)
+			}
+			if err != nil {
+				return nil, fmt.Errorf("step %d (%s) failed: %w", i, stepType, err)
+			}
+		}
+		postProcessor.WriteMsg("All build steps completed")
+	}
+
 	// Run configuration script
 	var scriptDef bytes.Buffer
 	err = ConfigureScriptTemplate.Execute(&scriptDef, map[string]string{})
@@ -257,8 +304,12 @@ func (b *TemplateBuilder) Build(ctx context.Context, template *TemplateConfig) (
 		return nil, fmt.Errorf("error running configuration script: %w", err)
 	}
 
-	// Env variables for the start command and ready command
-	envVars := oci.ParseEnvs(buildConfig.Env)
+	// Merge Docker image env variables (steps may have added more via ENV steps above)
+	for k, v := range oci.ParseEnvs(buildConfig.Env) {
+		if _, exists := envVars[k]; !exists {
+			envVars[k] = v
+		}
+	}
 
 	// Start command
 	commandsCtx, commandsCancel := context.WithCancel(ctx)

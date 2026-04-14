@@ -60,6 +60,8 @@ func (s *ServerStore) TemplateCreate(ctx context.Context, templateRequest *templ
 		DiskSizeMB:      int64(config.DiskSizeMB),
 		BuildLogsWriter: logsWriter,
 		HugePages:       config.HugePages,
+		FromImage:       config.FromImage,
+		Steps:           config.Steps,
 	}
 
 	buildInfo, err := s.buildCache.Create(config.BuildID)

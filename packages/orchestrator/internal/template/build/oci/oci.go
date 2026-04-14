@@ -6,11 +6,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/containers/storage/pkg/archive"
 	"github.com/dustin/go-humanize"
+	"github.com/google/go-containerregistry/pkg/name"
 	containerregistry "github.com/google/go-containerregistry/pkg/v1"
+	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
@@ -28,13 +31,36 @@ const (
 	tarballExportUpdates = 10
 )
 
+func GetPublicImage(ctx context.Context, tracer trace.Tracer, imageRef string) (containerregistry.Image, error) {
+	childCtx, childSpan := tracer.Start(ctx, "pull-public-docker-image")
+	defer childSpan.End()
+
+	ref, err := name.ParseReference(imageRef)
+	if err != nil {
+		return nil, fmt.Errorf("invalid image reference '%s': %w", imageRef, err)
+	}
+
+	platform := containerregistry.Platform{
+		OS:           "linux",
+		Architecture: runtime.GOARCH,
+	}
+
+	img, err := remote.Image(ref, remote.WithPlatform(platform))
+	if err != nil {
+		return nil, fmt.Errorf("error pulling public image '%s': %w", imageRef, err)
+	}
+
+	telemetry.ReportEvent(childCtx, "pulled public image")
+	return img, nil
+}
+
 func GetImage(ctx context.Context, tracer trace.Tracer, artifactRegistry artifactsregistry.ArtifactsRegistry, templateId string, buildId string) (containerregistry.Image, error) {
 	childCtx, childSpan := tracer.Start(ctx, "pull-docker-image")
 	defer childSpan.End()
 
 	platform := containerregistry.Platform{
 		OS:           "linux",
-		Architecture: "amd64",
+		Architecture: runtime.GOARCH,
 	}
 
 	img, err := artifactRegistry.GetImage(childCtx, templateId, buildId, platform)

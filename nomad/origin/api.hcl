@@ -90,9 +90,7 @@ job "api" {
         args         = [
           "--port", "50001",
         ]
-        volumes = [
-          "/var/run/docker.sock:/var/run/docker.sock",
-        ]
+        volumes = []
       }
     }
   }
