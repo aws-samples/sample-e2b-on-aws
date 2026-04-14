@@ -66,8 +66,8 @@ if [ -f /opt/config.properties ]; then
         echo "Selected second IP: $NOMAD_IP"
 
         # Write NOMAD_ADDR to the environment variable file
-        echo "export NOMAD_ADDR=\"http://${NOMAD_IP}:4646\"" >> $ENV_FILE
-        echo "NOMAD_ADDR set to: http://${NOMAD_IP}:4646"
+        echo "export NOMAD_ADDR=\"https://${NOMAD_IP}:4646\"" >> $ENV_FILE
+        echo "NOMAD_ADDR set to: https://${NOMAD_IP}:4646"
 
         # Check and set NOMAD_TOKEN
         if [ -n "$nomad_acl_token" ]; then
@@ -85,6 +85,11 @@ if [ -f /opt/config.properties ]; then
         else
             echo "# Warning: consul_http_token not found in config file" >> $ENV_FILE
         fi
+
+        # Set Nomad TLS environment variables
+        echo "export NOMAD_CACERT=\"/opt/nomad/tls/ca.pem\"" >> $ENV_FILE
+        echo "export NOMAD_CLIENT_CERT=\"/opt/nomad/tls/cert.pem\"" >> $ENV_FILE
+        echo "export NOMAD_CLIENT_KEY=\"/opt/nomad/tls/key.pem\"" >> $ENV_FILE
 
         # Add a flag indicating successful setup
         echo "export NOMAD_SETUP_SUCCESS=true" >> $ENV_FILE

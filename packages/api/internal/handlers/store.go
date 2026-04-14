@@ -111,8 +111,13 @@ func NewAPIStore(ctx context.Context, tel *telemetry.Client) *APIStore {
 	}
 
 	nomadConfig := &nomadapi.Config{
-		Address:  env.GetEnv("NOMAD_ADDRESS", "http://localhost:4646"),
+		Address:  env.GetEnv("NOMAD_ADDRESS", "https://localhost:4646"),
 		SecretID: os.Getenv("NOMAD_TOKEN"),
+		TLSConfig: &nomadapi.TLSConfig{
+			CACert:     os.Getenv("NOMAD_CACERT"),
+			ClientCert: os.Getenv("NOMAD_CLIENT_CERT"),
+			ClientKey:  os.Getenv("NOMAD_CLIENT_KEY"),
+		},
 	}
 
 	nomadClient, err := nomadapi.NewClient(nomadConfig)
@@ -129,13 +134,13 @@ func NewAPIStore(ctx context.Context, tel *telemetry.Client) *APIStore {
 		redisClient = redis.NewClusterClient(&redis.ClusterOptions{
 			Addrs:        []string{redisClusterUrl},
 			MinIdleConns: 1,
-			TLSConfig:    &tls.Config{},  // 添加 TLS 支持
+			TLSConfig:    &tls.Config{}, // 添加 TLS 支持
 		})
 	} else if rurl := os.Getenv("REDIS_URL"); rurl != "" {
 		redisClient = redis.NewClient(&redis.Options{
 			Addr:         rurl,
 			MinIdleConns: 1,
-			TLSConfig:    &tls.Config{},  // 添加 TLS 支持
+			TLSConfig:    &tls.Config{}, // 添加 TLS 支持
 		})
 	} else {
 		zap.L().Warn("REDIS_URL not set, using local caches")

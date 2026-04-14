@@ -200,8 +200,19 @@ consul {
   allow_unauthenticated = false
   token = "$consul_token"
 }
+
+tls {
+  http = true
+  rpc  = true
+  ca_file   = "/opt/nomad/tls/ca.pem"
+  cert_file = "/opt/nomad/tls/cert.pem"
+  key_file  = "/opt/nomad/tls/key.pem"
+  verify_server_hostname = true
+  verify_https_client    = false
+}
 EOF
   chown "$user:$user" "$config_path"
+  chmod 600 "$config_path"
 }
 
 function generate_supervisor_config {
@@ -241,7 +252,7 @@ function start_nomad {
 
 function bootstrap {
   log_info "Waiting for Nomad to start"
-  while test -z "$(curl -s http://127.0.0.1:4646/v1/agent/health)"; do
+  while test -z "$(curl -sk https://127.0.0.1:4646/v1/agent/health)"; do
     log_info "Nomad not yet started. Waiting for 1 second."
     sleep 1
   done

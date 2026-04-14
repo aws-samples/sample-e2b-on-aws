@@ -283,6 +283,163 @@ resource "aws_secretsmanager_secret_version" "consul_dns_request_token" {
 }
 
 # =========================================================
+# NOMAD TLS CERTIFICATES
+# =========================================================
+
+# CA Private Key
+resource "tls_private_key" "nomad_ca" {
+  algorithm = "ECDSA"
+  ecdsa_curve = "P384"
+}
+
+# Self-signed CA Certificate
+resource "tls_self_signed_cert" "nomad_ca" {
+  private_key_pem = tls_private_key.nomad_ca.private_key_pem
+
+  subject {
+    common_name  = "Nomad CA"
+    organization = "E2B"
+  }
+
+  validity_period_hours = 87600 # 10 years
+  is_ca_certificate     = true
+
+  allowed_uses = [
+    "cert_signing",
+    "crl_signing",
+  ]
+}
+
+# Server Private Key
+resource "tls_private_key" "nomad_server" {
+  algorithm = "ECDSA"
+  ecdsa_curve = "P384"
+}
+
+# Server Certificate Signing Request
+resource "tls_cert_request" "nomad_server" {
+  private_key_pem = tls_private_key.nomad_server.private_key_pem
+
+  subject {
+    common_name  = "server.${local.aws_region}.nomad"
+    organization = "E2B"
+  }
+
+  dns_names = [
+    "server.${local.aws_region}.nomad",
+    "server.global.nomad",
+    "localhost",
+  ]
+
+  ip_addresses = ["127.0.0.1"]
+}
+
+# Server Certificate signed by CA
+resource "tls_locally_signed_cert" "nomad_server" {
+  cert_request_pem   = tls_cert_request.nomad_server.cert_request_pem
+  ca_private_key_pem = tls_private_key.nomad_ca.private_key_pem
+  ca_cert_pem        = tls_self_signed_cert.nomad_ca.cert_pem
+
+  validity_period_hours = 43800 # 5 years
+
+  allowed_uses = [
+    "digital_signature",
+    "key_encipherment",
+    "server_auth",
+    "client_auth",
+  ]
+}
+
+# Client Private Key
+resource "tls_private_key" "nomad_client" {
+  algorithm = "ECDSA"
+  ecdsa_curve = "P384"
+}
+
+# Client Certificate Signing Request
+resource "tls_cert_request" "nomad_client" {
+  private_key_pem = tls_private_key.nomad_client.private_key_pem
+
+  subject {
+    common_name  = "client.${local.aws_region}.nomad"
+    organization = "E2B"
+  }
+
+  dns_names = [
+    "client.${local.aws_region}.nomad",
+    "localhost",
+  ]
+
+  ip_addresses = ["127.0.0.1"]
+}
+
+# Client Certificate signed by CA
+resource "tls_locally_signed_cert" "nomad_client" {
+  cert_request_pem   = tls_cert_request.nomad_client.cert_request_pem
+  ca_private_key_pem = tls_private_key.nomad_ca.private_key_pem
+  ca_cert_pem        = tls_self_signed_cert.nomad_ca.cert_pem
+
+  validity_period_hours = 43800 # 5 years
+
+  allowed_uses = [
+    "digital_signature",
+    "key_encipherment",
+    "client_auth",
+  ]
+}
+
+# Store certificates in Secrets Manager
+resource "aws_secretsmanager_secret" "nomad_tls_ca_cert" {
+  name = "${var.prefix}-nomad-tls-ca-cert"
+  tags = local.common_tags
+}
+
+resource "aws_secretsmanager_secret_version" "nomad_tls_ca_cert" {
+  secret_id     = aws_secretsmanager_secret.nomad_tls_ca_cert.id
+  secret_string = tls_self_signed_cert.nomad_ca.cert_pem
+}
+
+resource "aws_secretsmanager_secret" "nomad_tls_server_cert" {
+  name = "${var.prefix}-nomad-tls-server-cert"
+  tags = local.common_tags
+}
+
+resource "aws_secretsmanager_secret_version" "nomad_tls_server_cert" {
+  secret_id     = aws_secretsmanager_secret.nomad_tls_server_cert.id
+  secret_string = tls_locally_signed_cert.nomad_server.cert_pem
+}
+
+resource "aws_secretsmanager_secret" "nomad_tls_server_key" {
+  name = "${var.prefix}-nomad-tls-server-key"
+  tags = local.common_tags
+}
+
+resource "aws_secretsmanager_secret_version" "nomad_tls_server_key" {
+  secret_id     = aws_secretsmanager_secret.nomad_tls_server_key.id
+  secret_string = tls_private_key.nomad_server.private_key_pem
+}
+
+resource "aws_secretsmanager_secret" "nomad_tls_client_cert" {
+  name = "${var.prefix}-nomad-tls-client-cert"
+  tags = local.common_tags
+}
+
+resource "aws_secretsmanager_secret_version" "nomad_tls_client_cert" {
+  secret_id     = aws_secretsmanager_secret.nomad_tls_client_cert.id
+  secret_string = tls_locally_signed_cert.nomad_client.cert_pem
+}
+
+resource "aws_secretsmanager_secret" "nomad_tls_client_key" {
+  name = "${var.prefix}-nomad-tls-client-key"
+  tags = local.common_tags
+}
+
+resource "aws_secretsmanager_secret_version" "nomad_tls_client_key" {
+  secret_id     = aws_secretsmanager_secret.nomad_tls_client_key.id
+  secret_string = tls_private_key.nomad_client.private_key_pem
+}
+
+# =========================================================
 # IAM ROLES AND POLICIES
 # =========================================================
 
@@ -579,6 +736,9 @@ resource "aws_launch_template" "server" {
     RUN_CONSUL_FILE_HASH         = local.file_hash["scripts/run-consul.sh"]
     RUN_NOMAD_FILE_HASH          = local.file_hash["scripts/run-nomad.sh"]
     CONSUL_GOSSIP_SECRET_NAME    = aws_secretsmanager_secret.consul_gossip_encryption_key.name
+    NOMAD_TLS_CA_SECRET          = aws_secretsmanager_secret.nomad_tls_ca_cert.name
+    NOMAD_TLS_CERT_SECRET        = aws_secretsmanager_secret.nomad_tls_server_cert.name
+    NOMAD_TLS_KEY_SECRET         = aws_secretsmanager_secret.nomad_tls_server_key.name
     AWS_REGION                   = local.aws_region
     AWS_ACCOUNT_ID               = local.account_id
   }))
@@ -745,6 +905,9 @@ resource "aws_launch_template" "client" {
     RUN_NOMAD_FILE_HASH          = local.file_hash["scripts/run-nomad.sh"]
     CONSUL_GOSSIP_SECRET_NAME    = aws_secretsmanager_secret.consul_gossip_encryption_key.name
     CONSUL_DNS_SECRET_NAME       = aws_secretsmanager_secret.consul_dns_request_token.name
+    NOMAD_TLS_CA_SECRET          = aws_secretsmanager_secret.nomad_tls_ca_cert.name
+    NOMAD_TLS_CERT_SECRET        = aws_secretsmanager_secret.nomad_tls_client_cert.name
+    NOMAD_TLS_KEY_SECRET         = aws_secretsmanager_secret.nomad_tls_client_key.name
   }))
 
   tag_specifications {
@@ -1204,6 +1367,9 @@ resource "aws_launch_template" "api" {
     RUN_NOMAD_FILE_HASH          = local.file_hash["scripts/run-api-nomad.sh"]
     CONSUL_GOSSIP_SECRET_NAME    = aws_secretsmanager_secret.consul_gossip_encryption_key.name
     CONSUL_DNS_SECRET_NAME       = aws_secretsmanager_secret.consul_dns_request_token.name
+    NOMAD_TLS_CA_SECRET          = aws_secretsmanager_secret.nomad_tls_ca_cert.name
+    NOMAD_TLS_CERT_SECRET        = aws_secretsmanager_secret.nomad_tls_client_cert.name
+    NOMAD_TLS_KEY_SECRET         = aws_secretsmanager_secret.nomad_tls_client_key.name
   }))
 
   tag_specifications {
@@ -1372,6 +1538,9 @@ resource "aws_launch_template" "build" {
     RUN_NOMAD_FILE_HASH          = local.file_hash["scripts/run-build-cluster-nomad.sh"]
     CONSUL_GOSSIP_SECRET_NAME    = aws_secretsmanager_secret.consul_gossip_encryption_key.name
     CONSUL_DNS_SECRET_NAME       = aws_secretsmanager_secret.consul_dns_request_token.name
+    NOMAD_TLS_CA_SECRET          = aws_secretsmanager_secret.nomad_tls_ca_cert.name
+    NOMAD_TLS_CERT_SECRET        = aws_secretsmanager_secret.nomad_tls_client_cert.name
+    NOMAD_TLS_KEY_SECRET         = aws_secretsmanager_secret.nomad_tls_client_key.name
   }))
 
   tag_specifications {

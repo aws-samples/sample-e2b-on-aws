@@ -35,5 +35,12 @@ CONSUL_TOKEN=$(get_secret "${CONSUL_SECRET_NAME}")
 NOMAD_TOKEN=$(get_secret "${NOMAD_SECRET_NAME}")
 CONSUL_GOSSIP_ENCRYPTION_KEY=$(get_secret "${CONSUL_GOSSIP_SECRET_NAME}")
 
+# Retrieve Nomad TLS certificates and write to disk
+mkdir -p /opt/nomad/tls
+get_secret "${NOMAD_TLS_CA_SECRET}" > /opt/nomad/tls/ca.pem
+get_secret "${NOMAD_TLS_CERT_SECRET}" > /opt/nomad/tls/cert.pem
+get_secret "${NOMAD_TLS_KEY_SECRET}" > /opt/nomad/tls/key.pem
+chmod 600 /opt/nomad/tls/*.pem
+
 /opt/consul/bin/run-consul.sh --server --cluster-tag-name "${CLUSTER_TAG_NAME}" --consul-token "${CONSUL_TOKEN}" --enable-gossip-encryption --gossip-encryption-key "${CONSUL_GOSSIP_ENCRYPTION_KEY}"
 /opt/nomad/bin/run-nomad.sh --server --num-servers "${NUM_SERVERS}" --consul-token "${CONSUL_TOKEN}" --nomad-token "${NOMAD_TOKEN}"
