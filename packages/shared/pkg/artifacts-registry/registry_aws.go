@@ -176,11 +176,14 @@ func (g *AWSArtifactsRegistry) ensureRepository(ctx context.Context, repoName st
 		RepositoryNames: []string{repoName},
 	})
 	if err != nil {
-		// Repository not found → create it
-		mutability := types.ImageTagMutabilityMutable
+		// Repository not found → create it with security hardening
+		mutability := types.ImageTagMutabilityImmutable
 		_, err = g.client.CreateRepository(ctx, &ecr.CreateRepositoryInput{
 			RepositoryName:     &repoName,
 			ImageTagMutability: mutability,
+			ImageScanningConfiguration: &types.ImageScanningConfiguration{
+				ScanOnPush: true,
+			},
 		})
 		if err != nil {
 			return fmt.Errorf("failed to create ECR repository %s: %w", repoName, err)

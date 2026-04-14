@@ -162,6 +162,52 @@ resource "aws_s3_bucket" "docker_contexts_bucket" {
   tags = local.common_tags
 }
 
+# ---------------------------------------------------------
+# S3 Bucket Security Hardening
+# ---------------------------------------------------------
+
+locals {
+  all_buckets = {
+    loki_storage     = aws_s3_bucket.loki_storage_bucket.id
+    envs_docker_ctx  = aws_s3_bucket.envs_docker_context.id
+    setup            = aws_s3_bucket.setup_bucket.id
+    fc_kernels       = aws_s3_bucket.fc_kernels_bucket.id
+    fc_versions      = aws_s3_bucket.fc_versions_bucket.id
+    fc_env_pipeline  = aws_s3_bucket.fc_env_pipeline_bucket.id
+    fc_template      = aws_s3_bucket.fc_template_bucket.id
+    docker_contexts  = aws_s3_bucket.docker_contexts_bucket.id
+  }
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "bucket_encryption" {
+  for_each = local.all_buckets
+  bucket   = each.value
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+resource "aws_s3_bucket_versioning" "bucket_versioning" {
+  for_each = local.all_buckets
+  bucket   = each.value
+
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "bucket_public_access" {
+  for_each = local.all_buckets
+  bucket   = each.value
+
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
 
 # =========================================================
 # SECRETS MANAGEMENT
@@ -300,22 +346,95 @@ resource "aws_iam_role" "infra_instances_role" {
   tags = local.common_tags
 }
 
-# Attach S3 full access policy to the role
-resource "aws_iam_role_policy_attachment" "s3_full_access" {
-  role       = aws_iam_role.infra_instances_role.name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonS3FullAccess"
+# Scoped S3 access policy - restricted to project-specific buckets
+resource "aws_iam_role_policy" "s3_scoped_access" {
+  name = "${var.prefix}-s3-scoped-access"
+  role = aws_iam_role.infra_instances_role.name
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "S3BucketAccess"
+        Effect = "Allow"
+        Action = [
+          "s3:GetObject",
+          "s3:PutObject",
+          "s3:DeleteObject",
+          "s3:ListBucket",
+          "s3:GetBucketLocation",
+          "s3:ListBucketMultipartUploads",
+          "s3:AbortMultipartUpload",
+          "s3:ListMultipartUploadParts"
+        ]
+        Resource = [
+          "arn:aws:s3:::${var.prefix}-*",
+          "arn:aws:s3:::${var.prefix}-*/*"
+        ]
+      }
+    ]
+  })
 }
 
-# Attach ECR full access policy to the role
-resource "aws_iam_role_policy_attachment" "power_user_access" {
-  role       = aws_iam_role.infra_instances_role.name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryFullAccess"
+# Scoped ECR access policy - restricted to e2b repositories
+resource "aws_iam_role_policy" "ecr_scoped_access" {
+  name = "${var.prefix}-ecr-scoped-access"
+  role = aws_iam_role.infra_instances_role.name
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "ECRAuth"
+        Effect = "Allow"
+        Action = [
+          "ecr:GetAuthorizationToken"
+        ]
+        Resource = "*"
+      },
+      {
+        Sid    = "ECRRepositoryAccess"
+        Effect = "Allow"
+        Action = [
+          "ecr:BatchCheckLayerAvailability",
+          "ecr:GetDownloadUrlForLayer",
+          "ecr:BatchGetImage",
+          "ecr:PutImage",
+          "ecr:InitiateLayerUpload",
+          "ecr:UploadLayerPart",
+          "ecr:CompleteLayerUpload",
+          "ecr:CreateRepository",
+          "ecr:DescribeRepositories",
+          "ecr:ListImages",
+          "ecr:DescribeImages",
+          "ecr:TagResource"
+        ]
+        Resource = "arn:aws:ecr:*:${local.account_id}:repository/e2b*"
+      }
+    ]
+  })
 }
 
-# Attach Secrets Manager access policy to the role
-resource "aws_iam_role_policy_attachment" "secrets_manager_full_access" {
-  role       = aws_iam_role.infra_instances_role.name
-  policy_arn = "arn:aws:iam::aws:policy/SecretsManagerReadWrite"
+# Scoped Secrets Manager access policy - read-only for e2b secrets
+resource "aws_iam_role_policy" "secrets_manager_scoped_access" {
+  name = "${var.prefix}-secrets-manager-scoped-access"
+  role = aws_iam_role.infra_instances_role.name
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "SecretsManagerReadAccess"
+        Effect = "Allow"
+        Action = [
+          "secretsmanager:GetSecretValue",
+          "secretsmanager:DescribeSecret",
+          "secretsmanager:ListSecrets"
+        ]
+        Resource = "arn:aws:secretsmanager:*:${local.account_id}:secret:*e2b*"
+      }
+    ]
+  })
 }
 
 # Attach SSM access policy for Systems Manager access
@@ -384,19 +503,27 @@ resource "aws_security_group" "server_sg" {
     cidr_blocks = [var.VPC.CIDR]
   }
 
-  # Nomad ports
+  # Nomad ports - restricted to VPC CIDR only
   ingress {
     from_port   = 4646
     to_port     = 4646
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+    cidr_blocks = [var.VPC.CIDR]
   }
 
-  # Allow all outbound traffic
+  # Allow outbound to VPC
   egress {
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
+    cidr_blocks = [var.VPC.CIDR]
+  }
+
+  # Allow HTTPS outbound for ECR/S3/API access via NAT
+  egress {
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
 
@@ -534,11 +661,19 @@ resource "aws_security_group" "client_sg" {
     cidr_blocks = [var.VPC.CIDR]
   }
 
-  # Allow all outbound traffic
+  # Allow outbound to VPC
   egress {
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
+    cidr_blocks = [var.VPC.CIDR]
+  }
+
+  # Allow HTTPS outbound for ECR/S3/API access via NAT
+  egress {
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
 
@@ -697,20 +832,20 @@ resource "aws_security_group" "api_sg" {
     cidr_blocks = [var.VPC.CIDR]
   }
 
-  # Nomad ports
+  # Nomad ports - restricted to VPC CIDR only
   ingress {
     from_port   = 4646
     to_port     = 4646
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+    cidr_blocks = [var.VPC.CIDR]
   }
 
-  # API port
+  # API port - restricted to VPC CIDR only (accessed via ALB)
   ingress {
     from_port   = 50001
     to_port     = 50001
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+    cidr_blocks = [var.VPC.CIDR]
   }
 
   # Client proxy health check port
@@ -737,11 +872,19 @@ resource "aws_security_group" "api_sg" {
     cidr_blocks = [var.VPC.CIDR]
   }
 
-  # Allow all outbound traffic
+  # Allow outbound to VPC
   egress {
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
+    cidr_blocks = [var.VPC.CIDR]
+  }
+
+  # Allow HTTPS outbound for ECR/S3/API access via NAT
+  egress {
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
 
@@ -792,12 +935,12 @@ resource "aws_security_group" "alb_sg" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  # Allow all outbound traffic
+  # Allow outbound to VPC only (ALB connects to backend instances)
   egress {
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
+    cidr_blocks = [var.VPC.CIDR]
   }
 
   tags = merge(
@@ -1155,11 +1298,19 @@ resource "aws_security_group" "build_sg" {
     cidr_blocks = [var.VPC.CIDR]
   }
 
-  # Allow all outbound traffic
+  # Allow outbound to VPC
   egress {
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
+    cidr_blocks = [var.VPC.CIDR]
+  }
+
+  # Allow HTTPS outbound for ECR/S3/API access via NAT
+  egress {
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
 

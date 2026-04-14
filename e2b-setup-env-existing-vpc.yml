@@ -260,6 +260,212 @@ Resources:
       #   - existing-route-table-id-2
 
   # ------------------------------------------------------------------------------------------------
+  # Network ACLs - Subnet-level network access control
+  # ------------------------------------------------------------------------------------------------
+  PublicSubnetNACL:
+    Type: AWS::EC2::NetworkAcl
+    Properties:
+      VpcId: !Ref ExistingVpcId
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-public-nacl"
+
+  PublicSubnetNACLInboundHTTPS:
+    Type: AWS::EC2::NetworkAclEntry
+    Properties:
+      NetworkAclId: !Ref PublicSubnetNACL
+      RuleNumber: 100
+      Protocol: 6
+      RuleAction: allow
+      CidrBlock: "0.0.0.0/0"
+      PortRange:
+        From: 443
+        To: 443
+
+  PublicSubnetNACLInboundHTTP:
+    Type: AWS::EC2::NetworkAclEntry
+    Properties:
+      NetworkAclId: !Ref PublicSubnetNACL
+      RuleNumber: 110
+      Protocol: 6
+      RuleAction: allow
+      CidrBlock: "0.0.0.0/0"
+      PortRange:
+        From: 80
+        To: 80
+
+  PublicSubnetNACLInboundSSH:
+    Type: AWS::EC2::NetworkAclEntry
+    Properties:
+      NetworkAclId: !Ref PublicSubnetNACL
+      RuleNumber: 120
+      Protocol: 6
+      RuleAction: allow
+      CidrBlock: !Ref AllowRemoteSSHIPs
+      PortRange:
+        From: 22
+        To: 22
+
+  PublicSubnetNACLInboundEphemeral:
+    Type: AWS::EC2::NetworkAclEntry
+    Properties:
+      NetworkAclId: !Ref PublicSubnetNACL
+      RuleNumber: 200
+      Protocol: 6
+      RuleAction: allow
+      CidrBlock: "0.0.0.0/0"
+      PortRange:
+        From: 1024
+        To: 65535
+
+  PublicSubnetNACLInboundVPC:
+    Type: AWS::EC2::NetworkAclEntry
+    Properties:
+      NetworkAclId: !Ref PublicSubnetNACL
+      RuleNumber: 300
+      Protocol: -1
+      RuleAction: allow
+      CidrBlock: !GetAtt VpcCidrLookup.CidrBlock
+
+  PublicSubnetNACLOutboundHTTPS:
+    Type: AWS::EC2::NetworkAclEntry
+    Properties:
+      NetworkAclId: !Ref PublicSubnetNACL
+      RuleNumber: 100
+      Protocol: 6
+      Egress: true
+      RuleAction: allow
+      CidrBlock: "0.0.0.0/0"
+      PortRange:
+        From: 443
+        To: 443
+
+  PublicSubnetNACLOutboundHTTP:
+    Type: AWS::EC2::NetworkAclEntry
+    Properties:
+      NetworkAclId: !Ref PublicSubnetNACL
+      RuleNumber: 110
+      Protocol: 6
+      Egress: true
+      RuleAction: allow
+      CidrBlock: "0.0.0.0/0"
+      PortRange:
+        From: 80
+        To: 80
+
+  PublicSubnetNACLOutboundEphemeral:
+    Type: AWS::EC2::NetworkAclEntry
+    Properties:
+      NetworkAclId: !Ref PublicSubnetNACL
+      RuleNumber: 200
+      Protocol: 6
+      Egress: true
+      RuleAction: allow
+      CidrBlock: "0.0.0.0/0"
+      PortRange:
+        From: 1024
+        To: 65535
+
+  PublicSubnetNACLOutboundVPC:
+    Type: AWS::EC2::NetworkAclEntry
+    Properties:
+      NetworkAclId: !Ref PublicSubnetNACL
+      RuleNumber: 300
+      Protocol: -1
+      Egress: true
+      RuleAction: allow
+      CidrBlock: !GetAtt VpcCidrLookup.CidrBlock
+
+  PublicSubnet1NACLAssociation:
+    Type: AWS::EC2::SubnetNetworkAclAssociation
+    Properties:
+      SubnetId: !Ref ExistingPublicSubnet1Id
+      NetworkAclId: !Ref PublicSubnetNACL
+
+  PublicSubnet2NACLAssociation:
+    Type: AWS::EC2::SubnetNetworkAclAssociation
+    Properties:
+      SubnetId: !Ref ExistingPublicSubnet2Id
+      NetworkAclId: !Ref PublicSubnetNACL
+
+  PrivateSubnetNACL:
+    Type: AWS::EC2::NetworkAcl
+    Properties:
+      VpcId: !Ref ExistingVpcId
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-private-nacl"
+
+  PrivateSubnetNACLInboundVPC:
+    Type: AWS::EC2::NetworkAclEntry
+    Properties:
+      NetworkAclId: !Ref PrivateSubnetNACL
+      RuleNumber: 100
+      Protocol: -1
+      RuleAction: allow
+      CidrBlock: !GetAtt VpcCidrLookup.CidrBlock
+
+  PrivateSubnetNACLInboundEphemeral:
+    Type: AWS::EC2::NetworkAclEntry
+    Properties:
+      NetworkAclId: !Ref PrivateSubnetNACL
+      RuleNumber: 200
+      Protocol: 6
+      RuleAction: allow
+      CidrBlock: "0.0.0.0/0"
+      PortRange:
+        From: 1024
+        To: 65535
+
+  PrivateSubnetNACLOutboundVPC:
+    Type: AWS::EC2::NetworkAclEntry
+    Properties:
+      NetworkAclId: !Ref PrivateSubnetNACL
+      RuleNumber: 100
+      Protocol: -1
+      Egress: true
+      RuleAction: allow
+      CidrBlock: !GetAtt VpcCidrLookup.CidrBlock
+
+  PrivateSubnetNACLOutboundHTTPS:
+    Type: AWS::EC2::NetworkAclEntry
+    Properties:
+      NetworkAclId: !Ref PrivateSubnetNACL
+      RuleNumber: 200
+      Protocol: 6
+      Egress: true
+      RuleAction: allow
+      CidrBlock: "0.0.0.0/0"
+      PortRange:
+        From: 443
+        To: 443
+
+  PrivateSubnetNACLOutboundEphemeral:
+    Type: AWS::EC2::NetworkAclEntry
+    Properties:
+      NetworkAclId: !Ref PrivateSubnetNACL
+      RuleNumber: 300
+      Protocol: 6
+      Egress: true
+      RuleAction: allow
+      CidrBlock: "0.0.0.0/0"
+      PortRange:
+        From: 1024
+        To: 65535
+
+  PrivateSubnet1NACLAssociation:
+    Type: AWS::EC2::SubnetNetworkAclAssociation
+    Properties:
+      SubnetId: !Ref ExistingPrivateSubnet1Id
+      NetworkAclId: !Ref PrivateSubnetNACL
+
+  PrivateSubnet2NACLAssociation:
+    Type: AWS::EC2::SubnetNetworkAclAssociation
+    Properties:
+      SubnetId: !Ref ExistingPrivateSubnet2Id
+      NetworkAclId: !Ref PrivateSubnetNACL
+
+  # ------------------------------------------------------------------------------------------------
   # Security Groups - Network access control for different infrastructure tiers
   # ------------------------------------------------------------------------------------------------
   BastionSecurityGroup:
@@ -273,8 +479,12 @@ Resources:
           ToPort: "22"
           CidrIp: !Ref AllowRemoteSSHIPs
       SecurityGroupEgress:
-        - IpProtocol: "-1"
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
           CidrIp: "0.0.0.0/0"
+        - IpProtocol: "-1"
+          CidrIp: !GetAtt VpcCidrLookup.CidrBlock
       Tags:
         - Key: Name
           Value: !Sub "${AWS::StackName}-bastion-sg"
@@ -290,7 +500,7 @@ Resources:
           CidrIp: !GetAtt VpcCidrLookup.CidrBlock
       SecurityGroupEgress:
         - IpProtocol: "-1"
-          CidrIp: "0.0.0.0/0"
+          CidrIp: !GetAtt VpcCidrLookup.CidrBlock
       VpcId: !Ref ExistingVpcId
       Tags:
         - Key: Name
@@ -307,7 +517,7 @@ Resources:
           CidrIp: !GetAtt VpcCidrLookup.CidrBlock
       SecurityGroupEgress:
         - IpProtocol: "-1"
-          CidrIp: "0.0.0.0/0"
+          CidrIp: !GetAtt VpcCidrLookup.CidrBlock
       VpcId: !Ref ExistingVpcId
       Tags:
         - Key: Name
@@ -446,17 +656,74 @@ Resources:
                   - ec2:TerminateInstances
                   - ec2:RevokeSecurityGroupIngress
                   - ec2:RevokeSecurityGroupEgress
+                Resource:
+                  - !Sub "arn:aws:ec2:*:${AWS::AccountId}:*"
+              - Sid: EC2DescribeAccess
+                Effect: Allow
+                Action:
+                  - ec2:DescribeImageAttribute
+                  - ec2:DescribeImages
+                  - ec2:DescribeInstances
+                  - ec2:DescribeInstanceStatus
+                  - ec2:DescribeRegions
+                  - ec2:DescribeSecurityGroups
+                  - ec2:DescribeSnapshots
+                  - ec2:DescribeSubnets
+                  - ec2:DescribeTags
+                  - ec2:DescribeVolumes
+                  - ec2:DescribeLaunchTemplates
+                  - ec2:DescribeLaunchTemplateVersions
+                  - ec2:DescribeVpcs
+                  - ec2:DescribeAvailabilityZones
+                  - ec2:DescribeKeyPairs
+                  - ec2:DescribeNetworkInterfaces
                 Resource: "*"
               - Sid: AutoScalingAndELB
                 Effect: Allow
                 Action:
-                  - autoscaling:*
-                  - elasticloadbalancing:*
+                  - autoscaling:CreateAutoScalingGroup
+                  - autoscaling:UpdateAutoScalingGroup
+                  - autoscaling:DeleteAutoScalingGroup
+                  - autoscaling:DescribeAutoScalingGroups
+                  - autoscaling:DescribeAutoScalingInstances
+                  - autoscaling:DescribeLaunchConfigurations
+                  - autoscaling:DescribeScalingActivities
+                  - autoscaling:DescribePolicies
+                  - autoscaling:SetDesiredCapacity
+                  - autoscaling:TerminateInstanceInAutoScalingGroup
+                  - autoscaling:CreateOrUpdateTags
+                  - autoscaling:DeleteTags
+                  - autoscaling:DescribeTags
+                  - elasticloadbalancing:CreateLoadBalancer
+                  - elasticloadbalancing:DeleteLoadBalancer
+                  - elasticloadbalancing:DescribeLoadBalancers
+                  - elasticloadbalancing:CreateTargetGroup
+                  - elasticloadbalancing:DeleteTargetGroup
+                  - elasticloadbalancing:DescribeTargetGroups
+                  - elasticloadbalancing:DescribeTargetHealth
+                  - elasticloadbalancing:RegisterTargets
+                  - elasticloadbalancing:DeregisterTargets
+                  - elasticloadbalancing:CreateListener
+                  - elasticloadbalancing:DeleteListener
+                  - elasticloadbalancing:DescribeListeners
+                  - elasticloadbalancing:ModifyLoadBalancerAttributes
+                  - elasticloadbalancing:ModifyTargetGroupAttributes
+                  - elasticloadbalancing:AddTags
+                  - elasticloadbalancing:RemoveTags
+                  - elasticloadbalancing:DescribeTags
+                  - elasticloadbalancing:CreateRule
+                  - elasticloadbalancing:DeleteRule
+                  - elasticloadbalancing:DescribeRules
+                  - elasticloadbalancing:ModifyRule
+                Resource: !Sub "arn:aws:*:*:${AWS::AccountId}:*"
+              - Sid: ECRAuthToken
+                Effect: Allow
+                Action:
+                  - ecr:GetAuthorizationToken
                 Resource: "*"
               - Sid: ECRAccess
                 Effect: Allow
                 Action:
-                  - ecr:GetAuthorizationToken
                   - ecr:BatchCheckLayerAvailability
                   - ecr:GetDownloadUrlForLayer
                   - ecr:BatchGetImage
@@ -471,8 +738,7 @@ Resources:
                   - ecr:DescribeImages
                   - ecr:TagResource
                 Resource:
-                  - "*"
-                  - !Sub "arn:aws:ecr:*:${AWS::AccountId}:repository/e2b-*"
+                  - !Sub "arn:aws:ecr:*:${AWS::AccountId}:repository/e2b*"
               - Sid: IAMAccess
                 Effect: Allow
                 Action:
@@ -521,10 +787,8 @@ Resources:
                       - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
                       - arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
                       - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
-                      - arn:aws:iam::aws:policy/AmazonEC2FullAccess
-                      - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryFullAccess
-                      - arn:aws:iam::aws:policy/AmazonS3FullAccess
-                      - arn:aws:iam::aws:policy/SecretsManagerReadWrite
+                      - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
+                      - arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
                       - arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role
               - Sid: IAMPassRole
                 Effect: Allow
@@ -550,8 +814,19 @@ Resources:
               - Sid: LogsAndMonitoring
                 Effect: Allow
                 Action:
-                  - logs:*
-                  - cloudwatch:*
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - logs:DescribeLogGroups
+                  - logs:DescribeLogStreams
+                  - logs:GetLogEvents
+                  - logs:TagResource
+                  - cloudwatch:PutMetricData
+                  - cloudwatch:GetMetricData
+                  - cloudwatch:ListMetrics
+                  - cloudwatch:DescribeAlarms
+                  - cloudwatch:PutMetricAlarm
+                  - cloudwatch:DeleteAlarms
                 Resource: "*"
               - Sid: ElastiCacheAccess
                 Effect: Allow
@@ -602,16 +877,41 @@ Resources:
   # ------------------------------------------------------------------------------------------------
   # S3 Buckets - Object storage for Terraform state files and software artifacts
   # ------------------------------------------------------------------------------------------------
+  TerraformStateKMSKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: KMS key for Terraform state bucket encryption
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: EnableRootAccountAccess
+            Effect: Allow
+            Principal:
+              AWS: !Sub "arn:aws:iam::${AWS::AccountId}:root"
+            Action: "kms:*"
+            Resource: "*"
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-terraform-state-kms"
+
+  TerraformStateKMSAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub "alias/${AWS::StackName}-terraform-state"
+      TargetKeyId: !Ref TerraformStateKMSKey
+
   TerraformS3Bucket:
     Type: AWS::S3::Bucket
     Properties:
       BucketName: !Sub "terraform-${AWS::StackName}-${AWS::Region}-${AWS::AccountId}"
       VersioningConfiguration:
-        Status: Suspended
+        Status: Enabled
       BucketEncryption:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault:
-              SSEAlgorithm: AES256
+              SSEAlgorithm: "aws:kms"
+              KMSMasterKeyID: !GetAtt TerraformStateKMSKey.Arn
       AccessControl: Private
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
@@ -622,16 +922,32 @@ Resources:
         - Key: Name
           Value: !Sub "${AWS::StackName}-terraform-bucket"
 
+  TerraformStateLockTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "terraform-lock-${AWS::StackName}"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: LockID
+          AttributeType: S
+      KeySchema:
+        - AttributeName: LockID
+          KeyType: HASH
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-terraform-lock"
+
   SoftwareS3Bucket:
     Type: AWS::S3::Bucket
     Properties:
       BucketName: !Sub "software-${AWS::StackName}-${AWS::Region}-${AWS::AccountId}"
       VersioningConfiguration:
-        Status: Suspended
+        Status: Enabled
       BucketEncryption:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault:
-              SSEAlgorithm: AES256
+              SSEAlgorithm: "aws:kms"
+              KMSMasterKeyID: !GetAtt TerraformStateKMSKey.Arn
       AccessControl: Private
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
@@ -671,12 +987,14 @@ Resources:
       DBSubnetGroupName: !Ref DBSubnetGroup
       DatabaseName: !Ref DBName
       MasterUsername: !Ref DBUsername
-      MasterUserPassword: !Ref DBPassword
       ServerlessV2ScalingConfiguration:
         MinCapacity: 0.5
         MaxCapacity: 4
       StorageEncrypted: true
       DeletionProtection: !If [IsProd, true, false]
+      BackupRetentionPeriod: !If [IsProd, 14, 7]
+      EnableIAMDatabaseAuthentication: true
+      ManageMasterUserPassword: true
       VpcSecurityGroupIds:
         - !GetAtt DBSecurityGroup.GroupId
       Tags:

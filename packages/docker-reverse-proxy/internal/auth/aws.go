@@ -28,27 +28,30 @@ func EnsureECRRepositoryExists(templateID string) error {
 	if err != nil {
 		return fmt.Errorf("failed to get AWS session: %v", err)
 	}
-	
+
 	// Create ECR client
 	ecrClient := ecr.New(sess)
-	
+
 	// Format repository name for the template using base_repo_name/template_id format
 	templateRepo := fmt.Sprintf("%s/%s", constants.AWSECRRepository, templateID)
-	
+
 	log.Printf("[DEBUG] ECR - Checking if repository %s exists", templateRepo)
-	
+
 	// Check if repository exists
 	_, err = ecrClient.DescribeRepositories(&ecr.DescribeRepositoriesInput{
 		RepositoryNames: []*string{aws.String(templateRepo)},
 	})
-	
+
 	if err != nil {
 		if aerr, ok := err.(awserr.Error); ok && aerr.Code() == ecr.ErrCodeRepositoryNotFoundException {
 			// Repository doesn't exist, create it
 			log.Printf("[DEBUG] ECR - Creating repository %s for template %s", templateRepo, templateID)
 			_, err = ecrClient.CreateRepository(&ecr.CreateRepositoryInput{
-				RepositoryName: aws.String(templateRepo),
-				ImageTagMutability: aws.String(ecr.ImageTagMutabilityMutable),
+				RepositoryName:     aws.String(templateRepo),
+				ImageTagMutability: aws.String(ecr.ImageTagMutabilityImmutable),
+				ImageScanningConfiguration: &ecr.ImageScanningConfiguration{
+					ScanOnPush: aws.Bool(true),
+				},
 			})
 			if err != nil {
 				return fmt.Errorf("failed to create ECR repository: %v", err)
@@ -58,7 +61,7 @@ func EnsureECRRepositoryExists(templateID string) error {
 		}
 		return fmt.Errorf("failed to check ECR repository: %v", err)
 	}
-	
+
 	// Repository exists
 	log.Printf("[DEBUG] ECR - Repository %s already exists", templateRepo)
 	return nil
@@ -78,7 +81,7 @@ func GetAWSECRAuthToken() (*AWSAuthResponse, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to get AWS region: %v", err)
 		}
-		
+
 		// 使用获取到的区域创建新的会话
 		newConfig := aws.Config{
 			Region: aws.String(region),
@@ -86,7 +89,7 @@ func GetAWSECRAuthToken() (*AWSAuthResponse, error) {
 		if sess.Config.Credentials != nil {
 			newConfig.Credentials = sess.Config.Credentials
 		}
-		
+
 		newSess, err := session.NewSession(&newConfig)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create AWS session with region: %v", err)
@@ -120,13 +123,13 @@ func GetAWSECRAuthToken() (*AWSAuthResponse, error) {
 		log.Printf("[ERROR] ECR Auth - Failed to decode token: %v", err)
 		return nil, fmt.Errorf("failed to decode ECR authorization token: %v", err)
 	}
-	
+
 	tokenStr := string(decodedToken)
 	if !strings.Contains(tokenStr, ":") {
 		log.Printf("[ERROR] ECR Auth - Invalid token format")
 		return nil, fmt.Errorf("invalid ECR token format")
 	}
-	
+
 	// Important: For AWS ECR, we return the raw base64 encoded token
 	// This will be used directly in the Basic auth header
 	return &AWSAuthResponse{
