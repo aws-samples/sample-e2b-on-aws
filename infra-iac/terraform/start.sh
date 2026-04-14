@@ -162,21 +162,35 @@ fi
 # Database credentials are stored in Secrets Manager (CFNDBCredentialSecretName in config file)
 # No DB parameters (host, port, user, password) written to config file
 
-# Set Nomad ACL token from the secret
-NOMAD_TOKEN=$(grep -i "NOMAD_SECRET_ID=" "$CONFIG_FILE" | cut -d'=' -f2)
-if [ -n "$NOMAD_TOKEN" ]; then
-    echo "nomad_acl_token=${NOMAD_TOKEN}" >> "$CONFIG_FILE"
+# Retrieve Nomad ACL token from Secrets Manager at runtime
+NOMAD_SECRET_NAME=$(grep -i "NOMAD_SECRET_ID=" "$CONFIG_FILE" | cut -d'=' -f2)
+AWSREGION=$(grep "^AWSREGION=" "$CONFIG_FILE" | cut -d'=' -f2)
+if [ -n "$NOMAD_SECRET_NAME" ]; then
+    NOMAD_TOKEN=$(aws secretsmanager get-secret-value --secret-id "$NOMAD_SECRET_NAME" --region "$AWSREGION" --query SecretString --output text 2>/dev/null)
+    if [ -n "$NOMAD_TOKEN" ]; then
+        echo "nomad_acl_token=${NOMAD_TOKEN}" >> "$CONFIG_FILE"
+    else
+        echo "Warning: Failed to retrieve Nomad ACL token from Secrets Manager"
+    fi
 else
-    echo "Warning: Nomad ACL token not found in config file"
+    echo "Warning: NOMAD_SECRET_ID not found in config file"
 fi
 
-# Set Consul HTTP token from the secret
-CONSUL_TOKEN=$(grep -i "CONSUL_SECRET_ID=" "$CONFIG_FILE" | cut -d'=' -f2)
-if [ -n "$CONSUL_TOKEN" ]; then
-    echo "consul_http_token=${CONSUL_TOKEN}" >> "$CONFIG_FILE"
+# Retrieve Consul HTTP token from Secrets Manager at runtime
+CONSUL_SECRET_NAME=$(grep -i "CONSUL_SECRET_ID=" "$CONFIG_FILE" | cut -d'=' -f2)
+if [ -n "$CONSUL_SECRET_NAME" ]; then
+    CONSUL_TOKEN=$(aws secretsmanager get-secret-value --secret-id "$CONSUL_SECRET_NAME" --region "$AWSREGION" --query SecretString --output text 2>/dev/null)
+    if [ -n "$CONSUL_TOKEN" ]; then
+        echo "consul_http_token=${CONSUL_TOKEN}" >> "$CONFIG_FILE"
+    else
+        echo "Warning: Failed to retrieve Consul HTTP token from Secrets Manager"
+    fi
 else
-    echo "Warning: Consul ACL token not found in config file"
+    echo "Warning: CONSUL_SECRET_ID not found in config file"
 fi
+
+# Restrict config file permissions after writing secrets
+chmod 600 "$CONFIG_FILE"
 
 # Generate random admin token
 ADMIN_TOKEN=$(openssl rand -base64 32 | tr -dc 'a-zA-Z0-9!@#$%^&*()_+{}|:<>?=-' | head -c 30)

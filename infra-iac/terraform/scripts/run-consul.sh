@@ -317,6 +317,7 @@ EOF
   log_info "Installing Consul config file in $config_path"
   echo "$default_config_json" | jq '.' >"$config_path"
   chown "$user:$user" "$config_path"
+  chmod 600 "$config_path"
 }
 
 function generate_systemd_config {
@@ -403,8 +404,9 @@ function bootstrap {
       local consul_token="$1"
       log_info "Bootstrapping Consul"
       echo "${consul_token}" >/tmp/consul.token
+      chmod 600 /tmp/consul.token
       consul acl bootstrap /tmp/consul.token
-      # rm /tmp/consul.token
+      rm -f /tmp/consul.token
 
       break
     fi

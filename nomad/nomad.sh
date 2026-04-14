@@ -3,8 +3,9 @@
 # Set the output environment variable file path
 ENV_FILE="/tmp/nomad_env.sh"
 
-# Clear or create the environment variable file
+# Clear or create the environment variable file with restricted permissions
 > $ENV_FILE
+chmod 600 $ENV_FILE
 
 # Read the configuration file and extract CFNSTACKNAME
 if [ -f /opt/config.properties ]; then

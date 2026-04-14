@@ -574,11 +574,11 @@ resource "aws_launch_template" "server" {
     NUM_SERVERS                  = 3
     CLUSTER_TAG_NAME             = "server-cluster"
     SCRIPTS_BUCKET               = aws_s3_bucket.setup_bucket.bucket
-    NOMAD_TOKEN                  = aws_secretsmanager_secret_version.nomad_acl_token.secret_string
-    CONSUL_TOKEN                 = aws_secretsmanager_secret_version.consul_acl_token.secret_string
+    NOMAD_SECRET_NAME            = aws_secretsmanager_secret.nomad_acl_token.name
+    CONSUL_SECRET_NAME           = aws_secretsmanager_secret.consul_acl_token.name
     RUN_CONSUL_FILE_HASH         = local.file_hash["scripts/run-consul.sh"]
     RUN_NOMAD_FILE_HASH          = local.file_hash["scripts/run-nomad.sh"]
-    CONSUL_GOSSIP_ENCRYPTION_KEY = aws_secretsmanager_secret_version.consul_gossip_encryption_key.secret_string
+    CONSUL_GOSSIP_SECRET_NAME    = aws_secretsmanager_secret.consul_gossip_encryption_key.name
     AWS_REGION                   = local.aws_region
     AWS_ACCOUNT_ID               = local.account_id
   }))
@@ -739,12 +739,12 @@ resource "aws_launch_template" "client" {
     DOCKER_CONTEXTS_BUCKET_NAME  = aws_s3_bucket.docker_contexts_bucket.bucket
     AWS_REGION                   = local.aws_region
     AWS_ACCOUNT_ID               = local.account_id
-    NOMAD_TOKEN                  = aws_secretsmanager_secret_version.nomad_acl_token.secret_string
-    CONSUL_TOKEN                 = aws_secretsmanager_secret_version.consul_acl_token.secret_string
+    NOMAD_SECRET_NAME            = aws_secretsmanager_secret.nomad_acl_token.name
+    CONSUL_SECRET_NAME           = aws_secretsmanager_secret.consul_acl_token.name
     RUN_CONSUL_FILE_HASH         = local.file_hash["scripts/run-consul.sh"]
     RUN_NOMAD_FILE_HASH          = local.file_hash["scripts/run-nomad.sh"]
-    CONSUL_GOSSIP_ENCRYPTION_KEY = aws_secretsmanager_secret_version.consul_gossip_encryption_key.secret_string
-    CONSUL_DNS_REQUEST_TOKEN     = aws_secretsmanager_secret_version.consul_dns_request_token.secret_string
+    CONSUL_GOSSIP_SECRET_NAME    = aws_secretsmanager_secret.consul_gossip_encryption_key.name
+    CONSUL_DNS_SECRET_NAME       = aws_secretsmanager_secret.consul_dns_request_token.name
   }))
 
   tag_specifications {
@@ -1198,12 +1198,12 @@ resource "aws_launch_template" "api" {
     DOCKER_CONTEXTS_BUCKET_NAME  = aws_s3_bucket.docker_contexts_bucket.bucket
     AWS_REGION                   = local.aws_region
     AWS_ACCOUNT_ID               = local.account_id
-    NOMAD_TOKEN                  = aws_secretsmanager_secret_version.nomad_acl_token.secret_string
-    CONSUL_TOKEN                 = aws_secretsmanager_secret_version.consul_acl_token.secret_string
+    NOMAD_SECRET_NAME            = aws_secretsmanager_secret.nomad_acl_token.name
+    CONSUL_SECRET_NAME           = aws_secretsmanager_secret.consul_acl_token.name
     RUN_CONSUL_FILE_HASH         = local.file_hash["scripts/run-consul.sh"]
     RUN_NOMAD_FILE_HASH          = local.file_hash["scripts/run-api-nomad.sh"]
-    CONSUL_GOSSIP_ENCRYPTION_KEY = aws_secretsmanager_secret_version.consul_gossip_encryption_key.secret_string
-    CONSUL_DNS_REQUEST_TOKEN     = aws_secretsmanager_secret_version.consul_dns_request_token.secret_string
+    CONSUL_GOSSIP_SECRET_NAME    = aws_secretsmanager_secret.consul_gossip_encryption_key.name
+    CONSUL_DNS_SECRET_NAME       = aws_secretsmanager_secret.consul_dns_request_token.name
   }))
 
   tag_specifications {
@@ -1366,12 +1366,12 @@ resource "aws_launch_template" "build" {
     DOCKER_CONTEXTS_BUCKET_NAME  = aws_s3_bucket.docker_contexts_bucket.bucket
     AWS_REGION                   = local.aws_region
     AWS_ACCOUNT_ID               = local.account_id
-    NOMAD_TOKEN                  = aws_secretsmanager_secret_version.nomad_acl_token.secret_string
-    CONSUL_TOKEN                 = aws_secretsmanager_secret_version.consul_acl_token.secret_string
+    NOMAD_SECRET_NAME            = aws_secretsmanager_secret.nomad_acl_token.name
+    CONSUL_SECRET_NAME           = aws_secretsmanager_secret.consul_acl_token.name
     RUN_CONSUL_FILE_HASH         = local.file_hash["scripts/run-consul.sh"]
     RUN_NOMAD_FILE_HASH          = local.file_hash["scripts/run-build-cluster-nomad.sh"]
-    CONSUL_GOSSIP_ENCRYPTION_KEY = aws_secretsmanager_secret_version.consul_gossip_encryption_key.secret_string
-    CONSUL_DNS_REQUEST_TOKEN     = aws_secretsmanager_secret_version.consul_dns_request_token.secret_string
+    CONSUL_GOSSIP_SECRET_NAME    = aws_secretsmanager_secret.consul_gossip_encryption_key.name
+    CONSUL_DNS_SECRET_NAME       = aws_secretsmanager_secret.consul_dns_request_token.name
   }))
 
   tag_specifications {

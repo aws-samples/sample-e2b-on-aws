@@ -260,6 +260,7 @@ consul {
 }
 EOF
   chown "$user:$user" "$config_path"
+  chmod 600 "$config_path"
 }
 
 function generate_supervisor_config {
@@ -308,8 +309,9 @@ function bootstrap {
   local readonly nomad_token="$1"
   log_info "Bootstrapping Nomad"
   echo "$nomad_token" >"/tmp/nomad.token"
+  chmod 600 /tmp/nomad.token
   nomad acl bootstrap /tmp/nomad.token
-  # rm "/tmp/nomad.token"
+  rm -f "/tmp/nomad.token"
 }
 
 function create_node_pools {

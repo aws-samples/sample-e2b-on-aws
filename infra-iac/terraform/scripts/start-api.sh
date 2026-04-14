@@ -70,7 +70,15 @@ Domains=~consul
 EOF
 systemctl restart systemd-resolved
 
-# These variables are passed in via Terraform template interpolation
+# Retrieve secrets at runtime from AWS Secrets Manager
+get_secret() {
+  aws secretsmanager get-secret-value --secret-id "$1" --region "${AWS_REGION}" --query SecretString --output text
+}
+
+CONSUL_TOKEN=$(get_secret "${CONSUL_SECRET_NAME}")
+CONSUL_GOSSIP_ENCRYPTION_KEY=$(get_secret "${CONSUL_GOSSIP_SECRET_NAME}")
+CONSUL_DNS_REQUEST_TOKEN=$(get_secret "${CONSUL_DNS_SECRET_NAME}")
+
 /opt/consul/bin/run-consul.sh --client \
     --consul-token "${CONSUL_TOKEN}" \
     --cluster-tag-name "${CLUSTER_TAG_NAME}" \
