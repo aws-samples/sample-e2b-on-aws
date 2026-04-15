@@ -794,42 +794,36 @@ Resources:
                   - ec2:DescribeKeyPairs
                   - ec2:DescribeNetworkInterfaces
                 Resource: "*"
-              - Sid: AutoScalingAndELB
+              - Sid: AutoScalingAndELBDescribe
+                Effect: Allow
+                Action:
+                  - autoscaling:Describe*
+                  - elasticloadbalancing:Describe*
+                Resource: "*"
+              - Sid: AutoScalingAndELBMutate
                 Effect: Allow
                 Action:
                   - autoscaling:CreateAutoScalingGroup
                   - autoscaling:UpdateAutoScalingGroup
                   - autoscaling:DeleteAutoScalingGroup
-                  - autoscaling:DescribeAutoScalingGroups
-                  - autoscaling:DescribeAutoScalingInstances
-                  - autoscaling:DescribeLaunchConfigurations
-                  - autoscaling:DescribeScalingActivities
-                  - autoscaling:DescribePolicies
                   - autoscaling:SetDesiredCapacity
                   - autoscaling:TerminateInstanceInAutoScalingGroup
                   - autoscaling:CreateOrUpdateTags
                   - autoscaling:DeleteTags
-                  - autoscaling:DescribeTags
                   - elasticloadbalancing:CreateLoadBalancer
                   - elasticloadbalancing:DeleteLoadBalancer
-                  - elasticloadbalancing:DescribeLoadBalancers
                   - elasticloadbalancing:CreateTargetGroup
                   - elasticloadbalancing:DeleteTargetGroup
-                  - elasticloadbalancing:DescribeTargetGroups
-                  - elasticloadbalancing:DescribeTargetHealth
                   - elasticloadbalancing:RegisterTargets
                   - elasticloadbalancing:DeregisterTargets
                   - elasticloadbalancing:CreateListener
                   - elasticloadbalancing:DeleteListener
-                  - elasticloadbalancing:DescribeListeners
                   - elasticloadbalancing:ModifyLoadBalancerAttributes
                   - elasticloadbalancing:ModifyTargetGroupAttributes
                   - elasticloadbalancing:AddTags
                   - elasticloadbalancing:RemoveTags
-                  - elasticloadbalancing:DescribeTags
                   - elasticloadbalancing:CreateRule
                   - elasticloadbalancing:DeleteRule
-                  - elasticloadbalancing:DescribeRules
                   - elasticloadbalancing:ModifyRule
                 Resource:
                   - !Sub "arn:aws:autoscaling:*:${AWS::AccountId}:*"
@@ -939,6 +933,7 @@ Resources:
                   - logs:DescribeLogStreams
                   - logs:GetLogEvents
                   - logs:TagResource
+                  - logs:PutRetentionPolicy
                   - cloudwatch:PutMetricData
                   - cloudwatch:GetMetricData
                   - cloudwatch:ListMetrics
