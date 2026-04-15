@@ -33,10 +33,6 @@ setup_environment() {
     echo "$key=${CFN_OUTPUTS[$key]}" >> /opt/config.properties
   done
 
-  REGION=$(aws configure get region)
-  echo "AWSREGION=$REGION" >> /opt/config.properties
-
-
   SUBNET1=$(grep "^CFNPRIVATESUBNET1=" /opt/config.properties | cut -d= -f2)
   SUBNET2=$(grep "^CFNPRIVATESUBNET2=" /opt/config.properties | cut -d= -f2)
   AZ1=$(aws ec2 describe-subnets --subnet-ids $SUBNET1 --query 'Subnets[*].[AvailabilityZone]' --output text)
