@@ -640,6 +640,13 @@ Resources:
                   - ssm:DeleteParameter
                   - ssm:DescribeParameters
                 Resource: !Sub "arn:aws:ssm:*:${AWS::AccountId}:parameter/*e2b*"
+              - Sid: KMSAccess
+                Effect: Allow
+                Action:
+                  - kms:GenerateDataKey
+                  - kms:Decrypt
+                  - kms:DescribeKey
+                Resource: !GetAtt TerraformStateKMSKey.Arn
               - Sid: STSAccess
                 Effect: Allow
                 Action:
