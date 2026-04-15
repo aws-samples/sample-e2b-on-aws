@@ -1,7 +1,7 @@
 ENV := $(shell cat ../../.last_used_env || echo "not-set")
 -include ../../.env.${ENV}
 
-IMAGE := docker-reverse-proxy
+IMAGE := e2b-orchestration/docker-reverse-proxy
 
 .PHONY: build
 build:
