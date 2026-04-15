@@ -494,6 +494,9 @@ Resources:
                   - autoscaling:TerminateInstanceInAutoScalingGroup
                   - autoscaling:CreateOrUpdateTags
                   - autoscaling:DeleteTags
+                  - autoscaling:SetInstanceProtection
+                  - autoscaling:AttachLoadBalancerTargetGroups
+                  - autoscaling:DetachLoadBalancerTargetGroups
                   - elasticloadbalancing:CreateLoadBalancer
                   - elasticloadbalancing:DeleteLoadBalancer
                   - elasticloadbalancing:CreateTargetGroup
