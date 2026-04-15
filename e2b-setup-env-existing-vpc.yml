@@ -427,6 +427,19 @@ Resources:
       RuleAction: allow
       CidrBlock: !GetAtt VpcCidrLookup.CidrBlock
 
+  PrivateSubnetNACLOutboundHTTP:
+    Type: AWS::EC2::NetworkAclEntry
+    Properties:
+      NetworkAclId: !Ref PrivateSubnetNACL
+      RuleNumber: 190
+      Protocol: 6
+      Egress: true
+      RuleAction: allow
+      CidrBlock: "0.0.0.0/0"
+      PortRange:
+        From: 80
+        To: 80
+
   PrivateSubnetNACLOutboundHTTPS:
     Type: AWS::EC2::NetworkAclEntry
     Properties:
@@ -479,6 +492,10 @@ Resources:
           ToPort: "22"
           CidrIp: !Ref AllowRemoteSSHIPs
       SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: "0.0.0.0/0"
         - IpProtocol: tcp
           FromPort: 443
           ToPort: 443
