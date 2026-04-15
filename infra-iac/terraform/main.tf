@@ -1594,10 +1594,3 @@ resource "aws_autoscaling_group" "build" {
   }
 }
 
-# Create CloudWatch logs group for cluster
-resource "aws_cloudwatch_log_group" "cluster_logs" {
-  name              = "${var.prefix}-cluster-logs"
-  retention_in_days = 7
-
-  tags = local.common_tags
-}

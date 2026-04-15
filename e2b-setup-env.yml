@@ -923,17 +923,9 @@ Resources:
                     iam:AWSServiceName:
                       - autoscaling.amazonaws.com
                       - elasticloadbalancing.amazonaws.com
-              - Sid: LogsAndMonitoring
+              - Sid: CloudWatchMonitoring
                 Effect: Allow
                 Action:
-                  - logs:CreateLogGroup
-                  - logs:CreateLogStream
-                  - logs:PutLogEvents
-                  - logs:DescribeLogGroups
-                  - logs:DescribeLogStreams
-                  - logs:GetLogEvents
-                  - logs:TagResource
-                  - logs:PutRetentionPolicy
                   - cloudwatch:PutMetricData
                   - cloudwatch:GetMetricData
                   - cloudwatch:ListMetrics
