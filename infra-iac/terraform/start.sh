@@ -162,9 +162,9 @@ fi
 # Database credentials are stored in Secrets Manager (CFNDBCredentialSecretName in config file)
 # No DB parameters (host, port, user, password) written to config file
 
-# Retrieve Nomad ACL token from Secrets Manager at runtime
-NOMAD_SECRET_NAME=$(grep -i "NOMAD_SECRET_ID=" "$CONFIG_FILE" | cut -d'=' -f2)
+# Retrieve Nomad/Consul tokens from Secrets Manager via Terraform outputs
 AWSREGION=$(grep "^AWSREGION=" "$CONFIG_FILE" | cut -d'=' -f2)
+NOMAD_SECRET_NAME=$(terraform output -raw nomad_acl_token_secret_name 2>/dev/null)
 if [ -n "$NOMAD_SECRET_NAME" ]; then
     NOMAD_TOKEN=$(aws secretsmanager get-secret-value --secret-id "$NOMAD_SECRET_NAME" --region "$AWSREGION" --query SecretString --output text 2>/dev/null)
     if [ -n "$NOMAD_TOKEN" ]; then
@@ -173,11 +173,10 @@ if [ -n "$NOMAD_SECRET_NAME" ]; then
         echo "Warning: Failed to retrieve Nomad ACL token from Secrets Manager"
     fi
 else
-    echo "Warning: NOMAD_SECRET_ID not found in config file"
+    echo "Warning: nomad_acl_token_secret_name not found in terraform output"
 fi
 
-# Retrieve Consul HTTP token from Secrets Manager at runtime
-CONSUL_SECRET_NAME=$(grep -i "CONSUL_SECRET_ID=" "$CONFIG_FILE" | cut -d'=' -f2)
+CONSUL_SECRET_NAME=$(terraform output -raw consul_acl_token_secret_name 2>/dev/null)
 if [ -n "$CONSUL_SECRET_NAME" ]; then
     CONSUL_TOKEN=$(aws secretsmanager get-secret-value --secret-id "$CONSUL_SECRET_NAME" --region "$AWSREGION" --query SecretString --output text 2>/dev/null)
     if [ -n "$CONSUL_TOKEN" ]; then
@@ -186,7 +185,7 @@ if [ -n "$CONSUL_SECRET_NAME" ]; then
         echo "Warning: Failed to retrieve Consul HTTP token from Secrets Manager"
     fi
 else
-    echo "Warning: CONSUL_SECRET_ID not found in config file"
+    echo "Warning: consul_acl_token_secret_name not found in terraform output"
 fi
 
 # Restrict config file permissions after writing secrets
