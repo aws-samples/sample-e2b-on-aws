@@ -9,14 +9,16 @@ setup_environment() {
   # Validate stack existence
   [[ -z "$STACK_ID" ]] && { echo "Error: Failed to get CloudFormation Stack ID"; exit 1; }
 
-  # Dynamic export of CFN outputs
+  # Dynamic export of CFN outputs (Export Names are prefixed with stack name)
   declare -A CFN_OUTPUTS
   while IFS=$'\t' read -r key value; do
+    # Strip stack name prefix from export name (e.g. "mystack-CFNVPCID" → "CFNVPCID")
+    key="${key#${STACK_ID}-}"
     CFN_OUTPUTS["$key"]="$value"
     done < <(
     aws cloudformation describe-stacks \
         --stack-name "$STACK_ID" \
-        --query "Stacks[0].Outputs[?ExportName != null && starts_with(ExportName || '', 'CFN')].[ExportName,OutputValue]" \
+        --query "Stacks[0].Outputs[?ExportName != null].[ExportName,OutputValue]" \
         --output text
     )
 
