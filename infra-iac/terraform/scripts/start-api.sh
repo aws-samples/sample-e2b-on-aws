@@ -87,10 +87,10 @@ get_secret "${NOMAD_TLS_KEY_SECRET}" > /opt/nomad/tls/key.pem
 chmod 600 /opt/nomad/tls/*.pem
 
 /opt/consul/bin/run-consul.sh --client \
-    --consul-token "${CONSUL_TOKEN}" \
+    --consul-token "$${CONSUL_TOKEN}" \
     --cluster-tag-name "${CLUSTER_TAG_NAME}" \
     --enable-gossip-encryption \
-    --gossip-encryption-key "${CONSUL_GOSSIP_ENCRYPTION_KEY}" \
-    --dns-request-token "${CONSUL_DNS_REQUEST_TOKEN}" &
+    --gossip-encryption-key "$${CONSUL_GOSSIP_ENCRYPTION_KEY}" \
+    --dns-request-token "$${CONSUL_DNS_REQUEST_TOKEN}" &
 
-/opt/nomad/bin/run-nomad.sh --consul-token "${CONSUL_TOKEN}" &
+/opt/nomad/bin/run-nomad.sh --consul-token "$${CONSUL_TOKEN}" &
