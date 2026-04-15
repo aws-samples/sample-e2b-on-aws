@@ -812,7 +812,9 @@ Resources:
                   - elasticloadbalancing:DeleteRule
                   - elasticloadbalancing:DescribeRules
                   - elasticloadbalancing:ModifyRule
-                Resource: !Sub "arn:aws:*:*:${AWS::AccountId}:*"
+                Resource:
+                  - !Sub "arn:aws:autoscaling:*:${AWS::AccountId}:*"
+                  - !Sub "arn:aws:elasticloadbalancing:*:${AWS::AccountId}:*"
               - Sid: ECRAuthToken
                 Effect: Allow
                 Action:
