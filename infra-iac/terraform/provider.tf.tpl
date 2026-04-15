@@ -8,6 +8,5 @@ terraform {
     key            = "${CFNSTACKNAME}/terraform.tfstate"
     region         = "${AWSREGION}"
     encrypt        = true
-    dynamodb_table = "terraform-lock-${CFNSTACKNAME}"
   }
 }

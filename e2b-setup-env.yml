@@ -1052,21 +1052,6 @@ Resources:
         - Key: Name
           Value: !Sub "${AWS::StackName}-terraform-bucket"
 
-  TerraformStateLockTable:
-    Type: AWS::DynamoDB::Table
-    Properties:
-      TableName: !Sub "terraform-lock-${AWS::StackName}"
-      BillingMode: PAY_PER_REQUEST
-      AttributeDefinitions:
-        - AttributeName: LockID
-          AttributeType: S
-      KeySchema:
-        - AttributeName: LockID
-          KeyType: HASH
-      Tags:
-        - Key: Name
-          Value: !Sub "${AWS::StackName}-terraform-lock"
-
   SoftwareS3Bucket:
     Type: AWS::S3::Bucket
     Properties:
