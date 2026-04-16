@@ -118,33 +118,64 @@ tail -f /tmp/e2b.log
 3. **Retrieve Token**: Run `cat /opt/config.properties` to get the Nomad management token
 
 <details>
-<summary><strong>📊 Configure E2B Monitoring (Optional)</strong></summary>
+<summary><strong>📊 Logging & Monitoring (Optional)</strong></summary>
 
-1. Login to https://grafana.com/ (register if needed)
-2. Access your settings page at `https://grafana.com/orgs/<username>`
-3. In your Stack, find **Manage your stack** page
-4. Find **OpenTelemetry** and click **Configure**
-5. Note the following values:
-   ```
-   Endpoint for sending OTLP signals: xxxx
-   Instance ID: xxxxxxx
-   Password / API Token: xxxxx
-   ```
-6. Export Grafana environment variables:
-   ```bash
-   cat << EOF >> /opt/config.properties
+The logging and monitoring stack consists of three components deployed via `nomad/deploy.sh --all`:
 
-   # Grafana configuration
-   grafana_otel_collector_token=xxx
-   grafana_otlp_url=xxx
-   grafana_username=xxx
-   EOF
-   ```
-7. Deploy OpenTelemetry collector:
-   ```bash
-   bash nomad/deploy.sh otel-collector
-   ```
-8. Open Grafana Cloud Dashboard to view metrics, traces, and logs
+| Component | Type | Purpose | Port |
+|---|---|---|---|
+| **OTel Collector** | system (all nodes) | Collects metrics, traces, and application logs via OTLP | 4317 (gRPC), 4318 (HTTP) |
+| **Logs Collector (Vector)** | system (all nodes) | Collects sandbox user logs, routes to Loki | 30006 |
+| **Loki** | service (api node) | Log storage and query engine, backed by S3 | 3100 |
+
+**Architecture:**
+
+```
+┌─────────────────────────────┐     ┌──────────────────────┐
+│ Go Services (api/orch/proxy)│     │ Sandbox envd         │
+│  OTel SDK → gRPC :4317      │     │  HTTP → :30006       │
+└──────────┬──────────────────┘     └──────────┬───────────┘
+           │                                    │
+           ▼                                    ▼
+┌──────────────────────┐            ┌──────────────────────┐
+│   OTel Collector      │            │   Vector (logs-coll) │
+│   Metrics/Traces/Logs │            │   Sandbox user logs  │
+│   → Customer endpoint │            │   → Loki             │
+└──────────────────────┘            └──────────┬───────────┘
+                                               ▼
+                                    ┌──────────────────────┐
+                                    │   Loki               │
+                                    │   Storage: S3 bucket │
+                                    └──────────────────────┘
+```
+
+#### Deploy with Customer OTel Endpoint
+
+Configure your OTel-compatible backend endpoint:
+
+```bash
+cat << EOF >> /opt/config.properties
+
+# Customer OTel endpoint (no authentication)
+# Use http:// for plaintext, https:// for TLS
+otel_customer_endpoint=http://your-otel-collector:4318
+EOF
+
+# Deploy all monitoring components
+bash nomad/deploy.sh --all
+```
+
+#### Data Flow Details
+
+| Data Type | Source | Pipeline | Storage |
+|---|---|---|---|
+| **Metrics** (application) | Go services OTel SDK | → OTel Collector → Customer endpoint | External |
+| **Metrics** (infrastructure) | Nomad `/v1/metrics` | → OTel Collector (Prometheus scrape) → Customer endpoint | External |
+| **Traces** | Go services OTel SDK | → OTel Collector → Customer endpoint | External |
+| **Application Logs** | Go services zap logger | → OTel Collector (OTLP log bridge) → Customer endpoint | External |
+| **Sandbox User Logs** | envd → orchestrator | → Vector (:30006) → Loki (:3100) | **S3** (Loki bucket) |
+
+> **Note:** Sandbox user logs always go through Vector → Loki → S3, independent of the OTel pipeline. The Loki S3 bucket is created by Terraform (`{prefix}-loki-storage-{account_id}`).
 
 </details>
 

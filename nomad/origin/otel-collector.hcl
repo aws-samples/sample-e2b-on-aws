@@ -189,34 +189,19 @@ processors:
     logs:
       log_record:
         - 'severity_number < SEVERITY_NUMBER_WARN'
+
 extensions:
-  basicauth/grafana_cloud:
-    # https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/extension/basicauthextension
-    client_auth:
-      username: "${grafana_username}"
-      password: "${grafana_otel_collector_token}"
-
-  basicauth/grafana_cloud_prometheus:
-    client_auth:
-      username: "${grafana_prometheus_username}"
-      password: "${grafana_otel_collector_token}"
-
   health_check:
     endpoint: 0.0.0.0:13133
+
 exporters:
   debug:
     verbosity: detailed
-  otlphttp/grafana_cloud:
-    # https://github.com/open-telemetry/opentelemetry-collector/tree/main/exporter/otlpexporter
-    endpoint: "${grafana_otlp_url}"
-    auth:
-      authenticator: basicauth/grafana_cloud
-  prometheusremotewrite/grafana_cloud:
-    endpoint: "https://prometheus-prod-36-prod-us-west-0.grafana.net/api/prom/push"
-    auth:
-      authenticator: basicauth/grafana_cloud_prometheus
-    resource_to_telemetry_conversion:
-      enabled: true
+  # Customer OTel HTTP endpoint (no auth required)
+  # Use http:// for insecure, https:// for TLS
+  otlphttp/customer:
+    endpoint: "${otel_customer_endpoint}"
+
 service:
   telemetry:
     logs:
@@ -230,40 +215,28 @@ service:
                 insecure: true
                 endpoint: localhost:4317
   extensions:
-    - basicauth/grafana_cloud
-    - basicauth/grafana_cloud_prometheus
     - health_check
   pipelines:
     metrics:
-      receivers:
-        - otlp
+      receivers: [otlp]
       processors: [filter/otlp, resourcedetection, transform/set-name, batch]
-      exporters:
-        - prometheusremotewrite/grafana_cloud
+      exporters: [otlphttp/customer]
     metrics/prometheus:
-      receivers:
-        - prometheus
+      receivers: [prometheus]
       processors: [filter/prometheus, metricstransform, resourcedetection, transform/set-name, batch]
-      exporters:
-        - prometheusremotewrite/grafana_cloud
+      exporters: [otlphttp/customer]
     metrics/rpc_only:
-      receivers:
-        - otlp
+      receivers: [otlp]
       processors: [filter/rpc_duration_only, resource/remove_instance, resourcedetection, transform/set-name, batch]
-      exporters:
-        - prometheusremotewrite/grafana_cloud
+      exporters: [otlphttp/customer]
     traces:
-      receivers:
-        - otlp
+      receivers: [otlp]
       processors: [batch]
-      exporters:
-        - otlphttp/grafana_cloud
+      exporters: [otlphttp/customer]
     logs:
-      receivers:
-        - otlp
+      receivers: [otlp]
       processors: [filter/logs_severity, batch]
-      exporters:
-        - otlphttp/grafana_cloud
+      exporters: [otlphttp/customer]
 EOF
 
         destination = "local/config/otel-collector-config.yaml"
