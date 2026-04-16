@@ -210,7 +210,7 @@ function generate_consul_config {
     local prefix=${cluster_tag_name%-*}
     retry_join_json=$(
       cat <<EOF
-"retry_join": ["provider=aws region=$aws_region tag_key=ec2-e2b-key tag_value=ec2-e2b-value"],
+"retry_join": ["provider=aws region=$aws_region tag_key=Name tag_value=server-cluster"],
 EOF
     )
     log_info "Configuring auto-join with tag: $cluster_tag_name"
