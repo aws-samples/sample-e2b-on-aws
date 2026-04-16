@@ -86,6 +86,13 @@ if [ -f /opt/config.properties ]; then
             echo "# Warning: consul_http_token not found in config file" >> $ENV_FILE
         fi
 
+        # Download Nomad TLS certificates from Secrets Manager
+        mkdir -p /opt/nomad/tls
+        aws secretsmanager get-secret-value --secret-id "${CFNSTACKNAME}-nomad-tls-ca-cert" --region "$AWSREGION" --query SecretString --output text > /opt/nomad/tls/ca.pem 2>/dev/null
+        aws secretsmanager get-secret-value --secret-id "${CFNSTACKNAME}-nomad-tls-client-cert" --region "$AWSREGION" --query SecretString --output text > /opt/nomad/tls/cert.pem 2>/dev/null
+        aws secretsmanager get-secret-value --secret-id "${CFNSTACKNAME}-nomad-tls-client-key" --region "$AWSREGION" --query SecretString --output text > /opt/nomad/tls/key.pem 2>/dev/null
+        chmod 600 /opt/nomad/tls/*.pem
+
         # Set Nomad TLS environment variables
         echo "export NOMAD_CACERT=\"/opt/nomad/tls/ca.pem\"" >> $ENV_FILE
         echo "export NOMAD_CLIENT_CERT=\"/opt/nomad/tls/cert.pem\"" >> $ENV_FILE
