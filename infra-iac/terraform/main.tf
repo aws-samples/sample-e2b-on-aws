@@ -519,7 +519,6 @@ resource "aws_iam_role_policy" "s3_scoped_access" {
           "s3:PutObject",
           "s3:DeleteObject",
           "s3:ListBucket",
-          "s3:ListBucketVersions",
           "s3:GetBucketLocation",
           "s3:ListBucketMultipartUploads",
           "s3:AbortMultipartUpload",

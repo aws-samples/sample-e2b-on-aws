@@ -671,6 +671,8 @@ Resources:
                   - s3:GetBucketLocation
                   - s3:GetBucketVersioning
                   - s3:PutBucketVersioning
+                  - s3:ListBucketVersions
+                  - s3:DeleteObjectVersion
                   - s3:PutBucketPolicy
                   - s3:GetBucketPolicy
                   - s3:PutBucketTagging
