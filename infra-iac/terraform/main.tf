@@ -531,6 +531,15 @@ resource "aws_iam_role_policy" "s3_scoped_access" {
           "arn:aws:s3:::software-${var.prefix}-*",
           "arn:aws:s3:::software-${var.prefix}-*/*"
         ]
+      },
+      {
+        Sid    = "KMSDecryptAccess"
+        Effect = "Allow"
+        Action = [
+          "kms:Decrypt",
+          "kms:GenerateDataKey"
+        ]
+        Resource = "*"
       }
     ]
   })
