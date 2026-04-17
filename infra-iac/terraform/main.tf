@@ -1142,14 +1142,14 @@ resource "aws_security_group" "alb_sg" {
 resource "aws_lb_target_group" "nomad-server" {
   name     = "${var.prefix}-nomad-server"
   port     = 4646
-  protocol = "HTTP"
+  protocol = "HTTPS"
   vpc_id   = var.VPC.id
 
   health_check {
     enabled             = true
     path                = "/ui/"
     interval            = 30
-    protocol            = "HTTP"
+    protocol            = "HTTPS"
     timeout             = 5
     healthy_threshold   = 2
     unhealthy_threshold = 2
