@@ -90,7 +90,9 @@ job "api" {
         args         = [
           "--port", "50001",
         ]
-        volumes = []
+        volumes = [
+          "/opt/nomad/tls:/opt/nomad/tls:ro"
+        ]
       }
     }
   }
