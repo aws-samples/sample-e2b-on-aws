@@ -1108,7 +1108,7 @@ Resources:
       DeletionProtection: !If [IsProd, true, false]
       BackupRetentionPeriod: !If [IsProd, 14, 7]
       EnableIAMDatabaseAuthentication: true
-      ManageMasterUserPassword: true
+      MasterUserPassword: !Ref DBPassword
       VpcSecurityGroupIds:
         - !GetAtt DBSecurityGroup.GroupId
       Tags:
