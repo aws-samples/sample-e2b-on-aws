@@ -527,7 +527,9 @@ resource "aws_iam_role_policy" "s3_scoped_access" {
         ]
         Resource = [
           "arn:aws:s3:::${var.prefix}-*",
-          "arn:aws:s3:::${var.prefix}-*/*"
+          "arn:aws:s3:::${var.prefix}-*/*",
+          "arn:aws:s3:::software-${var.prefix}-*",
+          "arn:aws:s3:::software-${var.prefix}-*/*"
         ]
       }
     ]
