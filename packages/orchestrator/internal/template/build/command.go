@@ -3,8 +3,11 @@ package build
 import (
 	"context"
 	"fmt"
+	"io"
+	"mime/multipart"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -169,14 +172,40 @@ func (b *TemplateBuilder) copyFilesToSandbox(ctx context.Context, sandboxID stri
 	sbxTarPath := fmt.Sprintf("/tmp/%s.tar.gz", step.GetFilesHash())
 	sbxUnpackPath := fmt.Sprintf("/tmp/%s/unpack", step.GetFilesHash())
 
-	// Use envd file upload to copy tar into sandbox
+	// Use envd file upload to copy tar into sandbox. The /files endpoint requires
+	// multipart/form-data, so stream the tar as a multipart body via io.Pipe.
 	proxyHost := fmt.Sprintf("http://localhost%s", b.proxy.GetAddr())
 	uploadURL := fmt.Sprintf("%s/files?path=%s&username=root", proxyHost, sbxTarPath)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, uploadURL, tmpFile)
+
+	pr, pw := io.Pipe()
+	mw := multipart.NewWriter(pw)
+	uploadErrCh := make(chan error, 1)
+	go func() {
+		var writeErr error
+		defer func() {
+			if closeErr := mw.Close(); closeErr != nil && writeErr == nil {
+				writeErr = closeErr
+			}
+			pw.CloseWithError(writeErr)
+			uploadErrCh <- writeErr
+		}()
+
+		formFile, err := mw.CreateFormFile("file", filepath.Base(sbxTarPath))
+		if err != nil {
+			writeErr = fmt.Errorf("create multipart form file: %w", err)
+			return
+		}
+		if _, err := io.Copy(formFile, tmpFile); err != nil {
+			writeErr = fmt.Errorf("copy tar into multipart body: %w", err)
+			return
+		}
+	}()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, uploadURL, pr)
 	if err != nil {
 		return fmt.Errorf("failed to create upload request: %w", err)
 	}
-	req.Header.Set("Content-Type", "application/octet-stream")
+	req.Header.Set("Content-Type", mw.FormDataContentType())
 	if err := grpc.SetSandboxHeader(req.Header, proxyHost, sandboxID); err != nil {
 		return fmt.Errorf("failed to set sandbox header: %w", err)
 	}
@@ -187,6 +216,10 @@ func (b *TemplateBuilder) copyFilesToSandbox(ctx context.Context, sandboxID stri
 		return fmt.Errorf("failed to upload file to sandbox: %w", err)
 	}
 	defer resp.Body.Close()
+
+	if writeErr := <-uploadErrCh; writeErr != nil {
+		return fmt.Errorf("failed to build multipart upload body: %w", writeErr)
+	}
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("failed to upload file to sandbox (status %d)", resp.StatusCode)
