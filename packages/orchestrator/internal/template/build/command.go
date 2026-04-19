@@ -133,7 +133,7 @@ func (b *TemplateBuilder) runCommandWithConfirmation(
 
 // copyFilesToSandbox downloads build-context files from S3 and copies them into the sandbox via envd.
 // The files are identified by step.FilesHash which corresponds to a tar archive in the build-context bucket.
-func (b *TemplateBuilder) copyFilesToSandbox(ctx context.Context, sandboxID string, templateID string, step *templatemanager.TemplateStep) error {
+func (b *TemplateBuilder) copyFilesToSandbox(ctx context.Context, postProcessor *writer.PostProcessor, sandboxID string, templateID string, step *templatemanager.TemplateStep) error {
 	if step.FilesHash == nil || step.GetFilesHash() == "" {
 		return fmt.Errorf("COPY/ADD requires filesHash to be set")
 	}
@@ -232,7 +232,7 @@ func (b *TemplateBuilder) copyFilesToSandbox(ctx context.Context, sandboxID stri
 		sbxUnpackPath, targetPath,
 		step.GetFilesHash())
 
-	return b.runCommand(ctx, nil, "copy", sandboxID, extractCmd, "root", nil, map[string]string{})
+	return b.runCommand(ctx, postProcessor, "copy", sandboxID, extractCmd, "root", nil, map[string]string{})
 }
 
 func (b *TemplateBuilder) logStream(postProcessor *writer.PostProcessor, id string, name string, content string) {

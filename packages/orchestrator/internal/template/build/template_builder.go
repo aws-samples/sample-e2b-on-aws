@@ -259,7 +259,7 @@ func (b *TemplateBuilder) Build(ctx context.Context, template *TemplateConfig) (
 					return nil, fmt.Errorf("step %d: %s requires source and destination arguments", i, stepType)
 				}
 				postProcessor.WriteMsg(fmt.Sprintf("[step %d] %s %s %s", i, stepType, step.Args[0], step.Args[1]))
-				err = b.copyFilesToSandbox(ctx, sbx.Metadata.Config.SandboxId, template.TemplateId, step)
+				err = b.copyFilesToSandbox(ctx, postProcessor, sbx.Metadata.Config.SandboxId, template.TemplateId, step)
 			case "ENV":
 				for _, arg := range step.Args {
 					parts := strings.SplitN(arg, "=", 2)
