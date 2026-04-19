@@ -574,27 +574,14 @@ func (b *TemplateBuilder) enlargeDiskAfterProvisioning(
 	}
 	template.rootfsSize = rootfsFinalSize
 
-	// Check the rootfs filesystem corruption
-	ext4Check, err := ext4.CheckIntegrity(rootfsPath, false)
+	// Check the rootfs filesystem with preen mode so minor issues
+	// (e.g. residual block bitmap differences) are auto-corrected.
+	ext4Check, err := ext4.CheckIntegrity(rootfsPath, true)
 	if err != nil {
-		zap.L().Error("final enlarge filesystem ext4 integrity",
-			zap.String("result", ext4Check),
-			zap.Error(err),
-		)
-
-		// Occasionally there is Block bitmap differences. For this reason, we retry with fix.
-		ext4Check, err := ext4.CheckIntegrity(rootfsPath, true)
-		zap.L().Error("final enlarge filesystem ext4 integrity - retry with fix",
-			zap.String("result", ext4Check),
-			zap.Error(err),
-		)
-		if err != nil {
-			return fmt.Errorf("error checking final enlarge filesystem integrity: %w", err)
-		}
-	} else {
-		zap.L().Debug("final enlarge filesystem ext4 integrity",
-			zap.String("result", ext4Check),
-		)
+		return fmt.Errorf("error checking final enlarge filesystem integrity: %w", err)
 	}
+	zap.L().Debug("final enlarge filesystem ext4 integrity",
+		zap.String("result", ext4Check),
+	)
 	return nil
 }
