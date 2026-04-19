@@ -23,6 +23,7 @@ import (
 	"github.com/e2b-dev/infra/packages/orchestrator/internal/template/build/writer"
 	"github.com/e2b-dev/infra/packages/orchestrator/internal/template/template"
 	artifactsregistry "github.com/e2b-dev/infra/packages/shared/pkg/artifacts-registry"
+	"github.com/e2b-dev/infra/packages/shared/pkg/env"
 	l "github.com/e2b-dev/infra/packages/shared/pkg/logger"
 	sbxlogger "github.com/e2b-dev/infra/packages/shared/pkg/logger/sandbox"
 	"github.com/e2b-dev/infra/packages/shared/pkg/smap"
@@ -124,12 +125,21 @@ func buildTemplate(parentCtx context.Context, kernelVersion, fcVersion, template
 	}
 
 	templateStorage := template.NewStorage(persistence)
+	// CLI tool: build-context bucket is optional here (COPY steps require it, others don't).
+	var buildContextStorage storage.StorageProvider
+	if buildCtxBucket := env.GetEnv("BUILD_CONTEXT_BUCKET_NAME", ""); buildCtxBucket != "" {
+		buildContextStorage, err = storage.NewAWSBucketStorageProvider(ctx, buildCtxBucket)
+		if err != nil {
+			return fmt.Errorf("could not create build-context storage provider: %w", err)
+		}
+	}
 	builder := build.NewBuilder(
 		logger,
 		logger,
 		tracer,
 		templateStorage,
 		persistence,
+		buildContextStorage,
 		artifactRegistry,
 		devicePool,
 		networkPool,

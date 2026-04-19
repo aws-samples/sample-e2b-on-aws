@@ -38,14 +38,15 @@ type TemplateBuilder struct {
 	logger *zap.Logger
 	tracer trace.Tracer
 
-	storage          storage.StorageProvider
-	devicePool       *nbd.DevicePool
-	networkPool      *network.Pool
-	buildLogger      *zap.Logger
-	templateStorage  *template.Storage
-	artifactRegistry artifactsregistry.ArtifactsRegistry
-	proxy            *proxy.SandboxProxy
-	sandboxes        *smap.Map[*sandbox.Sandbox]
+	storage             storage.StorageProvider
+	buildContextStorage storage.StorageProvider
+	devicePool          *nbd.DevicePool
+	networkPool         *network.Pool
+	buildLogger         *zap.Logger
+	templateStorage     *template.Storage
+	artifactRegistry    artifactsregistry.ArtifactsRegistry
+	proxy               *proxy.SandboxProxy
+	sandboxes           *smap.Map[*sandbox.Sandbox]
 }
 
 const (
@@ -65,6 +66,7 @@ func NewBuilder(
 	tracer trace.Tracer,
 	templateStorage *template.Storage,
 	storage storage.StorageProvider,
+	buildContextStorage storage.StorageProvider,
 	artifactRegistry artifactsregistry.ArtifactsRegistry,
 	devicePool *nbd.DevicePool,
 	networkPool *network.Pool,
@@ -72,16 +74,17 @@ func NewBuilder(
 	sandboxes *smap.Map[*sandbox.Sandbox],
 ) *TemplateBuilder {
 	return &TemplateBuilder{
-		logger:           logger,
-		tracer:           tracer,
-		buildLogger:      buildLogger,
-		templateStorage:  templateStorage,
-		storage:          storage,
-		artifactRegistry: artifactRegistry,
-		devicePool:       devicePool,
-		networkPool:      networkPool,
-		proxy:            proxy,
-		sandboxes:        sandboxes,
+		logger:              logger,
+		tracer:              tracer,
+		buildLogger:         buildLogger,
+		templateStorage:     templateStorage,
+		storage:             storage,
+		buildContextStorage: buildContextStorage,
+		artifactRegistry:    artifactRegistry,
+		devicePool:          devicePool,
+		networkPool:         networkPool,
+		proxy:               proxy,
+		sandboxes:           sandboxes,
 	}
 }
 

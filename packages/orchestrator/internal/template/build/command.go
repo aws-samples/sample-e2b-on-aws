@@ -141,10 +141,13 @@ func (b *TemplateBuilder) copyFilesToSandbox(ctx context.Context, sandboxID stri
 
 	targetPath := step.Args[1]
 
-	// Download the tar archive from S3 build-context bucket.
+	// Download the tar archive from the dedicated build-context bucket (API presign upload target).
 	// Key format must match the upload side (packages/shared/pkg/storage/presign.go:BuildContextKey).
+	if b.buildContextStorage == nil {
+		return fmt.Errorf("build-context storage is not configured (BUILD_CONTEXT_BUCKET_NAME unset)")
+	}
 	filesKey := storage.BuildContextKey(templateID, step.GetFilesHash())
-	obj, err := b.storage.OpenObject(ctx, filesKey)
+	obj, err := b.buildContextStorage.OpenObject(ctx, filesKey)
 	if err != nil {
 		return fmt.Errorf("failed to open build-context files from storage (key=%s): %w", filesKey, err)
 	}

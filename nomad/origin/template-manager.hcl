@@ -44,6 +44,7 @@ job "template-manager" {
         ENVIRONMENT                  = "dev"
         TEMPLATE_AWS_BUCKET_NAME     = "${BUCKET_FC_TEMPLATE}"
         TEMPLATE_BUCKET_NAME         = "${BUCKET_FC_TEMPLATE}"
+        BUILD_CONTEXT_BUCKET_NAME    = "${BUCKET_DOCKER_CONTEXTS}"
         OTEL_COLLECTOR_GRPC_ENDPOINT = "localhost:4317"
         ORCHESTRATOR_SERVICES        = "template-manager"
       }
