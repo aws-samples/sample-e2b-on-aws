@@ -41,11 +41,11 @@ else
     echo "AWS CLI is already installed"
 fi
 
-CI_VERSION="v1.15"
+CI_VERSION="v1.12"
 KERNEL_VERSION="6.1.158"
 KERNEL_FOLDER="vmlinux-${KERNEL_VERSION}"
-FC_VERSION="v1.15.1"
-FC_FOLDER="v1.15.1_b2d9ccc"
+FC_VERSION="v1.12.1"
+FC_FOLDER="v1.12.1_210cbac"
 
 # Create subdirectories
 mkdir -p "${TEMP_DIR}/kernels/${KERNEL_FOLDER}"

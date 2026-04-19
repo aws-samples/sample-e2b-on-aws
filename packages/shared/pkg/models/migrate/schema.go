@@ -117,7 +117,7 @@ var (
 		{Name: "free_disk_size_mb", Type: field.TypeInt64},
 		{Name: "total_disk_size_mb", Type: field.TypeInt64, Nullable: true},
 		{Name: "kernel_version", Type: field.TypeString, Default: "vmlinux-6.1.158", SchemaType: map[string]string{"postgres": "text"}},
-		{Name: "firecracker_version", Type: field.TypeString, Default: "v1.15.1_b2d9ccc", SchemaType: map[string]string{"postgres": "text"}},
+		{Name: "firecracker_version", Type: field.TypeString, Default: "v1.12.1_210cbac", SchemaType: map[string]string{"postgres": "text"}},
 		{Name: "envd_version", Type: field.TypeString, Nullable: true, SchemaType: map[string]string{"postgres": "text"}},
 		{Name: "cluster_node_id", Type: field.TypeString, Nullable: true, SchemaType: map[string]string{"postgres": "text"}},
 		{Name: "env_id", Type: field.TypeString, Nullable: true, SchemaType: map[string]string{"postgres": "text"}},

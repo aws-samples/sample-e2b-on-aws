@@ -15,7 +15,7 @@ const (
 	DefaultKernelVersion = "vmlinux-6.1.158"
 	// The Firecracker version the last tag + the short SHA (so we can build our dev previews)
 	// TODO: The short tag here has only 7 characters — the one from our build pipeline will likely have exactly 8 so this will break.
-	DefaultFirecrackerVersion = "v1.15.1_b2d9ccc"
+	DefaultFirecrackerVersion = "v1.12.1_210cbac"
 )
 
 type EnvBuild struct {
