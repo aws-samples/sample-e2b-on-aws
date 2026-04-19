@@ -16,6 +16,7 @@ import (
 	"github.com/e2b-dev/infra/packages/shared/pkg/grpc/envd/process"
 	"github.com/e2b-dev/infra/packages/shared/pkg/grpc/envd/process/processconnect"
 	templatemanager "github.com/e2b-dev/infra/packages/shared/pkg/grpc/template-manager"
+	"github.com/e2b-dev/infra/packages/shared/pkg/storage"
 )
 
 const httpTimeout = 600 * time.Second
@@ -129,7 +130,7 @@ func (b *TemplateBuilder) runCommandWithConfirmation(
 
 // copyFilesToSandbox downloads build-context files from S3 and copies them into the sandbox via envd.
 // The files are identified by step.FilesHash which corresponds to a tar archive in the build-context bucket.
-func (b *TemplateBuilder) copyFilesToSandbox(ctx context.Context, sandboxID string, step *templatemanager.TemplateStep) error {
+func (b *TemplateBuilder) copyFilesToSandbox(ctx context.Context, sandboxID string, templateID string, step *templatemanager.TemplateStep) error {
 	if step.FilesHash == nil || step.GetFilesHash() == "" {
 		return fmt.Errorf("COPY/ADD requires filesHash to be set")
 	}
@@ -140,8 +141,9 @@ func (b *TemplateBuilder) copyFilesToSandbox(ctx context.Context, sandboxID stri
 
 	targetPath := step.Args[1]
 
-	// Download the tar archive from S3 build-context bucket
-	filesKey := fmt.Sprintf("build-files/%s.tar.gz", step.GetFilesHash())
+	// Download the tar archive from S3 build-context bucket.
+	// Key format must match the upload side (packages/shared/pkg/storage/presign.go:BuildContextKey).
+	filesKey := storage.BuildContextKey(templateID, step.GetFilesHash())
 	obj, err := b.storage.OpenObject(ctx, filesKey)
 	if err != nil {
 		return fmt.Errorf("failed to open build-context files from storage (key=%s): %w", filesKey, err)
