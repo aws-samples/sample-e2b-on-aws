@@ -762,6 +762,16 @@ Resources:
               #!/bin/bash -v
               set -e
             - |
+              export DEBIAN_FRONTEND=noninteractive
+              systemctl stop apt-daily.service apt-daily-upgrade.service unattended-upgrades.service || true
+              systemctl kill apt-daily.service apt-daily-upgrade.service unattended-upgrades.service || true
+              systemctl disable apt-daily.timer apt-daily-upgrade.timer || true
+              systemctl mask apt-daily.service apt-daily-upgrade.service unattended-upgrades.service || true
+              killall -9 apt-get apt dpkg unattended-upgr 2>/dev/null || true
+              for i in $(seq 1 60); do if fuser /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock /var/cache/apt/archives/lock >/dev/null 2>&1; then echo "Apt lock held, waiting... ($i/60)"; sleep 5; else echo "Apt locks released."; break; fi; done
+              sleep 5
+              apt-get clean
+            - |
               # Update system packages to latest versions
               apt update -y
             - |
