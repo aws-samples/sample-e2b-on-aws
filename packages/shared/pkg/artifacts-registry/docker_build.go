@@ -11,7 +11,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 
@@ -207,7 +206,7 @@ func (g *AWSArtifactsRegistry) BuildAndPushImage(
 	cacheFrom := g.pullCacheImage(ctx, templateID)
 
 	// 4. Build using Docker daemon with cache-from + streaming output
-	buildArgs := []string{"build", "--platform", fmt.Sprintf("linux/%s", runtime.GOARCH)}
+	buildArgs := []string{"build"}
 	if cacheFrom != "" {
 		buildArgs = append(buildArgs, "--cache-from", cacheFrom)
 	}
