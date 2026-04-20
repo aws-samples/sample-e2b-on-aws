@@ -56,7 +56,7 @@ if [ "$ARCHITECTURE" = "arm64" ]; then
 	curl -L ${fc_url}/download/${FC_VERSION}/firecracker-${FC_VERSION}-aarch64.tgz | tar -xz
     mv release-${FC_VERSION}-aarch64/firecracker-${FC_VERSION}-aarch64 \
        ${TEMP_DIR}/firecrackers/${FC_FOLDER}/firecracker
-    rm -rf release-${latest_version}-aarch64
+    rm -rf release-${FC_VERSION}-aarch64
 else
     # Download kernel
 	curl -L https://storage.googleapis.com/e2b-prod-public-builds/kernels/vmlinux-6.1.102/vmlinux.bin -o ${TEMP_DIR}/kernels/${KERNEL_FOLDER}/vmlinux.bin
@@ -64,7 +64,7 @@ else
 	curl -L ${fc_url}/download/${FC_VERSION}/firecracker-${FC_VERSION}-x86_64.tgz | tar -xz
     mv release-${FC_VERSION}-x86_64/firecracker-${FC_VERSION}-x86_64 \
        ${TEMP_DIR}/firecrackers/${FC_FOLDER}/firecracker
-    rm -rf release-${latest_version}-x86_64
+    rm -rf release-${FC_VERSION}-x86_64
 fi
 
 # Upload to S3

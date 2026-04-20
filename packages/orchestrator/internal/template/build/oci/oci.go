@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/containers/storage/pkg/archive"
@@ -34,7 +35,7 @@ func GetImage(ctx context.Context, tracer trace.Tracer, artifactRegistry artifac
 
 	platform := containerregistry.Platform{
 		OS:           "linux",
-		Architecture: "amd64",
+		Architecture: runtime.GOARCH,
 	}
 
 	img, err := artifactRegistry.GetImage(childCtx, templateId, buildId, platform)
