@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 
@@ -206,15 +207,14 @@ func (g *AWSArtifactsRegistry) BuildAndPushImage(
 	cacheFrom := g.pullCacheImage(ctx, templateID)
 
 	// 4. Build using Docker daemon with cache-from + streaming output
-	buildArgs := []string{"build"}
+	buildArgs := []string{"build", "--platform", fmt.Sprintf("linux/%s", runtime.GOARCH)}
 	if cacheFrom != "" {
 		buildArgs = append(buildArgs, "--cache-from", cacheFrom)
 	}
 	buildArgs = append(buildArgs, "-t", localTag, contextDir)
 
 	cmd := exec.CommandContext(ctx, "docker", buildArgs...)
-	// Explicitly disable BuildKit — the API container only has docker-cli without buildx
-	cmd.Env = append(os.Environ(), "DOCKER_BUILDKIT=0")
+	cmd.Env = append(os.Environ(), "DOCKER_BUILDKIT=1")
 
 	if err := runCmdWithStreamingLogs(cmd, templateID, "docker build"); err != nil {
 		return fmt.Errorf("docker build failed: %w", err)

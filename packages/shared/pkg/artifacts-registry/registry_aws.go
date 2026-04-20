@@ -109,6 +109,12 @@ func (g *AWSArtifactsRegistry) GetImage(ctx context.Context, templateId string, 
 		return nil, fmt.Errorf("error pulling image: %w", err)
 	}
 
+	// Verify architecture matches to avoid silently using wrong-arch images
+	cfg, cfgErr := img.ConfigFile()
+	if cfgErr == nil && cfg.Architecture != platform.Architecture {
+		return nil, fmt.Errorf("image architecture mismatch: want %s, got %s", platform.Architecture, cfg.Architecture)
+	}
+
 	return img, nil
 }
 
