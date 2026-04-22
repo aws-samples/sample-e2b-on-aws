@@ -58,6 +58,7 @@ cat << EOF > config.json
     "region": "us-east-1"
 }
 EOF
+chmod 600 config.json
 
 # 将值添加到/opt/config.properties文件的末尾
 cat << EOF >> /opt/config.properties
@@ -67,8 +68,12 @@ teamId=$TEAM_ID
 accessToken=$ACCESS_TOKEN
 teamApiKey=$TEAM_API_KEY
 EOF
+chmod 600 /opt/config.properties
 
 DOMAIN=$(grep "^CFNDOMAIN=" /opt/config.properties | cut -d= -f2)
-echo "export E2B_DOMAIN=$DOMAIN"
-echo "export E2B_API_KEY=$TEAM_API_KEY"
-echo "export E2B_ACCESS_TOKEN=$ACCESS_TOKEN"
+cat << EOF > /opt/e2b-env.sh
+export E2B_DOMAIN=$DOMAIN
+export E2B_API_KEY=$TEAM_API_KEY
+export E2B_ACCESS_TOKEN=$ACCESS_TOKEN
+EOF
+chmod 600 /opt/e2b-env.sh

@@ -54,10 +54,10 @@ variable "custom_ami_id" {
 
 variable "consul_version" {
   type    = string
-  default = "1.16.2"
+  default = "1.16.6"
 }
 
 variable "nomad_version" {
   type    = string
-  default = "1.6.2"
+  default = "1.6.10"
 }

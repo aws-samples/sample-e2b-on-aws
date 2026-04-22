@@ -47,7 +47,11 @@ for VAR_NAME in DB_HOST DB_PORT DB_NAME DB_USER DB_PASSWORD; do
         echo "Error: $VAR_NAME variable is missing in the configuration file"
         exit 1
     fi
-    echo "Using $VAR_NAME = $VAR_VALUE"
+    if [ "$VAR_NAME" = "DB_PASSWORD" ]; then
+        echo "Using $VAR_NAME = ***"
+    else
+        echo "Using $VAR_NAME = $VAR_VALUE"
+    fi
 done
 
 # Check if migration.sql exists
@@ -117,5 +121,5 @@ fi
 echo "==================="
 echo "User: $email"
 echo "Team ID: $teamId"
-echo "Access Token: $accessToken"
-echo "Team API Key: $teamApiKey"
+echo "Access Token: ***${accessToken: -4}"
+echo "Team API Key: ***${teamApiKey: -4}"
