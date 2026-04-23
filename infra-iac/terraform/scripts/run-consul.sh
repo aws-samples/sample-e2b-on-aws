@@ -392,34 +392,27 @@ function start_consul {
 }
 
 function bootstrap {
-  log_info "Waiting for Consul to start"
-  instance_ip_address=$(get_instance_ip_address)
-  log_info "Instance IP Address: $instance_ip_address"
+  local -r consul_token="$1"
 
-  while true; do
-    consul_leader_addr=$(curl http://localhost:8500/v1/status/leader 2>/dev/null || true)
-    log_info "Consul leader address: $consul_leader_addr"
+  echo "${consul_token}" >/tmp/consul.token
+  chmod 600 /tmp/consul.token
 
-    if [[ "$consul_leader_addr" == "\"$instance_ip_address:8300\"" ]]; then
-      local consul_token="$1"
-      log_info "Bootstrapping Consul"
-      echo "${consul_token}" >/tmp/consul.token
-      chmod 600 /tmp/consul.token
-      consul acl bootstrap /tmp/consul.token
-      rm -f /tmp/consul.token
-
+  log_info "Bootstrapping Consul ACL"
+  local out
+  local i
+  for i in $(seq 1 60); do
+    if out=$(consul acl bootstrap /tmp/consul.token 2>&1); then
+      log_info "Consul ACL bootstrapped"
       break
     fi
-
-    # Consul leader address was already set, but it isn't the current instance
-    if [[ -n "$consul_leader_addr" && "$consul_leader_addr" != "\"\"" ]]; then
-      log_info "Consul is already bootstrapped"
+    if echo "$out" | grep -qE "already been bootstrapped|already bootstrapped"; then
+      log_info "Consul ACL already bootstrapped"
       break
     fi
-
-    log_info "Waiting for Consul to start"
-    sleep 1
+    log_info "Consul bootstrap attempt $i: $out — retry in 2s"
+    sleep 2
   done
+  rm -f /tmp/consul.token
 }
 
 function setup_dns_resolving {

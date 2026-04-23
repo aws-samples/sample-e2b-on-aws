@@ -69,6 +69,11 @@ if [ -f /opt/config.properties ]; then
         echo "export NOMAD_ADDR=\"https://${NOMAD_IP}:4646\"" >> $ENV_FILE
         echo "NOMAD_ADDR set to: https://${NOMAD_IP}:4646"
 
+        # Server cert SAN only contains server.${region}.nomad / localhost / 127.0.0.1,
+        # not the private IP. Use NOMAD_TLS_SERVER_NAME so CLI verifies hostname via SNI.
+        echo "export NOMAD_TLS_SERVER_NAME=\"server.${AWSREGION}.nomad\"" >> $ENV_FILE
+        echo "NOMAD_TLS_SERVER_NAME set to: server.${AWSREGION}.nomad"
+
         # Check and set NOMAD_TOKEN
         if [ -n "$nomad_acl_token" ]; then
             echo "export NOMAD_TOKEN=\"${nomad_acl_token}\"" >> $ENV_FILE

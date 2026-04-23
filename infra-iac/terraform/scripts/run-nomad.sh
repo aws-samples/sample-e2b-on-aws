@@ -309,6 +309,9 @@ function start_nomad {
 }
 
 function bootstrap {
+  local readonly nomad_token="$1"
+  local readonly region="$(get_instance_region)"
+
   log_info "Waiting for Nomad to start"
   while test -z "$(curl -sk https://127.0.0.1:4646/v1/agent/health)"; do
     log_info "Nomad not yet started. Waiting for 1 second."
@@ -316,11 +319,32 @@ function bootstrap {
   done
   log_info "Nomad server started."
 
-  local readonly nomad_token="$1"
-  log_info "Bootstrapping Nomad"
+  # Nomad CLI TLS (agent only accepts HTTPS after mTLS enabled).
+  # Exported here so create_node_pools inherits the same config.
+  export NOMAD_ADDR=https://127.0.0.1:4646
+  export NOMAD_CACERT=/opt/nomad/tls/ca.pem
+  export NOMAD_CLIENT_CERT=/opt/nomad/tls/cert.pem
+  export NOMAD_CLIENT_KEY=/opt/nomad/tls/key.pem
+  export NOMAD_TLS_SERVER_NAME="server.${region}.nomad"
+
   echo "$nomad_token" >"/tmp/nomad.token"
   chmod 600 /tmp/nomad.token
-  nomad acl bootstrap /tmp/nomad.token
+
+  log_info "Bootstrapping Nomad ACL"
+  local out
+  local i
+  for i in $(seq 1 60); do
+    if out=$(nomad acl bootstrap /tmp/nomad.token 2>&1); then
+      log_info "Bootstrap ok"
+      break
+    fi
+    if echo "$out" | grep -qE "already bootstrapped|already done"; then
+      log_info "ACL already bootstrapped by peer"
+      break
+    fi
+    log_info "Bootstrap attempt $i: $out — retry in 2s"
+    sleep 2
+  done
   rm -f "/tmp/nomad.token"
 }
 
