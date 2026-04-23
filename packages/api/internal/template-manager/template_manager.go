@@ -130,20 +130,20 @@ func (tm *TemplateManager) getBuilderClient(clusterID *uuid.UUID, nodeID *string
 		tm.localClientMutex.RLock()
 		defer tm.localClientMutex.RUnlock()
 
-		zap.L().Info("使用本地template manager", 
-			zap.Bool("placement", placement), 
-			zap.String("localClientStatus", tm.GetLocalClientStatus().String()),
+		zap.L().Info("使用本地template manager",
+			zap.Bool("placement", placement),
+			zap.String("localClientStatus", tm.localClientStatus.String()),
 			zap.String("templateManagerHost", templateManagerHost))
 
 		// build placement requires healthy template builder
-		if placement && tm.GetLocalClientStatus() != infogrpc.ServiceInfoStatus_OrchestratorHealthy {
-			zap.L().Error("本地template manager不健康，无法用于放置新构建", 
-				zap.String("status", tm.GetLocalClientStatus().String()))
+		if placement && tm.localClientStatus != infogrpc.ServiceInfoStatus_OrchestratorHealthy {
+			zap.L().Error("本地template manager不健康，无法用于放置新构建",
+				zap.String("status", tm.localClientStatus.String()))
 			return nil, nil, nil, ErrLocalTemplateManagerNotAvailable
 		}
 
 		// for getting build information only not valid state is getting already unhealthy builder
-		if tm.GetLocalClientStatus() == infogrpc.ServiceInfoStatus_OrchestratorUnhealthy {
+		if tm.localClientStatus == infogrpc.ServiceInfoStatus_OrchestratorUnhealthy {
 			zap.L().Error("本地template manager不健康")
 			return nil, nil, nil, ErrLocalTemplateManagerNotAvailable
 		}
