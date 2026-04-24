@@ -87,6 +87,12 @@ receivers:
           scrape_interval: 15s
           scrape_timeout: 5s
           metrics_path: '/v1/metrics'
+          scheme: https
+          tls_config:
+            insecure_skip_verify: true
+          authorization:
+            type: Bearer
+            credentials: "${nomad_acl_token}"
           static_configs:
             - targets: ['localhost:4646']
           params:
