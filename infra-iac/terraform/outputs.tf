@@ -59,3 +59,13 @@ output "consul_dns_request_token_name" {
   description = "The name of the Consul DNS request token secret"
   value       = aws_secretsmanager_secret.consul_dns_request_token.name
 }
+
+output "infra_tokens_secret_name" {
+  description = "The name of the infrastructure tokens secret"
+  value       = aws_secretsmanager_secret.infra_tokens.name
+}
+
+output "e2b_config_secret_name" {
+  description = "The name of the E2B config secret"
+  value       = aws_secretsmanager_secret.e2b_config.name
+}

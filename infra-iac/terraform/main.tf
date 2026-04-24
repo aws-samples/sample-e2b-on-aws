@@ -282,6 +282,39 @@ resource "aws_secretsmanager_secret_version" "consul_dns_request_token" {
   secret_string = random_uuid.consul_dns_request_token.result
 }
 
+# -------------------- Admin Token --------------------
+# Generate a random password for the admin API token
+resource "random_password" "admin_token" {
+  length           = 30
+  special          = true
+  override_special = "!@#$%^&*()_+{}|:<>?=-"
+}
+
+# -------------------- Infra Tokens (aggregated) --------------------
+# Aggregated secret containing nomad_acl_token, consul_http_token, and admin_token
+resource "aws_secretsmanager_secret" "infra_tokens" {
+  name        = "${var.prefix}-infra-tokens"
+  description = "Infrastructure tokens (nomad_acl_token, consul_http_token, admin_token)"
+  tags        = local.common_tags
+}
+
+resource "aws_secretsmanager_secret_version" "infra_tokens" {
+  secret_id = aws_secretsmanager_secret.infra_tokens.id
+  secret_string = jsonencode({
+    nomad_acl_token   = random_uuid.nomad_acl_token.result
+    consul_http_token = random_uuid.consul_acl_token.result
+    admin_token       = random_password.admin_token.result
+  })
+}
+
+# -------------------- E2B Config --------------------
+# Empty secret container for E2B configuration (populated by init-config.sh at runtime)
+resource "aws_secretsmanager_secret" "e2b_config" {
+  name        = "${var.prefix}-e2b-config"
+  description = "E2B configuration (teamId, accessToken, teamApiKey)"
+  tags        = local.common_tags
+}
+
 # =========================================================
 # NOMAD TLS CERTIFICATES
 # =========================================================

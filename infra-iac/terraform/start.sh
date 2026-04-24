@@ -98,39 +98,6 @@ for output_name in $bucket_outputs; do
     echo "Added bucket: BUCKET_${formatted_name}=${bucket_value}"
 done
 
-# 处理所有 secret 输出
-echo "Processing secret outputs..."
-
-# 获取所有以 _secret_name 或 _token_name 或 _key_name 结尾的输出
-secret_outputs=$(terraform output | grep -E "_(secret|token|key)_name" | cut -d "=" -f1 | tr -d " ")
-
-for output_name in $secret_outputs; do
-    # 获取 secret 名称
-    secret_name=$(terraform output -raw $output_name)
-    
-    echo "Fetching value for AWS secret: $secret_name"
-    
-    # 访问 secret 值
-    secret_response=$(aws secretsmanager get-secret-value --secret-id "$secret_name" 2>/dev/null)
-    
-    # 检查 secret 获取是否成功
-    if [ $? -eq 0 ] && [ -n "$secret_response" ]; then
-        # 从 JSON 响应中提取 secret 值
-        secret_value=$(echo "$secret_response" | jq -r '.SecretString')
-        
-        # 将 secret 名称转换为所需格式
-        formatted_name=$(echo "$secret_name" | tr '[:lower:]' '[:upper:]' | tr '-' '_')
-        
-        # 添加 secret 值到配置文件
-        echo "SECRET_${formatted_name}=${secret_value}" >> "$CONFIG_FILE"
-        echo "Added secret: SECRET_${formatted_name}"
-    else
-        echo "Warning: Failed to retrieve value for AWS secret: $secret_name"
-        # 添加 secret 名称但带有表示检索失败的注释
-        echo "# SECRET_${formatted_name}=<retrieval_failed> (Secret name: $secret_name)" >> "$CONFIG_FILE"
-    fi
-done
-
 echo "Configuration file $CONFIG_FILE has been updated."
 
 
@@ -162,45 +129,19 @@ fi
 # Database credentials are stored in Secrets Manager (CFNDBCredentialSecretName in config file)
 # No DB parameters (host, port, user, password) written to config file
 
-# Retrieve Nomad/Consul tokens from Secrets Manager via Terraform outputs
-AWSREGION=$(grep "^AWSREGION=" "$CONFIG_FILE" | cut -d'=' -f2)
-NOMAD_SECRET_NAME=$(terraform output -raw nomad_acl_token_secret_name 2>/dev/null)
-if [ -n "$NOMAD_SECRET_NAME" ]; then
-    NOMAD_TOKEN=$(aws secretsmanager get-secret-value --secret-id "$NOMAD_SECRET_NAME" --region "$AWSREGION" --query SecretString --output text 2>/dev/null)
-    if [ -n "$NOMAD_TOKEN" ]; then
-        echo "nomad_acl_token=${NOMAD_TOKEN}" >> "$CONFIG_FILE"
-    else
-        echo "Warning: Failed to retrieve Nomad ACL token from Secrets Manager"
-    fi
+# Write secret names (not values) to config file
+INFRA_TOKENS_SECRET_NAME=$(terraform output -raw infra_tokens_secret_name 2>/dev/null)
+if [ -n "$INFRA_TOKENS_SECRET_NAME" ]; then
+    echo "infra_tokens_secret_name=${INFRA_TOKENS_SECRET_NAME}" >> "$CONFIG_FILE"
 else
-    echo "Warning: nomad_acl_token_secret_name not found in terraform output"
+    echo "Warning: infra_tokens_secret_name not found in terraform output"
 fi
 
-CONSUL_SECRET_NAME=$(terraform output -raw consul_acl_token_secret_name 2>/dev/null)
-if [ -n "$CONSUL_SECRET_NAME" ]; then
-    CONSUL_TOKEN=$(aws secretsmanager get-secret-value --secret-id "$CONSUL_SECRET_NAME" --region "$AWSREGION" --query SecretString --output text 2>/dev/null)
-    if [ -n "$CONSUL_TOKEN" ]; then
-        echo "consul_http_token=${CONSUL_TOKEN}" >> "$CONFIG_FILE"
-    else
-        echo "Warning: Failed to retrieve Consul HTTP token from Secrets Manager"
-    fi
+E2B_CONFIG_SECRET_NAME=$(terraform output -raw e2b_config_secret_name 2>/dev/null)
+if [ -n "$E2B_CONFIG_SECRET_NAME" ]; then
+    echo "e2b_config_secret_name=${E2B_CONFIG_SECRET_NAME}" >> "$CONFIG_FILE"
 else
-    echo "Warning: consul_acl_token_secret_name not found in terraform output"
-fi
-
-# Restrict config file permissions after writing secrets
-chmod 600 "$CONFIG_FILE"
-
-# Generate random admin token
-ADMIN_TOKEN=$(openssl rand -base64 32 | tr -dc 'a-zA-Z0-9!@#$%^&*()_+{}|:<>?=-' | head -c 30)
-echo "admin_token=${ADMIN_TOKEN}" >> "$CONFIG_FILE"
-
-# Get ECR token
-ECR_TOKEN=$(aws ecr get-login-password --region "$AWSREGION" 2>/dev/null)
-if [ -n "$ECR_TOKEN" ]; then
-    echo "ecr_token=${ECR_TOKEN}" >> "$CONFIG_FILE"
-else
-    echo "Warning: Failed to get ECR token"
+    echo "Warning: e2b_config_secret_name not found in terraform output"
 fi
 
 # Extract CFNREDISNAME value from the config file

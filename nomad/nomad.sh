@@ -13,8 +13,12 @@ if [ -f /opt/config.properties ]; then
     # This avoids potential command execution issues that might exist in the config file
     CFNSTACKNAME=$(grep -E "^CFNSTACKNAME=" /opt/config.properties | cut -d'=' -f2)
     AWSREGION=$(grep -E "^AWSREGION=" /opt/config.properties | cut -d'=' -f2)
-    nomad_acl_token=$(grep -E "^nomad_acl_token=" /opt/config.properties | cut -d'=' -f2)
-    consul_http_token=$(grep -E "^consul_http_token=" /opt/config.properties | cut -d'=' -f2)
+    INFRA_TOKENS_SECRET=$(grep -E "^infra_tokens_secret_name=" /opt/config.properties | cut -d'=' -f2)
+    if [ -n "$INFRA_TOKENS_SECRET" ]; then
+        INFRA_TOKENS_JSON=$(aws secretsmanager get-secret-value --secret-id "$INFRA_TOKENS_SECRET" --region "$AWSREGION" --query SecretString --output text 2>/dev/null)
+        nomad_acl_token=$(echo "$INFRA_TOKENS_JSON" | jq -r '.nomad_acl_token')
+        consul_http_token=$(echo "$INFRA_TOKENS_JSON" | jq -r '.consul_http_token')
+    fi
 
     # Confirm that CFNSTACKNAME has been set
     if [ -z "$CFNSTACKNAME" ]; then

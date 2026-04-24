@@ -55,22 +55,18 @@ else
     exit 1
 fi
 
-# Read JSON configuration from ./../infra-iac/initdb/config.json
-CONFIG_FILE="./../infra-iac/db/config.json"
-if [ -f "$CONFIG_FILE" ]; then
-    # Check if jq is installed
-    if command -v jq &> /dev/null; then
-        ACCESS_TOKEN=$(jq -r '.accessToken' "$CONFIG_FILE")
-    else
-        # Fallback to grep and sed if jq is not available
-        ACCESS_TOKEN=$(grep -o '"accessToken": *"[^"]*"' "$CONFIG_FILE" | sed 's/"accessToken": *"\([^"]*\)"/\1/')
-    fi
-    
-    echo "Found accessToken: $ACCESS_TOKEN"
-else
-    echo "Error: Configuration file $CONFIG_FILE not found"
+# Read accessToken from Secrets Manager
+E2B_CONFIG_SECRET=$(grep -E "^e2b_config_secret_name=" /opt/config.properties | cut -d'=' -f2)
+E2B_CONFIG_JSON=$(aws secretsmanager get-secret-value \
+    --secret-id "$E2B_CONFIG_SECRET" --region "$AWSREGION" \
+    --query SecretString --output text)
+ACCESS_TOKEN=$(echo "$E2B_CONFIG_JSON" | jq -r '.accessToken')
+
+if [ -z "$ACCESS_TOKEN" ] || [ "$ACCESS_TOKEN" = "null" ]; then
+    echo "Error: Failed to retrieve accessToken from Secrets Manager"
     exit 1
 fi
+echo "Found accessToken from Secrets Manager"
 
 # Make the POST request
 echo "Making POST request to https://api.$CFNDOMAIN/templates with token $ACCESS_TOKEN"

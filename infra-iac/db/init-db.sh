@@ -8,7 +8,6 @@ cd "$(dirname "$0")"
 
 MIGRATION_SQL="./.migration.sql"
 SEED_SQL="./.seed-db.sql"
-CONFIG_PATH="./config.json"
 CONFIG_FILE="/opt/config.properties"
 
 
@@ -66,19 +65,23 @@ if [ ! -f "$SEED_SQL" ]; then
     exit 1
 fi
 
-# Read configuration file
-echo "Reading information from configuration file..."
-if command -v jq &> /dev/null; then
-    email=$(jq -r '.email' "$CONFIG_PATH")
-    teamId=$(jq -r '.teamId' "$CONFIG_PATH")
-    accessToken=$(jq -r '.accessToken' "$CONFIG_PATH")
-    teamApiKey=$(jq -r '.teamApiKey' "$CONFIG_PATH")
-    cloud=$(jq -r '.cloud // "aws"' "$CONFIG_PATH")
-    region=$(jq -r '.region // "us-east-1"' "$CONFIG_PATH")
-else
-    echo "Warning: jq tool not found"
+# Read E2B configuration from Secrets Manager
+echo "Reading E2B configuration from Secrets Manager..."
+AWSREGION=$(grep "^AWSREGION=" "$CONFIG_FILE" | cut -d'=' -f2)
+E2B_CONFIG_SECRET=$(grep "^e2b_config_secret_name=" "$CONFIG_FILE" | cut -d'=' -f2)
+E2B_CONFIG_JSON=$(aws secretsmanager get-secret-value \
+    --secret-id "$E2B_CONFIG_SECRET" --region "$AWSREGION" \
+    --query SecretString --output text)
+
+if [ -z "$E2B_CONFIG_JSON" ]; then
+    echo "Error: Failed to retrieve E2B config from Secrets Manager"
     exit 1
 fi
+
+email=$(echo "$E2B_CONFIG_JSON" | jq -r '.email')
+teamId=$(echo "$E2B_CONFIG_JSON" | jq -r '.teamId')
+accessToken=$(echo "$E2B_CONFIG_JSON" | jq -r '.accessToken')
+teamApiKey=$(echo "$E2B_CONFIG_JSON" | jq -r '.teamApiKey')
 
 # Check database connection
 if ! PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d postgres -c '\q' &>/dev/null; then

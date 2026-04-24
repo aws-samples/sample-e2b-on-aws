@@ -22,11 +22,11 @@ generate_uuid() {
 generate_access_token() {
     local chars="abcdefghijklmnopqrstuvwxyz0123456789"
     local token="sk_e2b_"
-    
+
     for i in {1..32}; do
         token="${token}${chars:$(( RANDOM % ${#chars} )):1}"
     done
-    
+
     echo "$token"
 }
 
@@ -34,46 +34,55 @@ generate_access_token() {
 generate_team_api_key() {
     local chars="abcdefghijklmnopqrstuvwxyz0123456789"
     local key="e2b_"
-    
+
     for i in {1..32}; do
         key="${key}${chars:$(( RANDOM % ${#chars} )):1}"
     done
-    
+
     echo "$key"
 }
+
+AWSREGION=$(grep "^AWSREGION=" /opt/config.properties | cut -d'=' -f2)
+E2B_CONFIG_SECRET=$(grep "^e2b_config_secret_name=" /opt/config.properties | cut -d'=' -f2)
+
+if [ -z "$E2B_CONFIG_SECRET" ]; then
+    echo "Error: e2b_config_secret_name not found in config.properties"
+    exit 1
+fi
+
+# Idempotency check: skip if SM already has a value
+EXISTING=$(aws secretsmanager get-secret-value --secret-id "$E2B_CONFIG_SECRET" \
+    --region "$AWSREGION" --query SecretString --output text 2>/dev/null)
+if [ -n "$EXISTING" ] && [ "$EXISTING" != "null" ]; then
+    echo "E2B config already exists in Secrets Manager, skipping generation"
+    exit 0
+fi
 
 # 生成随机值
 TEAM_ID=$(generate_uuid)
 ACCESS_TOKEN=$(generate_access_token)
 TEAM_API_KEY=$(generate_team_api_key)
 
-# 创建JSON文件
-cat << EOF > config.json
+CONFIG_JSON=$(cat <<EOF
 {
     "email": "e2b@example.com",
     "teamId": "$TEAM_ID",
     "accessToken": "$ACCESS_TOKEN",
     "teamApiKey": "$TEAM_API_KEY",
     "cloud": "aws",
-    "region": "us-east-1"
+    "region": "$AWSREGION"
 }
 EOF
-chmod 600 config.json
+)
 
-# 将值添加到/opt/config.properties文件的末尾
-cat << EOF >> /opt/config.properties
+aws secretsmanager put-secret-value \
+    --secret-id "$E2B_CONFIG_SECRET" \
+    --secret-string "$CONFIG_JSON" \
+    --region "$AWSREGION"
 
-# E2B配置
-teamId=$TEAM_ID
-accessToken=$ACCESS_TOKEN
-teamApiKey=$TEAM_API_KEY
-EOF
-chmod 600 /opt/config.properties
-
-DOMAIN=$(grep "^CFNDOMAIN=" /opt/config.properties | cut -d= -f2)
-cat << EOF > /opt/e2b-env.sh
-export E2B_DOMAIN=$DOMAIN
-export E2B_API_KEY=$TEAM_API_KEY
-export E2B_ACCESS_TOKEN=$ACCESS_TOKEN
-EOF
-chmod 600 /opt/e2b-env.sh
+if [ $? -eq 0 ]; then
+    echo "E2B config written to Secrets Manager successfully"
+else
+    echo "Error: Failed to write E2B config to Secrets Manager"
+    exit 1
+fi

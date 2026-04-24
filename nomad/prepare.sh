@@ -41,6 +41,16 @@ if [ -n "$DB_CREDENTIAL_SECRET" ]; then
     export CFNDBURL="postgresql://${DB_USER}:${DB_PASS}@${DB_HOST}/${DB_NAME}"
 fi
 
+# Read infra tokens from Secrets Manager (only in memory, not written to config file)
+AWSREGION=$(grep "^AWSREGION=" /opt/config.properties | cut -d'=' -f2)
+INFRA_TOKENS_SECRET=$(grep "^infra_tokens_secret_name=" /opt/config.properties | cut -d'=' -f2)
+if [ -n "$INFRA_TOKENS_SECRET" ]; then
+    INFRA_TOKENS_JSON=$(aws secretsmanager get-secret-value --secret-id "$INFRA_TOKENS_SECRET" --region "$AWSREGION" --query SecretString --output text)
+    export nomad_acl_token=$(echo "$INFRA_TOKENS_JSON" | jq -r '.nomad_acl_token')
+    export consul_http_token=$(echo "$INFRA_TOKENS_JSON" | jq -r '.consul_http_token')
+    export admin_token=$(echo "$INFRA_TOKENS_JSON" | jq -r '.admin_token')
+fi
+
 # Process each HCL file in the origin directory
 for file in origin/*.hcl; do
     if [[ -f "$file" && "$file" != *"-deploy.hcl" ]]; then
