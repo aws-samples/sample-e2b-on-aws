@@ -19,6 +19,11 @@ Metadata:
           - ExistingPublicSubnet2Id
           - PublicAccess
       - Label:
+          default: Data Subnet Configuration
+        Parameters:
+          - ExistingDataSubnet1Id
+          - ExistingDataSubnet2Id
+      - Label:
           default: Security Configuration
         Parameters:
           - AllowRemoteSSHIPs
@@ -115,6 +120,15 @@ Parameters:
     Type: AWS::EC2::Subnet::Id
     Description: ID of existing public subnet in second availability zone(not available in private access mode)
 
+  # Data Subnet Configuration - Isolated subnets for managed data services (RDS, ElastiCache)
+  ExistingDataSubnet1Id:
+    Type: AWS::EC2::Subnet::Id
+    Description: ID of existing data subnet in first availability zone (for RDS and ElastiCache)
+
+  ExistingDataSubnet2Id:
+    Type: AWS::EC2::Subnet::Id
+    Description: ID of existing data subnet in second availability zone (for RDS and ElastiCache)
+
   PublicAccess:
     Type: String
     Description: Specify whether public or private access to E2B
@@ -199,6 +213,7 @@ Resources:
               - Effect: Allow
                 Action:
                   - ec2:DescribeVpcs
+                  - ec2:DescribeSubnets
                 Resource: "*"
 
   VpcLookupFunction:
@@ -223,6 +238,7 @@ Resources:
 
                   ec2 = boto3.client('ec2')
                   vpc_id = event['ResourceProperties']['VpcId']
+                  subnet_ids = event['ResourceProperties'].get('SubnetIds', [])
 
                   response = ec2.describe_vpcs(VpcIds=[vpc_id])
 
@@ -233,6 +249,14 @@ Resources:
                   cidr_block = vpc['CidrBlock']
 
                   response_data = {'CidrBlock': cidr_block}
+
+                  if subnet_ids:
+                      sub_response = ec2.describe_subnets(SubnetIds=subnet_ids)
+                      for subnet in sub_response['Subnets']:
+                          sid = subnet['SubnetId']
+                          idx = subnet_ids.index(sid)
+                          response_data[f'Subnet{idx+1}Cidr'] = subnet['CidrBlock']
+
                   cfnresponse.send(event, context, cfnresponse.SUCCESS, response_data)
 
               except Exception as e:
@@ -244,6 +268,11 @@ Resources:
     Properties:
       ServiceToken: !GetAtt VpcLookupFunction.Arn
       VpcId: !Ref ExistingVpcId
+      SubnetIds:
+        - !Ref ExistingPrivateSubnet1Id
+        - !Ref ExistingPrivateSubnet2Id
+        - !Ref ExistingDataSubnet1Id
+        - !Ref ExistingDataSubnet2Id
 
   # ------------------------------------------------------------------------------------------------
   # VPC Endpoint - Provides private access to S3 without traversing the public internet
@@ -273,15 +302,65 @@ Resources:
           ToPort: "22"
           CidrIp: !Ref AllowRemoteSSHIPs
       SecurityGroupEgress:
-        - IpProtocol: tcp
-          FromPort: 80
-          ToPort: 80
-          CidrIp: "0.0.0.0/0"
+        # Outbound to internet via NAT: HTTPS for AWS API, ECR, S3, GitHub, apt repos
         - IpProtocol: tcp
           FromPort: 443
           ToPort: 443
           CidrIp: "0.0.0.0/0"
-        - IpProtocol: "-1"
+        # Outbound to internet via NAT: HTTP for apt update
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: "0.0.0.0/0"
+        # SSH to application subnets for managing compute nodes
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !GetAtt VpcCidrLookup.Subnet1Cidr
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !GetAtt VpcCidrLookup.Subnet2Cidr
+        # Nomad API to application subnets for job deployment
+        - IpProtocol: tcp
+          FromPort: 4646
+          ToPort: 4646
+          CidrIp: !GetAtt VpcCidrLookup.Subnet1Cidr
+        - IpProtocol: tcp
+          FromPort: 4646
+          ToPort: 4646
+          CidrIp: !GetAtt VpcCidrLookup.Subnet2Cidr
+        # Consul to application subnets for service discovery
+        - IpProtocol: tcp
+          FromPort: 8300
+          ToPort: 8302
+          CidrIp: !GetAtt VpcCidrLookup.Subnet1Cidr
+        - IpProtocol: tcp
+          FromPort: 8300
+          ToPort: 8302
+          CidrIp: !GetAtt VpcCidrLookup.Subnet2Cidr
+        # PostgreSQL to data subnets for database initialization
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          CidrIp: !GetAtt VpcCidrLookup.Subnet3Cidr
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          CidrIp: !GetAtt VpcCidrLookup.Subnet4Cidr
+        # Redis to data subnets for cache access
+        - IpProtocol: tcp
+          FromPort: 6379
+          ToPort: 6379
+          CidrIp: !GetAtt VpcCidrLookup.Subnet3Cidr
+        - IpProtocol: tcp
+          FromPort: 6379
+          ToPort: 6379
+          CidrIp: !GetAtt VpcCidrLookup.Subnet4Cidr
+        # DNS (UDP) for name resolution
+        - IpProtocol: udp
+          FromPort: 53
+          ToPort: 53
           CidrIp: !GetAtt VpcCidrLookup.CidrBlock
       Tags:
         - Key: Name
@@ -290,15 +369,25 @@ Resources:
   DBSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: Security group controlling access to the PostgreSQL database (port 5432)
+      GroupDescription: Security group controlling access to the PostgreSQL database (port 5432) from application subnets only
       SecurityGroupIngress:
         - IpProtocol: tcp
           FromPort: 5432
           ToPort: 5432
-          CidrIp: !GetAtt VpcCidrLookup.CidrBlock
+          CidrIp: !GetAtt VpcCidrLookup.Subnet1Cidr
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          CidrIp: !GetAtt VpcCidrLookup.Subnet2Cidr
       SecurityGroupEgress:
-        - IpProtocol: "-1"
-          CidrIp: !GetAtt VpcCidrLookup.CidrBlock
+        - IpProtocol: tcp
+          FromPort: 1024
+          ToPort: 65535
+          CidrIp: !GetAtt VpcCidrLookup.Subnet1Cidr
+        - IpProtocol: tcp
+          FromPort: 1024
+          ToPort: 65535
+          CidrIp: !GetAtt VpcCidrLookup.Subnet2Cidr
       VpcId: !Ref ExistingVpcId
       Tags:
         - Key: Name
@@ -307,15 +396,25 @@ Resources:
   RedisSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: Security group controlling access to the Redis cache (port 6379)
+      GroupDescription: Security group controlling access to the Redis cache (port 6379) from application subnets only
       SecurityGroupIngress:
         - IpProtocol: tcp
           FromPort: 6379
           ToPort: 6379
-          CidrIp: !GetAtt VpcCidrLookup.CidrBlock
+          CidrIp: !GetAtt VpcCidrLookup.Subnet1Cidr
+        - IpProtocol: tcp
+          FromPort: 6379
+          ToPort: 6379
+          CidrIp: !GetAtt VpcCidrLookup.Subnet2Cidr
       SecurityGroupEgress:
-        - IpProtocol: "-1"
-          CidrIp: !GetAtt VpcCidrLookup.CidrBlock
+        - IpProtocol: tcp
+          FromPort: 1024
+          ToPort: 65535
+          CidrIp: !GetAtt VpcCidrLookup.Subnet1Cidr
+        - IpProtocol: tcp
+          FromPort: 1024
+          ToPort: 65535
+          CidrIp: !GetAtt VpcCidrLookup.Subnet2Cidr
       VpcId: !Ref ExistingVpcId
       Tags:
         - Key: Name
@@ -750,10 +849,10 @@ Resources:
   DBSubnetGroup:
     Type: AWS::RDS::DBSubnetGroup
     Properties:
-      DBSubnetGroupDescription: Subnet group defining which private subnets can host the PostgreSQL database
+      DBSubnetGroupDescription: Subnet group defining which data subnets can host the PostgreSQL database
       SubnetIds:
-        - !Ref ExistingPrivateSubnet1Id
-        - !Ref ExistingPrivateSubnet2Id
+        - !Ref ExistingDataSubnet1Id
+        - !Ref ExistingDataSubnet2Id
       Tags:
         - Key: Name
           Value: !Sub "${AWS::StackName}-postgres-subnet-group"
@@ -809,10 +908,10 @@ Resources:
   RedisSubnetGroup:
     Type: AWS::ElastiCache::SubnetGroup
     Properties:
-      Description: Subnet group for Redis cache
+      Description: Subnet group for Redis cache in data subnets
       SubnetIds:
-        - !Ref ExistingPrivateSubnet1Id
-        - !Ref ExistingPrivateSubnet2Id
+        - !Ref ExistingDataSubnet1Id
+        - !Ref ExistingDataSubnet2Id
       Tags:
         - Key: Name
           Value: !Sub "${AWS::StackName}-redis-subnet-group"
@@ -825,8 +924,8 @@ Resources:
       SecurityGroupIds:
         - !GetAtt RedisSecurityGroup.GroupId
       SubnetIds:
-        - !Ref ExistingPrivateSubnet1Id
-        - !Ref ExistingPrivateSubnet2Id
+        - !Ref ExistingDataSubnet1Id
+        - !Ref ExistingDataSubnet2Id
       Tags:
         - Key: Name
           Value: !Sub "${AWS::StackName}-redis"
@@ -1066,6 +1165,19 @@ Outputs:
     Value: !Ref ExistingPublicSubnet2Id
     Export:
       Name: !Sub "${AWS::StackName}-CFNPUBLICSUBNET2"
+
+  # Data subnet outputs
+  CFNDATASUBNET1:
+    Description: Data Subnet ID in first availability zone for managed data services
+    Value: !Ref ExistingDataSubnet1Id
+    Export:
+      Name: !Sub "${AWS::StackName}-CFNDATASUBNET1"
+
+  CFNDATASUBNET2:
+    Description: Data Subnet ID in second availability zone for managed data services
+    Value: !Ref ExistingDataSubnet2Id
+    Export:
+      Name: !Sub "${AWS::StackName}-CFNDATASUBNET2"
 
   # S3 bucket outputs
   CFNTERRAFORMBUCKET:
