@@ -17,12 +17,9 @@ Metadata:
           - ExistingPrivateSubnet2Id
           - ExistingPublicSubnet1Id
           - ExistingPublicSubnet2Id
-          - PublicAccess
-      - Label:
-          default: Data Subnet Configuration
-        Parameters:
           - ExistingDataSubnet1Id
           - ExistingDataSubnet2Id
+          - PublicAccess
       - Label:
           default: Security Configuration
         Parameters:
