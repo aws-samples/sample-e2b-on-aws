@@ -69,13 +69,7 @@ func (a *APIStore) PostSandboxesSandboxIDResume(c *gin.Context, sandboxID api.Sa
 		autoPause = *body.AutoPause
 	}
 
-	clientID, ok := getSandboxIDClient(sandboxID)
-	if !ok {
-		a.sendAPIStoreError(c, http.StatusBadRequest, fmt.Sprintf("Invalid sandbox ID — missing client ID part: %s", sandboxID))
-
-		return
-	}
-
+	clientID, _ := getSandboxIDClient(sandboxID)
 	sandboxID = utils.ShortID(sandboxID)
 
 	sbxCache, err := a.orchestrator.GetSandbox(sandboxID)
@@ -144,6 +138,11 @@ func (a *APIStore) PostSandboxesSandboxIDResume(c *gin.Context, sandboxID api.Sa
 		envdAccessToken = &accessToken
 	}
 
+	var clientIDPtr *string
+	if clientID != "" {
+		clientIDPtr = &clientID
+	}
+
 	sbx, createErr := a.startSandbox(
 		ctx,
 		snap.SandboxID,
@@ -155,7 +154,7 @@ func (a *APIStore) PostSandboxesSandboxIDResume(c *gin.Context, sandboxID api.Sa
 		build,
 		&c.Request.Header,
 		true,
-		&clientID,
+		clientIDPtr,
 		snap.BaseEnvID,
 		autoPause,
 		envdAccessToken,
