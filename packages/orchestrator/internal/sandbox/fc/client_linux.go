@@ -165,7 +165,7 @@ func (c *apiClient) setBootSource(ctx context.Context, kernelArgs string, kernel
 
 func (c *apiClient) setRootfsDrive(ctx context.Context, rootfsPath string) error {
 	rootfs := "rootfs"
-	ioEngine := "Async"
+	ioEngine := "Sync"
 	isRootDevice := true
 	driversConfig := operations.PutGuestDriveByIDParams{
 		Context: ctx,

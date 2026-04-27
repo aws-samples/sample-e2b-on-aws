@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"syscall"
 	txtTemplate "text/template"
+	"time"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
@@ -59,7 +60,8 @@ type Process struct {
 	rootfsPath string
 	files      *storage.SandboxFiles
 
-	Exit chan error
+	Exit   chan error
+	exited chan struct{} // closed when FC process has fully exited
 
 	client *apiClient
 
@@ -135,6 +137,7 @@ func NewProcess(
 
 	return &Process{
 		Exit:                  make(chan error, 1),
+		exited:                make(chan struct{}),
 		cmd:                   cmd,
 		firecrackerSocketPath: files.SandboxFirecrackerSocketPath(),
 		client:                newApiClient(files.SandboxFirecrackerSocketPath()),
@@ -194,13 +197,15 @@ func (p *Process) configure(
 	go func() {
 		defer stderrWriter.Close()
 		defer stdoutWriter.Close()
+		defer close(p.exited)
 
 		waitErr := p.cmd.Wait()
 		if waitErr != nil {
 			var exitErr *exec.ExitError
 			if errors.As(waitErr, &exitErr) {
 				// Check if the process was killed by a signal
-				if status, ok := exitErr.Sys().(syscall.WaitStatus); ok && status.Signaled() && status.Signal() == syscall.SIGKILL {
+				if status, ok := exitErr.Sys().(syscall.WaitStatus); ok && status.Signaled() &&
+					(status.Signal() == syscall.SIGKILL || status.Signal() == syscall.SIGTERM) {
 					p.Exit <- nil
 
 					return
@@ -427,12 +432,47 @@ func (p *Process) Stop() error {
 		return fmt.Errorf("fc process not started")
 	}
 
-	err := p.cmd.Process.Kill()
-	if err != nil {
-		zap.L().Warn("failed to send KILL to FC process", zap.Error(err))
+	select {
+	case <-p.exited:
+		return nil
+	default:
 	}
 
+	err := p.cmd.Process.Signal(syscall.SIGTERM)
+	if err != nil {
+		if errors.Is(err, os.ErrProcessDone) {
+			return nil
+		}
+		zap.L().Warn("failed to send SIGTERM to FC process", zap.Error(err))
+	}
+
+	go func() {
+		select {
+		case <-time.After(10 * time.Second):
+			killErr := p.cmd.Process.Kill()
+			if killErr != nil && !errors.Is(killErr, os.ErrProcessDone) {
+				zap.L().Warn("failed to send SIGKILL to FC process", zap.Error(killErr))
+			} else if killErr == nil {
+				zap.L().Warn("sent SIGKILL to FC process because it was not responding to SIGTERM for 10 seconds")
+			}
+		case <-p.exited:
+			return
+		}
+	}()
+
 	return nil
+}
+
+func (p *Process) WaitForExit(timeout time.Duration) error {
+	if p.cmd.Process == nil {
+		return nil
+	}
+	select {
+	case <-p.exited:
+		return nil
+	case <-time.After(timeout):
+		return fmt.Errorf("timeout waiting for FC process to exit after %s", timeout)
+	}
 }
 
 func (p *Process) Pause(ctx context.Context, tracer trace.Tracer) error {
