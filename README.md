@@ -244,6 +244,41 @@ e2b sandbox kill --all            # Kill all sandboxes
 
 ---
 
+## ⚙️ VM Configuration
+
+### CPU Template
+
+Firecracker VMs use a CPU template to mask host-specific CPU features, ensuring VMs can migrate across different hosts. By default, the CPU template is set to **T2** (Intel).
+
+To override, set the `FC_CPU_TEMPLATE` environment variable on the orchestrator nodes:
+
+```bash
+# Intel hosts (default)
+export FC_CPU_TEMPLATE=T2
+
+# AMD hosts
+export FC_CPU_TEMPLATE=T2A
+
+# ARM (Graviton) hosts
+export FC_CPU_TEMPLATE=V1N1
+
+# No CPU template (inherit host features, not recommended)
+export FC_CPU_TEMPLATE=None
+```
+
+| Template | Platform | CPUs | Description |
+|----------|----------|------|-------------|
+| `T2` | x86_64 | Intel Skylake, Cascade Lake, Ice Lake | Matches AWS T2 instance CPU features. Provides a broad baseline feature set suitable for general-purpose workloads. Recommended default for Intel hosts. |
+| `C3` | x86_64 | Intel Skylake, Cascade Lake, Ice Lake | Matches AWS C3 instance CPU features. Exposes more compute-optimized features than T2 but may not apply mitigations against MMIO stale data vulnerability on some processors. |
+| `T2S` | x86_64 | Intel Skylake, Cascade Lake | More restrictive than T2 with a smaller feature set. May incur a performance penalty. |
+| `T2CL` | x86_64 | Intel Cascade Lake, Ice Lake | Designed to provide feature parity with T2A (AMD), enabling heterogeneous Intel/AMD fleets. |
+| `T2A` | x86_64 | AMD Milan | AMD equivalent of T2CL. Use T2CL + T2A together for mixed Intel/AMD fleets. |
+| `V1N1` | aarch64 | ARM Neoverse V1 | For AWS Graviton (ARM) hosts. |
+
+> **Note:** The CPU template must be consistent across all hosts where VMs may be built, snapshotted, and resumed. Mismatched templates can cause VM restore failures.
+
+---
+
 ## 📚 E2B SDK Cookbook
 
 ```bash
