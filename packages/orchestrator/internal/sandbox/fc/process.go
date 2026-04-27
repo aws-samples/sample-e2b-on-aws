@@ -438,27 +438,10 @@ func (p *Process) Stop() error {
 	default:
 	}
 
-	err := p.cmd.Process.Signal(syscall.SIGTERM)
+	err := p.cmd.Process.Kill()
 	if err != nil {
-		if errors.Is(err, os.ErrProcessDone) {
-			return nil
-		}
-		zap.L().Warn("failed to send SIGTERM to FC process", zap.Error(err))
+		zap.L().Warn("failed to send KILL to FC process", zap.Error(err))
 	}
-
-	go func() {
-		select {
-		case <-time.After(10 * time.Second):
-			killErr := p.cmd.Process.Kill()
-			if killErr != nil && !errors.Is(killErr, os.ErrProcessDone) {
-				zap.L().Warn("failed to send SIGKILL to FC process", zap.Error(killErr))
-			} else if killErr == nil {
-				zap.L().Warn("sent SIGKILL to FC process because it was not responding to SIGTERM for 10 seconds")
-			}
-		case <-p.exited:
-			return
-		}
-	}()
 
 	return nil
 }

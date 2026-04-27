@@ -467,7 +467,7 @@ func (s *Sandbox) Close(ctx context.Context, tracer trace.Tracer) error {
 	}
 
 	// The process exited, we can continue with the rest of the cleanup.
-	const fcExitTimeout = 15 * time.Second
+	const fcExitTimeout = 5 * time.Second
 	if waitErr := s.process.WaitForExit(fcExitTimeout); waitErr != nil {
 		zap.L().Warn("timeout waiting for FC process exit, proceeding with cleanup", zap.Error(waitErr))
 	}
