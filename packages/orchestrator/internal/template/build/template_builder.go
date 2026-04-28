@@ -263,13 +263,17 @@ func (b *TemplateBuilder) Build(ctx context.Context, template *TemplateConfig) (
 				postProcessor.WriteMsg(fmt.Sprintf("[step %d] %s %s %s", i, stepType, step.Args[0], step.Args[1]))
 				err = b.copyFilesToSandbox(ctx, postProcessor, sbx.Metadata.Config.SandboxId, template.TemplateId, step)
 			case "ENV":
+				snapshot := make(map[string]string, len(envVars))
+				for k, v := range envVars {
+					snapshot[k] = v
+				}
 				for j := 0; j < len(step.Args); j++ {
 					arg := step.Args[j]
 					parts := strings.SplitN(arg, "=", 2)
 					if len(parts) == 2 {
-						envVars[parts[0]] = parts[1]
+						envVars[parts[0]] = expandEnvVars(parts[1], snapshot)
 					} else if j+1 < len(step.Args) {
-						envVars[arg] = step.Args[j+1]
+						envVars[arg] = expandEnvVars(step.Args[j+1], snapshot)
 						j++
 					}
 				}
@@ -277,10 +281,10 @@ func (b *TemplateBuilder) Build(ctx context.Context, template *TemplateConfig) (
 				continue
 			case "WORKDIR":
 				if len(step.Args) > 0 {
-					postProcessor.WriteMsg(fmt.Sprintf("[step %d] WORKDIR %s", i, step.Args[0]))
+					wd := expandEnvVars(step.Args[0], envVars)
+					postProcessor.WriteMsg(fmt.Sprintf("[step %d] WORKDIR %s", i, wd))
 					err = b.runCommand(ctx, postProcessor, fmt.Sprintf("step-%d-workdir", i),
-						sbx.Metadata.Config.SandboxId, fmt.Sprintf("mkdir -p %s", step.Args[0]), "root", nil, envVars)
-					wd := step.Args[0]
+						sbx.Metadata.Config.SandboxId, fmt.Sprintf("mkdir -p %s", wd), "root", nil, envVars)
 					currentWorkdir = &wd
 				}
 			case "USER":
@@ -613,4 +617,13 @@ func (b *TemplateBuilder) enlargeDiskAfterProvisioning(
 		zap.String("result", ext4Check),
 	)
 	return nil
+}
+
+func expandEnvVars(value string, envs map[string]string) string {
+	return os.Expand(value, func(key string) string {
+		if v, ok := envs[key]; ok {
+			return v
+		}
+		return ""
+	})
 }
