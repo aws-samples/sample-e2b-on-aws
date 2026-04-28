@@ -129,6 +129,17 @@ function fetch_binary {
   retry \
     "curl -o '$DOWNLOAD_PACKAGE_PATH' '$download_url' --location --silent --fail --show-error" \
     "Downloading Consul to $DOWNLOAD_PACKAGE_PATH"
+
+  local readonly checksum_url="https://releases.hashicorp.com/consul/${version}/consul_${version}_SHA256SUMS"
+  local readonly checksum_file="/tmp/consul_SHA256SUMS"
+  curl -o "$checksum_file" "$checksum_url" --location --silent --fail --show-error
+  local readonly expected_hash=$(grep "consul_${version}_linux_${consul_arch}.zip" "$checksum_file" | awk '{print $1}')
+  local readonly actual_hash=$(sha256sum "$DOWNLOAD_PACKAGE_PATH" | awk '{print $1}')
+  if [[ "$expected_hash" != "$actual_hash" ]]; then
+    log_error "SHA256 checksum verification failed for Consul $version"
+    exit 1
+  fi
+  log_info "SHA256 checksum verified for Consul $version"
 }
 
 function install_binary {

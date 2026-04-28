@@ -170,9 +170,12 @@ build {
       "sudo -E apt-get update && sudo -E apt-get upgrade -y",
       "if [ \"${var.architecture}\" = \"x86_64\" ]; then",
       "  sudo curl 'https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip' -o 'awscliv2.zip'",
+      "  curl -s 'https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip.sha256' -o 'awscliv2.zip.sha256'",
       "else",
       "  sudo curl 'https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip' -o 'awscliv2.zip'",
+      "  curl -s 'https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip.sha256' -o 'awscliv2.zip.sha256'",
       "fi",
+      "sha256sum -c awscliv2.zip.sha256",
       "sudo -E apt-get install -y zip",
       "sudo unzip awscliv2.zip",
       "sudo ./aws/install",
@@ -197,7 +200,8 @@ build {
   provisioner "shell" {
     inline = [
       "sudo mkdir -p /opt/gruntwork",
-      "git clone --branch v0.1.3 https://github.com/gruntwork-io/bash-commons.git /tmp/bash-commons",
+      "git clone https://github.com/gruntwork-io/bash-commons.git /tmp/bash-commons",
+      "git -C /tmp/bash-commons checkout 013a0b429d0bd57ce49f487fade15cf95cef5b6d",
       "sudo cp -r /tmp/bash-commons/modules/bash-commons/src /opt/gruntwork/bash-commons",
       "sudo chmod -R a+rX /opt/gruntwork"
     ]
@@ -227,11 +231,16 @@ build {
     only = ["amazon-ebs.orch"]
     inline = [
       "sudo mkdir -p /opt/aws/amazon-cloudwatch-agent/bin/",
+      "wget -q https://amazoncloudwatch-agent.s3.amazonaws.com/assets/amazon-cloudwatch-agent.gpg -O /tmp/cw-agent.gpg",
+      "gpg --import /tmp/cw-agent.gpg",
       "if [ \"${var.architecture}\" = \"x86_64\" ]; then",
       "  sudo wget https://amazoncloudwatch-agent.s3.amazonaws.com/ubuntu/amd64/latest/amazon-cloudwatch-agent.deb -O /tmp/amazon-cloudwatch-agent.deb",
+      "  wget -q https://amazoncloudwatch-agent.s3.amazonaws.com/ubuntu/amd64/latest/amazon-cloudwatch-agent.deb.sig -O /tmp/amazon-cloudwatch-agent.deb.sig",
       "else",
       "  sudo wget https://amazoncloudwatch-agent.s3.amazonaws.com/ubuntu/arm64/latest/amazon-cloudwatch-agent.deb -O /tmp/amazon-cloudwatch-agent.deb",
+      "  wget -q https://amazoncloudwatch-agent.s3.amazonaws.com/ubuntu/arm64/latest/amazon-cloudwatch-agent.deb.sig -O /tmp/amazon-cloudwatch-agent.deb.sig",
       "fi",
+      "gpg --verify /tmp/amazon-cloudwatch-agent.deb.sig /tmp/amazon-cloudwatch-agent.deb",
       "sudo dpkg -i /tmp/amazon-cloudwatch-agent.deb || sudo -E apt-get install -f -y",
       "sudo systemctl enable amazon-cloudwatch-agent"
     ]

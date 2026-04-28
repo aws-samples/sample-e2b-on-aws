@@ -158,6 +158,18 @@ function install_binaries {
 
   log_info "Downloading Nomad $version from $url to $download_path"
   curl -o "$download_path" "$url"
+
+  local readonly checksum_url="https://releases.hashicorp.com/nomad/${version}/nomad_${version}_SHA256SUMS"
+  local readonly checksum_file="/tmp/nomad_SHA256SUMS"
+  curl -o "$checksum_file" "$checksum_url" --location --silent --fail --show-error
+  local readonly expected_hash=$(grep "nomad_${version}_linux_${nomad_arch}.zip" "$checksum_file" | awk '{print $1}')
+  local readonly actual_hash=$(sha256sum "$download_path" | awk '{print $1}')
+  if [[ "$expected_hash" != "$actual_hash" ]]; then
+    log_error "SHA256 checksum verification failed for Nomad $version"
+    exit 1
+  fi
+  log_info "SHA256 checksum verified for Nomad $version"
+
   unzip -d /tmp "$download_path"
 
   log_info "Moving Nomad binary to $nomad_dest_path"
