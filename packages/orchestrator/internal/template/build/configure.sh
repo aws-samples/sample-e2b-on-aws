@@ -21,10 +21,7 @@ if echo "$ADDUSER_OUTPUT" | grep -q "The home directory \`/home/user' already ex
     cp -rn /etc/skel/. /home/user/
 fi
 
-echo "Add sudo to 'user' with no password"
-usermod -aG sudo user
 passwd -d user
-echo "user ALL=(ALL:ALL) NOPASSWD: ALL" >>/etc/sudoers
 
 echo "Give 'user' ownership to /home/user"
 mkdir -p /home/user

@@ -242,6 +242,7 @@ func (b *TemplateBuilder) Build(ctx context.Context, template *TemplateConfig) (
 	envVars := oci.ParseEnvs(buildConfig.Env)
 
 	// Execute build steps inside the running FC VM
+	currentUser := "root"
 	if len(template.Steps) > 0 {
 		postProcessor.WriteMsg(fmt.Sprintf("Executing %d build steps", len(template.Steps)))
 		for i, step := range template.Steps {
@@ -253,7 +254,7 @@ func (b *TemplateBuilder) Build(ctx context.Context, template *TemplateConfig) (
 				}
 				postProcessor.WriteMsg(fmt.Sprintf("[step %d] RUN %s", i, step.Args[0]))
 				err = b.runCommand(ctx, postProcessor, fmt.Sprintf("step-%d-run", i),
-					sbx.Metadata.Config.SandboxId, step.Args[0], "root", nil, envVars)
+					sbx.Metadata.Config.SandboxId, step.Args[0], currentUser, nil, envVars)
 			case "COPY", "ADD":
 				if len(step.Args) < 2 {
 					return nil, fmt.Errorf("step %d: %s requires source and destination arguments", i, stepType)
@@ -274,6 +275,13 @@ func (b *TemplateBuilder) Build(ctx context.Context, template *TemplateConfig) (
 					err = b.runCommand(ctx, postProcessor, fmt.Sprintf("step-%d-workdir", i),
 						sbx.Metadata.Config.SandboxId, fmt.Sprintf("mkdir -p %s", step.Args[0]), "root", nil, envVars)
 				}
+			case "USER":
+				if len(step.Args) < 1 {
+					return nil, fmt.Errorf("step %d: USER requires username argument", i)
+				}
+				currentUser = step.Args[0]
+				postProcessor.WriteMsg(fmt.Sprintf("[step %d] USER %s", i, currentUser))
+				continue
 			default:
 				return nil, fmt.Errorf("step %d: unsupported step type %q", i, stepType)
 			}
@@ -282,6 +290,11 @@ func (b *TemplateBuilder) Build(ctx context.Context, template *TemplateConfig) (
 			}
 		}
 		postProcessor.WriteMsg("All build steps completed")
+	}
+
+	// For v1 CLI flow: use Docker image USER if no explicit USER step was set
+	if currentUser == "root" && buildConfig.User != "" {
+		currentUser = buildConfig.User
 	}
 
 	// Run configuration script
@@ -330,7 +343,7 @@ func (b *TemplateBuilder) Build(ctx context.Context, template *TemplateConfig) (
 				"start",
 				sbx.Metadata.Config.SandboxId,
 				template.StartCmd,
-				"root",
+				currentUser,
 				&cwd,
 				envVars,
 				startCmdConfirm,
@@ -355,6 +368,7 @@ func (b *TemplateBuilder) Build(ctx context.Context, template *TemplateConfig) (
 		postProcessor,
 		template,
 		sbx.Metadata.Config.SandboxId,
+		currentUser,
 		envVars,
 	)
 	if err != nil {
