@@ -46,12 +46,9 @@ func (a *APIStore) GetToken(w http.ResponseWriter, r *http.Request) error {
 		return fmt.Errorf("invalid access token")
 	}
 
-	scope := r.URL.Query().Get("scope")
-	hasScope := scope != ""
+	scopes := r.URL.Query()["scope"]
 
-	if !hasScope {
-		// If the scope is not provided, create a new token for the user,
-		// but don't grant any access to the underlying repository.
+	if len(scopes) == 0 {
 		jsonResponse := a.AuthCache.Create("not-yet-known", "undefined-docker-token", int(time.Hour.Seconds()))
 
 		w.Header().Set("Content-Type", "application/json")
@@ -60,11 +57,22 @@ func (a *APIStore) GetToken(w http.ResponseWriter, r *http.Request) error {
 		return nil
 	}
 
-	scopeRegexMatches := scopeRegex.FindStringSubmatch(scope)
+	var primaryScope string
+	for _, s := range scopes {
+		if strings.Contains(s, "push") {
+			primaryScope = s
+			break
+		}
+	}
+	if primaryScope == "" {
+		primaryScope = scopes[0]
+	}
+
+	scopeRegexMatches := scopeRegex.FindStringSubmatch(primaryScope)
 	if len(scopeRegexMatches) == 0 {
 		w.WriteHeader(http.StatusBadRequest)
 
-		return fmt.Errorf("invalid scope %s", scope)
+		return fmt.Errorf("invalid scope %s", primaryScope)
 	}
 
 	templateID := scopeRegexMatches[1]
@@ -74,7 +82,7 @@ func (a *APIStore) GetToken(w http.ResponseWriter, r *http.Request) error {
 	if strings.Contains(action, "delete") {
 		w.WriteHeader(http.StatusForbidden)
 
-		return fmt.Errorf("access denied for scope %s", scope)
+		return fmt.Errorf("access denied for scope %s", primaryScope)
 	}
 
 	// Validate if the user has access to the template
@@ -96,6 +104,11 @@ func (a *APIStore) GetToken(w http.ResponseWriter, r *http.Request) error {
 	if constants.CurrentCloudProvider == constants.GCP {
 		dockerToken, err = getGCPToken(templateID)
 	} else if constants.CurrentCloudProvider == constants.AWS {
+		for _, s := range scopes {
+			if m := scopeRegex.FindStringSubmatch(s); len(m) > 0 {
+				_ = auth.EnsureECRRepositoryExists(m[1])
+			}
+		}
 		dockerToken, err = getAWSToken(templateID)
 	} else {
 		err = fmt.Errorf("unsupported cloud provider")
