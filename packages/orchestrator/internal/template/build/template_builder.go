@@ -263,12 +263,17 @@ func (b *TemplateBuilder) Build(ctx context.Context, template *TemplateConfig) (
 				postProcessor.WriteMsg(fmt.Sprintf("[step %d] %s %s %s", i, stepType, step.Args[0], step.Args[1]))
 				err = b.copyFilesToSandbox(ctx, postProcessor, sbx.Metadata.Config.SandboxId, template.TemplateId, step)
 			case "ENV":
-				for _, arg := range step.Args {
+				for j := 0; j < len(step.Args); j++ {
+					arg := step.Args[j]
 					parts := strings.SplitN(arg, "=", 2)
 					if len(parts) == 2 {
 						envVars[parts[0]] = parts[1]
+					} else if j+1 < len(step.Args) {
+						envVars[arg] = step.Args[j+1]
+						j++
 					}
 				}
+				postProcessor.WriteMsg(fmt.Sprintf("[step %d] ENV set %d variable(s)", i, len(step.Args)/2))
 				continue
 			case "WORKDIR":
 				if len(step.Args) > 0 {
