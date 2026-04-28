@@ -601,6 +601,7 @@ resource "aws_iam_role_policy" "ecr_scoped_access" {
           "ecr:BatchCheckLayerAvailability",
           "ecr:GetDownloadUrlForLayer",
           "ecr:BatchGetImage",
+          "ecr:BatchDeleteImage",
           "ecr:PutImage",
           "ecr:InitiateLayerUpload",
           "ecr:UploadLayerPart",

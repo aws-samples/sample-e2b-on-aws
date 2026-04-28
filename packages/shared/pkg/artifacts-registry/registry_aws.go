@@ -51,7 +51,8 @@ func (g *AWSArtifactsRegistry) Delete(ctx context.Context, templateId string, bu
 	}
 
 	// for AWS implementation we are using only build id as image tag
-	res, err := g.client.BatchDeleteImage(ctx, &ecr.BatchDeleteImageInput{RepositoryName: &g.repositoryName, ImageIds: imageIds})
+	repositoryNameWithTemplate := fmt.Sprintf("%s/%s", g.repositoryName, templateId)
+	res, err := g.client.BatchDeleteImage(ctx, &ecr.BatchDeleteImageInput{RepositoryName: &repositoryNameWithTemplate, ImageIds: imageIds})
 	if err != nil {
 		return fmt.Errorf("failed to delete image from aws ecr: %w", err)
 	}
