@@ -243,6 +243,7 @@ func (b *TemplateBuilder) Build(ctx context.Context, template *TemplateConfig) (
 
 	// Execute build steps inside the running FC VM
 	currentUser := "root"
+	var currentWorkdir *string
 	if len(template.Steps) > 0 {
 		postProcessor.WriteMsg(fmt.Sprintf("Executing %d build steps", len(template.Steps)))
 		for i, step := range template.Steps {
@@ -254,7 +255,7 @@ func (b *TemplateBuilder) Build(ctx context.Context, template *TemplateConfig) (
 				}
 				postProcessor.WriteMsg(fmt.Sprintf("[step %d] RUN %s", i, step.Args[0]))
 				err = b.runCommand(ctx, postProcessor, fmt.Sprintf("step-%d-run", i),
-					sbx.Metadata.Config.SandboxId, step.Args[0], currentUser, nil, envVars)
+					sbx.Metadata.Config.SandboxId, step.Args[0], currentUser, currentWorkdir, envVars)
 			case "COPY", "ADD":
 				if len(step.Args) < 2 {
 					return nil, fmt.Errorf("step %d: %s requires source and destination arguments", i, stepType)
@@ -274,6 +275,8 @@ func (b *TemplateBuilder) Build(ctx context.Context, template *TemplateConfig) (
 					postProcessor.WriteMsg(fmt.Sprintf("[step %d] WORKDIR %s", i, step.Args[0]))
 					err = b.runCommand(ctx, postProcessor, fmt.Sprintf("step-%d-workdir", i),
 						sbx.Metadata.Config.SandboxId, fmt.Sprintf("mkdir -p %s", step.Args[0]), "root", nil, envVars)
+					wd := step.Args[0]
+					currentWorkdir = &wd
 				}
 			case "USER":
 				if len(step.Args) < 1 {
@@ -337,6 +340,9 @@ func (b *TemplateBuilder) Build(ctx context.Context, template *TemplateConfig) (
 		postProcessor.WriteMsg("Running start command")
 		startCmd.Go(func() error {
 			cwd := "/home/user"
+			if currentWorkdir != nil {
+				cwd = *currentWorkdir
+			}
 			err := b.runCommandWithConfirmation(
 				commandsCtx,
 				postProcessor,
@@ -369,6 +375,7 @@ func (b *TemplateBuilder) Build(ctx context.Context, template *TemplateConfig) (
 		template,
 		sbx.Metadata.Config.SandboxId,
 		currentUser,
+		currentWorkdir,
 		envVars,
 	)
 	if err != nil {
