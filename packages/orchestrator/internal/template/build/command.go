@@ -225,11 +225,29 @@ func (b *TemplateBuilder) copyFilesToSandbox(ctx context.Context, postProcessor 
 		return fmt.Errorf("failed to upload file to sandbox (status %d)", resp.StatusCode)
 	}
 
-	// Extract and move files inside sandbox
-	extractCmd := fmt.Sprintf(`mkdir -p "%s" && tar -xzf "%s" -C "%s" && cp -r "%s"/* "%s"/ 2>/dev/null || cp -r "%s"/* "%s" 2>/dev/null; rm -rf "/tmp/%s"`,
+	// Extract and move files inside sandbox following Docker COPY semantics:
+	// 1. Find the "content root" by drilling through single-entry parent directories
+	//    (strips tar packaging directories like shims/ when COPY shims/file.py ...)
+	// 2. Single file + target not ending with / → copy as file
+	// 3. Otherwise → copy directory contents into target directory
+	extractCmd := fmt.Sprintf(
+		`mkdir -p "%s" && tar -xzf "%s" -C "%s" && `+
+			`CONTENT_ROOT="%s" && `+
+			`while [ $(ls -1 "$CONTENT_ROOT" | wc -l) -eq 1 ] && [ -d "$CONTENT_ROOT/$(ls -1 "$CONTENT_ROOT")" ]; do `+
+			`CONTENT_ROOT="$CONTENT_ROOT/$(ls -1 "$CONTENT_ROOT")"; `+
+			`done && `+
+			`FILE_COUNT=$(find "$CONTENT_ROOT" -maxdepth 1 -type f | wc -l) && `+
+			`DIR_COUNT=$(find "$CONTENT_ROOT" -maxdepth 1 -type d -not -path "$CONTENT_ROOT" | wc -l) && `+
+			`if [ "$FILE_COUNT" -eq 1 ] && [ "$DIR_COUNT" -eq 0 ] && echo "%s" | grep -qv '/$'; then `+
+			`SRC_FILE=$(find "$CONTENT_ROOT" -maxdepth 1 -type f) && mkdir -p "$(dirname "%s")" && cp "$SRC_FILE" "%s"; `+
+			`else `+
+			`mkdir -p "%s" && cp -r "$CONTENT_ROOT"/* "%s"/ 2>/dev/null || cp -r "$CONTENT_ROOT"/* "%s" 2>/dev/null; `+
+			`fi; rm -rf "/tmp/%s"`,
 		sbxUnpackPath, sbxTarPath, sbxUnpackPath,
-		sbxUnpackPath, targetPath,
-		sbxUnpackPath, targetPath,
+		sbxUnpackPath,
+		targetPath,
+		targetPath, targetPath,
+		targetPath, targetPath, targetPath,
 		step.GetFilesHash())
 
 	return b.runCommand(ctx, postProcessor, "copy", sandboxID, extractCmd, "root", nil, map[string]string{})

@@ -77,7 +77,7 @@ Parameters:
 
   # Client Cluster Configuration - Instance type for client nodes
   ClientInstanceType:
-    Description: "Instance type for client cluster nodes (must support nested virtualization, e.g. *.metal). Leave empty to use architecture default (x86: c5.metal, arm64: c7g.metal)."
+    Description: "Instance type for client cluster nodes (must support nested virtualization, e.g. *.metal). Leave empty to use architecture default (x86: m7i.metal-24xl, arm64: c7g.metal)."
     Type: String
     Default: ""
 
@@ -136,11 +136,8 @@ Parameters:
 
   # Bastion Configuration - Settings for the deployment and management server
   CustomAmiId:
-    Type: String
-    Default: ""
-    Description: >-
-      Custom AMI ID for the bastion host and Packer base image.
-      Leave empty to use the default Ubuntu 22.04 official AMI.
+    Type: AWS::EC2::Image::Id
+    Description: AMI ID for the bastion host and Packer base image.
 
   KeyName:
     Description: EC2 Key Pair name for SSH access to the bastion host (deployment server)
@@ -181,7 +178,6 @@ Conditions:
   IsArm64: !Equals [!Ref Architecture, arm64]
   IsProd: !Equals [!Ref Environment, prod]
   HasCustomClientInstanceType: !Not [!Equals [!Ref ClientInstanceType, ""]]
-  HasCustomAmi: !Not [!Equals [!Ref CustomAmiId, ""]]
 
 # ===================================================================================================
 # Resources - AWS resources to be provisioned for the E2B infrastructure
@@ -684,8 +680,6 @@ Resources:
                       - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
                       - arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
                       - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
-                      - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
-                      - arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
                       - arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role
               - Sid: IAMPassRole
                 Effect: Allow
@@ -771,6 +765,28 @@ Resources:
         - '{"host":"${DBEndpoint}","port":"5432","dbname":"${DBName}","username":"${DBUsername}","password":"${DBPassword}"}'
         - DBEndpoint: !GetAtt AuroraCluster.Endpoint.Address
 
+  DBCredentialSecretTargetAttachment:
+    Type: AWS::SecretsManager::SecretTargetAttachment
+    Properties:
+      SecretId: !Ref DBCredentialSecret
+      TargetId: !Ref AuroraCluster
+      TargetType: AWS::RDS::DBCluster
+
+  DBCredentialRotationSchedule:
+    Type: AWS::SecretsManager::RotationSchedule
+    DependsOn: DBCredentialSecretTargetAttachment
+    Properties:
+      SecretId: !Ref DBCredentialSecret
+      HostedRotationLambda:
+        RotationType: PostgreSQLSingleUser
+        VpcSecurityGroupIds: !GetAtt DBSecurityGroup.GroupId
+        VpcSubnetIds: !Join
+          - ","
+          - - !Ref ExistingDataSubnet1Id
+            - !Ref ExistingDataSubnet2Id
+      RotationRules:
+        AutomaticallyAfterDays: 360
+
   # ------------------------------------------------------------------------------------------------
   # S3 Buckets - Object storage for Terraform state files and software artifacts
   # ------------------------------------------------------------------------------------------------
@@ -854,6 +870,17 @@ Resources:
         - Key: Name
           Value: !Sub "${AWS::StackName}-postgres-subnet-group"
 
+  AuroraClusterParameterGroup:
+    Type: AWS::RDS::DBClusterParameterGroup
+    Properties:
+      Description: Aurora PostgreSQL cluster parameter group with forced SSL
+      Family: aurora-postgresql16
+      Parameters:
+        rds.force_ssl: "1"
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-aurora-pg16-params"
+
   AuroraCluster:
     Type: AWS::RDS::DBCluster
     Properties:
@@ -865,13 +892,13 @@ Resources:
           - "-"
           - - Ref: "AWS::StackName"
             - Ref: "DBInstanceIdentifier"
-      DBClusterParameterGroupName: default.aurora-postgresql16
+      DBClusterParameterGroupName: !Ref AuroraClusterParameterGroup
       DBSubnetGroupName: !Ref DBSubnetGroup
       DatabaseName: !Ref DBName
       MasterUsername: !Ref DBUsername
       ServerlessV2ScalingConfiguration:
         MinCapacity: 0.5
-        MaxCapacity: 4
+        MaxCapacity: 64
       StorageEncrypted: true
       DeletionProtection: !If [IsProd, true, false]
       BackupRetentionPeriod: !If [IsProd, 14, 7]
@@ -898,6 +925,23 @@ Resources:
       Tags:
         - Key: Name
           Value: !Sub "${AWS::StackName}-aurora-instance"
+
+  AuroraReaderInstance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      Engine: aurora-postgresql
+      DBInstanceIdentifier:
+        Fn::Join:
+          - "-"
+          - - Ref: "AWS::StackName"
+            - Ref: "DBInstanceIdentifier"
+            - "reader"
+      DBClusterIdentifier: !Ref AuroraCluster
+      DBInstanceClass: db.serverless
+      PubliclyAccessible: false
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-aurora-reader"
 
   # ------------------------------------------------------------------------------------------------
   # ElastiCache Redis - Redis cache for E2B platform
@@ -937,7 +981,7 @@ Resources:
     Properties:
       InstanceType: !If
         - IsX64
-        - c6i.xlarge
+        - c7i.xlarge
         - c7g.xlarge
       KeyName: !Ref KeyName
       MetadataOptions:
@@ -949,13 +993,7 @@ Resources:
       SourceDestCheck: false
       EbsOptimized: true
       Monitoring: true
-      ImageId: !If
-        - HasCustomAmi
-        - !Ref CustomAmiId
-        - !If
-          - IsX64
-          - "{{resolve:ssm:/aws/service/canonical/ubuntu/server/22.04/stable/current/amd64/hvm/ebs-gp2/ami-id}}"
-          - "{{resolve:ssm:/aws/service/canonical/ubuntu/server/22.04/stable/current/arm64/hvm/ebs-gp2/ami-id}}"
+      ImageId: !Ref CustomAmiId
       BlockDeviceMappings:
         - DeviceName: /dev/sda1
           Ebs:
@@ -1256,20 +1294,14 @@ Outputs:
       - !Ref ClientInstanceType
       - !If
         - IsX64
-        - c5.metal
+        - m7i.metal-24xl
         - c7g.metal
     Export:
       Name: !Sub "${AWS::StackName}-CFNCLIENTINSTANCETYPE"
 
   CFNCUSTOMAMI:
     Description: AMI ID used for Packer base image
-    Value: !If
-      - HasCustomAmi
-      - !Ref CustomAmiId
-      - !If
-        - IsX64
-        - "{{resolve:ssm:/aws/service/canonical/ubuntu/server/22.04/stable/current/amd64/hvm/ebs-gp2/ami-id}}"
-        - "{{resolve:ssm:/aws/service/canonical/ubuntu/server/22.04/stable/current/arm64/hvm/ebs-gp2/ami-id}}"
+    Value: !Ref CustomAmiId
     Export:
       Name: !Sub "${AWS::StackName}-CFNCUSTOMAMI"
 
