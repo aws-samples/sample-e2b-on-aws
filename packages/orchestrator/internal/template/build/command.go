@@ -133,7 +133,7 @@ func (b *TemplateBuilder) runCommandWithConfirmation(
 
 // copyFilesToSandbox downloads build-context files from S3 and copies them into the sandbox via envd.
 // The files are identified by step.FilesHash which corresponds to a tar archive in the build-context bucket.
-func (b *TemplateBuilder) copyFilesToSandbox(ctx context.Context, postProcessor *writer.PostProcessor, sandboxID string, templateID string, step *templatemanager.TemplateStep) error {
+func (b *TemplateBuilder) copyFilesToSandbox(ctx context.Context, postProcessor *writer.PostProcessor, sandboxID string, templateID string, step *templatemanager.TemplateStep, cwd *string) error {
 	if step.FilesHash == nil || step.GetFilesHash() == "" {
 		return fmt.Errorf("COPY/ADD requires filesHash to be set")
 	}
@@ -143,6 +143,9 @@ func (b *TemplateBuilder) copyFilesToSandbox(ctx context.Context, postProcessor 
 	}
 
 	targetPath := step.Args[1]
+	if !strings.HasPrefix(targetPath, "/") && cwd != nil {
+		targetPath = *cwd + "/" + targetPath
+	}
 
 	// Download the tar archive from the dedicated build-context bucket (API presign upload target).
 	// Key format must match the upload side (packages/shared/pkg/storage/presign.go:BuildContextKey).

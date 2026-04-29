@@ -102,3 +102,6 @@ esac
 
 echo "Nomad jobs deployment completed!"
 
+rm -f deploy/*.hcl
+echo "Cleaned up deploy HCL files."
+

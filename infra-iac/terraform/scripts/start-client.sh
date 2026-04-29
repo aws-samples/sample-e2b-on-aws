@@ -235,8 +235,62 @@ EOH
 sudo udevadm control --reload-rules
 sudo udevadm trigger
 
-# Load the nbd module with 512 devices
-sudo modprobe nbd nbds_max=512
+set -euo pipefail
+
+NBDS_MAX="${NBDS_MAX:-4096}"
+
+exec > >(tee -a /var/log/cloud-init-audit-rules.log) 2>&1
+echo "=== $(date -Is) prepend-never-task-rules starting ==="
+
+RULES_FILE="/etc/audit/rules.d/99_auditd.rules"
+MARKER="# BEGIN never-task exemptions (managed by cloud-init)"
+
+NEVER_RULES=$(cat <<'EOF'
+# BEGIN never-task exemptions (managed by cloud-init)
+-a never,task
+# END never-task exemptions
+EOF
+)
+
+if grep -qF "$MARKER" "$RULES_FILE"; then
+  echo "never-task exemptions already present in $RULES_FILE; skipping."
+else
+  cp -a "$RULES_FILE" "${RULES_FILE}.bak.$(date +%Y%m%d%H%M%S)"
+  TMP=$(mktemp)
+  {
+    printf '%s\n\n' "$NEVER_RULES"
+    cat "$RULES_FILE"
+  } > "$TMP"
+  chown --reference="$RULES_FILE" "$TMP"
+  chmod --reference="$RULES_FILE" "$TMP"
+  mv "$TMP" "$RULES_FILE"
+  echo "Prepended never-task exemptions to $RULES_FILE."
+fi
+
+if augenrules --load; then
+  echo "augenrules --load succeeded."
+  auditctl -l | head -n 10 || true
+else
+  rc=$?
+  echo "augenrules --load returned $rc." >&2
+  echo "If the running config is immutable (-e 2), a reboot is required" >&2
+  echo "for the new rules to take effect; the on-disk file has been updated." >&2
+fi
+
+if modprobe -r nbd 2>/dev/null; then
+  echo "nbd module unloaded successfully."
+else
+  echo "nbd module not loaded or could not be unloaded (may be harmless)." >&2
+fi
+
+if time modprobe nbd "nbds_max=${NBDS_MAX}"; then
+  echo "nbd module loaded with nbds_max=${NBDS_MAX}."
+else
+  echo "Failed to load nbd module with nbds_max=${NBDS_MAX}." >&2
+  exit 1
+fi
+
+echo "=== $(date -Is) prepend-never-task-rules done ==="
 
 # Create the directory for the fc mounts
 mkdir -p /fc-vm
