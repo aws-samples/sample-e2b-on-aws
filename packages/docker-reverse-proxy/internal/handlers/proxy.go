@@ -19,17 +19,16 @@ func (a *APIStore) Proxy(w http.ResponseWriter, req *http.Request) {
 
 	// Validate the token by checking if the generated token is in the cache
 	authHeader := req.Header.Get("Authorization")
-	log.Printf("[DEBUG] Proxy - Auth header: %s", authHeader)
+	log.Printf("[DEBUG] Proxy - Auth header: %s", redactAuthorizationHeader(authHeader))
 	e2bToken := strings.TrimPrefix(authHeader, "Bearer ")
 	token, err := a.AuthCache.Get(e2bToken)
 	if err != nil {
-		log.Printf("Error while getting token for %s: %s, header: %s\n", path, err, authHeader)
+		log.Printf("Error while getting token for %s: %s, header: %s\n", path, err, redactAuthorizationHeader(authHeader))
 		utils.SetDockerUnauthorizedHeaders(w)
 		return
 	}
 
-	log.Printf("[DEBUG] Proxy - Found token in cache for template ID: %s, docker token (first 10 chars): %s...", 
-		token.TemplateID, token.DockerToken[:10])
+	log.Printf("[DEBUG] Proxy - Found token in cache for template ID: %s", token.TemplateID)
 
 	// Handle based on cloud provider
 	if constants.CurrentCloudProvider == constants.GCP {
@@ -104,44 +103,44 @@ func handleAWSProxy(a *APIStore, w http.ResponseWriter, req *http.Request, path 
 
 	// 客户端请求路径前缀
 	repoPrefix := "/v2/e2b/custom-envs/"
-	
+
 	// 对于 AWS ECR，使用 base_repo_name 作为基础仓库名
 	baseRepo := strings.Trim(constants.AWSECRRepository, "/")
-	
+
 	// 设置真实的仓库前缀，包含 templateID
 	realRepoPrefix := fmt.Sprintf("/v2/%s/%s/", baseRepo, templateID)
-	
+
 	// 如果路径不是以客户端仓库前缀开头，拒绝访问
 	if !strings.HasPrefix(path, repoPrefix) {
 		log.Printf("[ERROR] No matching route found for path: %s", path)
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}
-	
+
 	// 提取路径中的模板 ID
 	pathInRepo := strings.TrimPrefix(path, repoPrefix)
 	templateWithBuildID := strings.Split(strings.Split(pathInRepo, "/")[0], ":")
-	
+
 	// 如果路径中的模板 ID 与令牌中的不同，拒绝访问
 	if templateWithBuildID[0] != templateID {
-		log.Printf("[ERROR] Access denied: path template ID %s doesn't match token template ID %s", 
+		log.Printf("[ERROR] Access denied: path template ID %s doesn't match token template ID %s",
 			templateWithBuildID[0], templateID)
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}
-	
+
 	// 替换路径前缀，确保不会重复 templateID
-	newPath := strings.Replace(req.URL.Path, 
-							 fmt.Sprintf("%s%s", repoPrefix, templateID), 
-							 realRepoPrefix, 
-							 1)
-	
+	newPath := strings.Replace(req.URL.Path,
+		fmt.Sprintf("%s%s", repoPrefix, templateID),
+		realRepoPrefix,
+		1)
+
 	// 移除任何双斜杠
 	newPath = strings.ReplaceAll(newPath, "//", "/")
 	req.URL.Path = newPath
-	
+
 	log.Printf("[DEBUG] AWS Proxy - Converted path: %s", req.URL.Path)
-	
+
 	// 代理请求
 	a.ServeHTTP(w, req)
 }

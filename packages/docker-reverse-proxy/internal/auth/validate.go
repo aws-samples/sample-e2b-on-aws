@@ -52,17 +52,17 @@ func ExtractAccessToken(authHeader, authType string) (string, error) {
 
 	loginInfo, err := base64.StdEncoding.DecodeString(encodedLoginInfo)
 	if err != nil {
-		return "", fmt.Errorf("error while decoding login info for %s: %s", encodedLoginInfo, err)
+		return "", fmt.Errorf("error while decoding login info: %w", err)
 	}
 
 	loginInfoParts := strings.Split(string(loginInfo), ":")
 	if len(loginInfoParts) != 2 {
-		return "", fmt.Errorf("invalid login info format %s", string(loginInfo))
+		return "", fmt.Errorf("invalid login info format")
 	}
 
 	username := loginInfoParts[0]
 	if username != "_e2b_access_token" {
-		return "", fmt.Errorf("invalid username %s", username)
+		return "", fmt.Errorf("invalid username")
 	}
 
 	accessToken := strings.TrimSpace(loginInfoParts[1])

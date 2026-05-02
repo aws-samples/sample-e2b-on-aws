@@ -38,7 +38,7 @@ func (a *APIStore) GetToken(w http.ResponseWriter, r *http.Request) error {
 	}
 
 	if !auth.ValidateAccessToken(ctx, a.db.Client, accessToken) {
-		log.Printf("Invalid access token: '%s'\n", accessToken)
+		log.Printf("Invalid access token: %s\n", redactSecret(accessToken))
 
 		w.WriteHeader(http.StatusForbidden)
 		w.Write([]byte("invalid access token"))
@@ -188,7 +188,7 @@ func getAWSToken(templateID string) (*DockerToken, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to ensure ECR repository exists: %w", err)
 	}
-	
+
 	// For AWS ECR, we use the AWS SDK to get the authorization token
 	authResponse, err := auth.GetAWSECRAuthToken()
 	if err != nil {
@@ -197,7 +197,7 @@ func getAWSToken(templateID string) (*DockerToken, error) {
 
 	// 直接返回完整的 base64 编码令牌
 	log.Printf("[DEBUG] ECR Token - Got token expiring at: %s", authResponse.ExpiresAt.Format(time.RFC3339))
-	
+
 	return &DockerToken{
 		Token:     authResponse.Token, // 返回完整的 base64 编码令牌
 		ExpiresIn: int(time.Until(authResponse.ExpiresAt).Seconds()),

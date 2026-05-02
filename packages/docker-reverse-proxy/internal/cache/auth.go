@@ -40,7 +40,7 @@ func (c *AuthCache) Get(e2bToken string) (*AccessTokenData, error) {
 	item := c.cache.Get(e2bToken)
 
 	if item == nil {
-		return nil, fmt.Errorf("creds for '%s' not found in cache", e2bToken)
+		return nil, fmt.Errorf("creds not found in cache")
 	}
 
 	return item.Value(), nil
