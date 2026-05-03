@@ -1222,9 +1222,10 @@ resource "aws_lb_target_group" "nomad-server" {
 
   health_check {
     enabled             = true
-    path                = "/ui/"
+    path                = "/"
+    port                = "8080"
     interval            = 30
-    protocol            = "HTTPS"
+    protocol            = "HTTP"
     timeout             = 5
     healthy_threshold   = 2
     unhealthy_threshold = 2

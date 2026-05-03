@@ -61,3 +61,6 @@ chmod 644 /opt/consul/tls/ca/ca.pem
     --cert-file-path /opt/consul/tls/cert.pem \
     --key-file-path /opt/consul/tls/key.pem
 /opt/nomad/bin/run-nomad.sh --server --num-servers "${NUM_SERVERS}" --consul-token "$${CONSUL_TOKEN}" --nomad-token "$${NOMAD_TOKEN}"
+
+# HTTP health check endpoint for ALB (Nomad mTLS blocks ALB HTTPS health checks)
+nohup bash -c 'while true; do echo -e "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok" | nc -l -p 8080 -q 1 2>/dev/null; done' &>/dev/null &
