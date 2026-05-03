@@ -320,7 +320,7 @@ function bootstrap {
   local readonly region="$(get_instance_region)"
 
   log_info "Waiting for Nomad to start"
-  while test -z "$(curl -sk https://127.0.0.1:4646/v1/agent/health)"; do
+  while test -z "$(curl -sk --cert /opt/nomad/tls/cert.pem --key /opt/nomad/tls/key.pem https://127.0.0.1:4646/v1/agent/health)"; do
     log_info "Nomad not yet started. Waiting for 1 second."
     sleep 1
   done
