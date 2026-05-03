@@ -517,7 +517,7 @@ Resources:
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
       Policies:
-        - PolicyName: E2BDeploymentPolicy
+        - PolicyName: E2BInfraPolicy
           PolicyDocument:
             Version: "2012-10-17"
             Statement:
@@ -570,19 +570,6 @@ Resources:
                   - "arn:aws:s3:::terraform-*/*"
                   - "arn:aws:s3:::software-*"
                   - "arn:aws:s3:::software-*/*"
-              - Sid: SecretsManagerAccess
-                Effect: Allow
-                Action:
-                  - secretsmanager:CreateSecret
-                  - secretsmanager:GetSecretValue
-                  - secretsmanager:PutSecretValue
-                  - secretsmanager:DeleteSecret
-                  - secretsmanager:DescribeSecret
-                  - secretsmanager:GetResourcePolicy
-                  - secretsmanager:TagResource
-                  - secretsmanager:UntagResource
-                  - secretsmanager:UpdateSecret
-                Resource: !Sub "arn:aws:secretsmanager:*:${AWS::AccountId}:secret:*e2b*"
               - Sid: EC2PackerAccess
                 Effect: Allow
                 Action:
@@ -606,22 +593,6 @@ Resources:
                   - ec2:DeleteLaunchTemplate
                   - ec2:DeleteNetworkInterface
                   - ec2:DeregisterImage
-                  - ec2:DescribeImageAttribute
-                  - ec2:DescribeImages
-                  - ec2:DescribeInstances
-                  - ec2:DescribeInstanceStatus
-                  - ec2:DescribeRegions
-                  - ec2:DescribeSecurityGroups
-                  - ec2:DescribeSnapshots
-                  - ec2:DescribeSubnets
-                  - ec2:DescribeTags
-                  - ec2:DescribeVolumes
-                  - ec2:DescribeLaunchTemplates
-                  - ec2:DescribeLaunchTemplateVersions
-                  - ec2:DescribeVpcs
-                  - ec2:DescribeAvailabilityZones
-                  - ec2:DescribeKeyPairs
-                  - ec2:DescribeNetworkInterfaces
                   - ec2:DetachVolume
                   - ec2:GetPasswordData
                   - ec2:ModifyImageAttribute
@@ -641,22 +612,7 @@ Resources:
               - Sid: EC2DescribeAccess
                 Effect: Allow
                 Action:
-                  - ec2:DescribeImageAttribute
-                  - ec2:DescribeImages
-                  - ec2:DescribeInstances
-                  - ec2:DescribeInstanceStatus
-                  - ec2:DescribeRegions
-                  - ec2:DescribeSecurityGroups
-                  - ec2:DescribeSnapshots
-                  - ec2:DescribeSubnets
-                  - ec2:DescribeTags
-                  - ec2:DescribeVolumes
-                  - ec2:DescribeLaunchTemplates
-                  - ec2:DescribeLaunchTemplateVersions
-                  - ec2:DescribeVpcs
-                  - ec2:DescribeAvailabilityZones
-                  - ec2:DescribeKeyPairs
-                  - ec2:DescribeNetworkInterfaces
+                  - ec2:Describe*
                 Resource: "*"
               - Sid: AutoScalingAndELBDescribe
                 Effect: Allow
@@ -718,6 +674,23 @@ Resources:
                   - ecr:TagResource
                 Resource:
                   - !Sub "arn:aws:ecr:*:${AWS::AccountId}:repository/e2b*"
+        - PolicyName: E2BSecurityPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: SecretsManagerAccess
+                Effect: Allow
+                Action:
+                  - secretsmanager:CreateSecret
+                  - secretsmanager:GetSecretValue
+                  - secretsmanager:PutSecretValue
+                  - secretsmanager:DeleteSecret
+                  - secretsmanager:DescribeSecret
+                  - secretsmanager:GetResourcePolicy
+                  - secretsmanager:TagResource
+                  - secretsmanager:UntagResource
+                  - secretsmanager:UpdateSecret
+                Resource: !Sub "arn:aws:secretsmanager:*:${AWS::AccountId}:secret:*e2b*"
               - Sid: IAMReadOnly
                 Effect: Allow
                 Action:
@@ -754,8 +727,7 @@ Resources:
                   - iam:UpdateRole
                   - iam:PutRolePolicy
                   - iam:DeleteRolePolicy
-                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/${AWS::StackName}-infra-ins\
-                  tances-role"
+                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/${AWS::StackName}-infra-instances-role"
               - Sid: IAMManageInstanceProfile
                 Effect: Allow
                 Action:
@@ -763,8 +735,7 @@ Resources:
                   - iam:DeleteInstanceProfile
                   - iam:AddRoleToInstanceProfile
                   - iam:RemoveRoleFromInstanceProfile
-                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:instance-profile/${AWS::StackNam\
-                  e}-*"
+                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:instance-profile/${AWS::StackName}-*"
               - Sid: IAMManageCustomPolicy
                 Effect: Allow
                 Action:
@@ -791,16 +762,14 @@ Resources:
                 Action:
                   - iam:AttachRolePolicy
                   - iam:DetachRolePolicy
-                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/${AWS::StackName}-infra-ins\
-                  tances-role"
+                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/${AWS::StackName}-infra-instances-role"
                 Condition:
                   ArnLike:
                     iam:PolicyARN: !Sub "arn:aws:iam::${AWS::AccountId}:policy/${AWS::StackName}-*"
               - Sid: IAMPassRole
                 Effect: Allow
                 Action: iam:PassRole
-                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/${AWS::StackName}-infra-ins\
-                  tances-role"
+                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/${AWS::StackName}-infra-instances-role"
                 Condition:
                   StringEquals:
                     iam:PassedToService: ec2.amazonaws.com
@@ -809,10 +778,8 @@ Resources:
                 Action:
                   - iam:CreateServiceLinkedRole
                 Resource:
-                  - "arn:aws:iam::*:role/aws-service-role/autoscaling.amazonaws\
-                    .com/*"
-                  - "arn:aws:iam::*:role/aws-service-role/elasticloadbalancing.\
-                    amazonaws.com/*"
+                  - "arn:aws:iam::*:role/aws-service-role/autoscaling.amazonaws.com/*"
+                  - "arn:aws:iam::*:role/aws-service-role/elasticloadbalancing.amazonaws.com/*"
                 Condition:
                   StringEquals:
                     iam:AWSServiceName:
@@ -828,8 +795,7 @@ Resources:
                   - iam:UpdateRole
                   - iam:DeleteRole
                   - iam:UpdateAssumeRolePolicy
-                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/${AWS::StackName}-bastion-r\
-                  ole"
+                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/${AWS::StackName}-bastion-role"
               - Sid: DenyBoundaryModification
                 Effect: Deny
                 Action:
@@ -844,6 +810,22 @@ Resources:
                   - iam:DeleteRolePermissionsBoundary
                   - iam:PutRolePermissionsBoundary
                 Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/${AWS::StackName}-*"
+              - Sid: KMSAccess
+                Effect: Allow
+                Action:
+                  - kms:GenerateDataKey
+                  - kms:Decrypt
+                  - kms:DescribeKey
+                Resource: !GetAtt TerraformStateKMSKey.Arn
+              - Sid: STSAccess
+                Effect: Allow
+                Action:
+                  - sts:GetCallerIdentity
+                Resource: "*"
+        - PolicyName: E2BMonitoringPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
               - Sid: CloudWatchMetrics
                 Effect: Allow
                 Action:
@@ -871,10 +853,8 @@ Resources:
                 Resource:
                   - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:*e2b*"
                   - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:*e2b*:*"
-                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/ec\
-                    2/*"
-                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/a\
-                    ws/ec2/*:*"
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/ec2/*"
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/ec2/*:*"
               - Sid: CloudWatchLogsDescribe
                 Effect: Allow
                 Action: logs:DescribeLogGroups
@@ -899,18 +879,6 @@ Resources:
                   - ssm:DeleteParameter
                   - ssm:DescribeParameters
                 Resource: !Sub "arn:aws:ssm:*:${AWS::AccountId}:parameter/*e2b*"
-              - Sid: KMSAccess
-                Effect: Allow
-                Action:
-                  - kms:GenerateDataKey
-                  - kms:Decrypt
-                  - kms:DescribeKey
-                Resource: !GetAtt TerraformStateKMSKey.Arn
-              - Sid: STSAccess
-                Effect: Allow
-                Action:
-                  - sts:GetCallerIdentity
-                Resource: "*"
       Description: IAM role with complete permissions for E2B infrastructure
         deployment including Packer and Terraform
 
