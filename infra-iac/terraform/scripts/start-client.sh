@@ -252,7 +252,9 @@ NEVER_RULES=$(cat <<'EOF'
 EOF
 )
 
-if grep -qF "$MARKER" "$RULES_FILE"; then
+if [ ! -f "$RULES_FILE" ]; then
+  echo "$RULES_FILE does not exist (auditd not installed); skipping audit rules."
+elif grep -qF "$MARKER" "$RULES_FILE"; then
   echo "never-task exemptions already present in $RULES_FILE; skipping."
 else
   cp -a "$RULES_FILE" "$${RULES_FILE}.bak.$(date +%Y%m%d%H%M%S)"
@@ -267,14 +269,16 @@ else
   echo "Prepended never-task exemptions to $RULES_FILE."
 fi
 
-if augenrules --load; then
-  echo "augenrules --load succeeded."
-  auditctl -l | head -n 10 || true
-else
-  rc=$?
-  echo "augenrules --load returned $rc." >&2
-  echo "If the running config is immutable (-e 2), a reboot is required" >&2
-  echo "for the new rules to take effect; the on-disk file has been updated." >&2
+if command -v augenrules >/dev/null 2>&1; then
+  if augenrules --load; then
+    echo "augenrules --load succeeded."
+    auditctl -l | head -n 10 || true
+  else
+    rc=$?
+    echo "augenrules --load returned $rc." >&2
+    echo "If the running config is immutable (-e 2), a reboot is required" >&2
+    echo "for the new rules to take effect; the on-disk file has been updated." >&2
+  fi
 fi
 
 if modprobe -r nbd 2>/dev/null; then
