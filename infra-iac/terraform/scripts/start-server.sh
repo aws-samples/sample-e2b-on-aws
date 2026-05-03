@@ -63,4 +63,11 @@ chmod 644 /opt/consul/tls/ca/ca.pem
 /opt/nomad/bin/run-nomad.sh --server --num-servers "${NUM_SERVERS}" --consul-token "$${CONSUL_TOKEN}" --nomad-token "$${NOMAD_TOKEN}"
 
 # HTTP health check endpoint for ALB (Nomad mTLS blocks ALB HTTPS health checks)
-nohup bash -c 'while true; do echo -e "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok" | nc -l -p 8080 -q 1 2>/dev/null; done' &>/dev/null &
+nohup bash -c 'while true; do
+  if curl -sf --max-time 5 --cert /opt/nomad/tls/cert.pem --key /opt/nomad/tls/key.pem https://127.0.0.1:4646/v1/agent/health >/dev/null 2>&1; then
+    RESPONSE="HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"
+  else
+    RESPONSE="HTTP/1.1 503 Service Unavailable\r\nContent-Length: 5\r\n\r\nerror"
+  fi
+  echo -e "$RESPONSE" | nc -l -p 8080 -q 1 2>/dev/null
+done' &>/dev/null &
