@@ -40,6 +40,7 @@ mkdir -p /opt/nomad/tls
 get_secret "${NOMAD_TLS_CA_SECRET}" > /opt/nomad/tls/ca.pem
 get_secret "${NOMAD_TLS_CERT_SECRET}" > /opt/nomad/tls/cert.pem
 get_secret "${NOMAD_TLS_KEY_SECRET}" > /opt/nomad/tls/key.pem
+chown nomad:nomad /opt/nomad/tls/*.pem
 chmod 600 /opt/nomad/tls/*.pem
 
 cp /opt/nomad/tls/ca.pem /opt/consul/tls/ca/ca.pem
