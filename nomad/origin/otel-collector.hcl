@@ -92,7 +92,7 @@ receivers:
             insecure_skip_verify: true
           authorization:
             type: Bearer
-            credentials: "${nomad_acl_token}"
+            credentials: "{{ file "/opt/e2b/secrets/nomad_acl_token" }}"
           static_configs:
             - targets: ['localhost:4646']
           params:

@@ -268,6 +268,10 @@ EOF
 "ca_path": "$ca_path",
 "cert_file": "$cert_file_path",
 "key_file": "$key_file_path",
+"ports": {
+  "http": -1,
+  "https": 8501
+},
 EOF
     )
   fi
@@ -725,6 +729,13 @@ function run {
 
   generate_systemd_config "$SYSTEMD_CONFIG_PATH" "$config_dir" "$data_dir" "$systemd_stdout" "$systemd_stderr" "$bin_dir" "$user" "${environment[@]}"
   start_consul
+
+  if [[ "$enable_rpc_encryption" == "true" ]]; then
+    export CONSUL_HTTP_ADDR="https://127.0.0.1:8501"
+    export CONSUL_CACERT="$ca_path/ca.pem"
+    export CONSUL_CLIENT_CERT="$cert_file_path"
+    export CONSUL_CLIENT_KEY="$key_file_path"
+  fi
 
   if [[ "$client" == "true" ]]; then
     setup_dns_resolving "$consul_token" "$dns_request_token"

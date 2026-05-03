@@ -29,8 +29,7 @@ job "orchestrator" {
       driver = "raw_exec"
 
       env {
-        NODE_ID                      = "${node.unique.id}"
-        CONSUL_TOKEN                 = "${consul_http_token}"
+        NODE_ID                      = "$${node.unique.id}"
         OTEL_TRACING_PRINT           = false
         LOGS_COLLECTOR_ADDRESS       = "http://localhost:30006"
         LOGS_COLLECTOR_PUBLIC_IP     = "http://127.0.0.1"
@@ -44,6 +43,16 @@ job "orchestrator" {
         STORAGE_PROVIDER             = "AWSBucket"
         ARTIFACTS_REGISTRY_PROVIDER  = "AWS_ECR"
         ORCHESTRATOR_SERVICES        = "orchestrator"
+      }
+
+      template {
+        data = <<EOH
+CONSUL_TOKEN={{ file "/opt/e2b/secrets/consul_http_token" }}
+EOH
+        destination = "secrets/secrets.env"
+        env         = true
+        change_mode = "restart"
+        perms       = "400"
       }
 
       config {

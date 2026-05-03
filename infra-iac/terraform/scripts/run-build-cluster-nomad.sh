@@ -158,6 +158,9 @@ client {
     "node_pool" = "build"
   }
   max_kill_timeout = "24h"
+  template {
+    disable_file_sandbox = true
+  }
 }
 
 plugin_dir = "/opt/nomad/plugins"
@@ -202,9 +205,13 @@ limits {
 }
 
 consul {
-  address = "127.0.0.1:8500"
+  address = "127.0.0.1:8501"
   allow_unauthenticated = false
   token = "$consul_token"
+  ssl = true
+  ca_file = "/opt/nomad/tls/ca.pem"
+  cert_file = "/opt/nomad/tls/cert.pem"
+  key_file = "/opt/nomad/tls/key.pem"
 }
 
 tls {
@@ -214,7 +221,7 @@ tls {
   cert_file = "/opt/nomad/tls/cert.pem"
   key_file  = "/opt/nomad/tls/key.pem"
   verify_server_hostname = true
-  verify_https_client    = false
+  verify_https_client    = true
 }
 EOF
   chown "$user:$user" "$config_path"

@@ -21,10 +21,6 @@ Metadata:
           - ExistingDataSubnet2Id
           - PublicAccess
       - Label:
-          default: Security Configuration
-        Parameters:
-          - AllowRemoteSSHIPs
-      - Label:
           default: E2B Environment
         Parameters:
           - Environment
@@ -44,7 +40,6 @@ Metadata:
       - Label:
           default: Bastion Configuration
         Parameters:
-          - KeyName
           - CustomAmiId
       - Label:
           default: Database Configuration
@@ -138,17 +133,6 @@ Parameters:
   CustomAmiId:
     Type: AWS::EC2::Image::Id
     Description: AMI ID for the bastion host and Packer base image.
-
-  KeyName:
-    Description: EC2 Key Pair name for SSH access to the bastion host (deployment server)
-    Type: AWS::EC2::KeyPair::KeyName
-    ConstraintDescription: Must be the name of an existing EC2 KeyPair in this region.
-
-  # Security Configuration - Access control settings
-  AllowRemoteSSHIPs:
-    Description: IP address range allowed for SSH (port 22) access to the bastion host (CIDR format), if you want to allow all IPs, please set it to '0.0.0.0/0'
-    Type: String
-    Default: "0.0.0.0/0"
 
   # Database Configuration - PostgreSQL settings for E2B platform
   DBInstanceIdentifier:
@@ -287,13 +271,8 @@ Resources:
   BastionSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: Security group allowing SSH connections to the bastion host from specified IP ranges
+      GroupDescription: Security group for bastion host managed via SSM Session Manager
       VpcId: !Ref ExistingVpcId
-      SecurityGroupIngress:
-        - IpProtocol: tcp
-          FromPort: "22"
-          ToPort: "22"
-          CidrIp: !Ref AllowRemoteSSHIPs
       SecurityGroupEgress:
         # Outbound to internet via NAT: HTTPS for AWS API, ECR, S3, GitHub, apt repos
         - IpProtocol: tcp
@@ -305,15 +284,6 @@ Resources:
           FromPort: 80
           ToPort: 80
           CidrIp: "0.0.0.0/0"
-        # SSH to application subnets for managing compute nodes
-        - IpProtocol: tcp
-          FromPort: 22
-          ToPort: 22
-          CidrIp: !GetAtt VpcCidrLookup.Subnet1Cidr
-        - IpProtocol: tcp
-          FromPort: 22
-          ToPort: 22
-          CidrIp: !GetAtt VpcCidrLookup.Subnet2Cidr
         # Nomad API to application subnets for job deployment
         - IpProtocol: tcp
           FromPort: 4646
@@ -416,6 +386,109 @@ Resources:
   # ------------------------------------------------------------------------------------------------
   # IAM - Identity and Access Management roles and policies for secure resource access
   # ------------------------------------------------------------------------------------------------
+
+  # Permissions boundary: caps what any role created by bastion can ever do.
+  # Worker roles bounded by this cannot escalate privileges even with unrestricted inline policies.
+  E2BPermissionsBoundary:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub "${AWS::StackName}-e2b-permissions-boundary"
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowS3Scoped
+            Effect: Allow
+            Action:
+              - s3:GetObject
+              - s3:PutObject
+              - s3:DeleteObject
+              - s3:ListBucket
+              - s3:GetBucketLocation
+              - s3:ListBucketMultipartUploads
+              - s3:AbortMultipartUpload
+              - s3:ListMultipartUploadParts
+            Resource:
+              - !Sub "arn:aws:s3:::${AWS::StackName}-*"
+              - !Sub "arn:aws:s3:::${AWS::StackName}-*/*"
+              - !Sub "arn:aws:s3:::software-${AWS::StackName}-*"
+              - !Sub "arn:aws:s3:::software-${AWS::StackName}-*/*"
+          - Sid: AllowKMSDecrypt
+            Effect: Allow
+            Action:
+              - kms:Decrypt
+              - kms:GenerateDataKey
+            Resource: "*"
+          - Sid: AllowECRAuth
+            Effect: Allow
+            Action: ecr:GetAuthorizationToken
+            Resource: "*"
+          - Sid: AllowECRScoped
+            Effect: Allow
+            Action:
+              - ecr:BatchCheckLayerAvailability
+              - ecr:GetDownloadUrlForLayer
+              - ecr:BatchGetImage
+              - ecr:BatchDeleteImage
+              - ecr:PutImage
+              - ecr:InitiateLayerUpload
+              - ecr:UploadLayerPart
+              - ecr:CompleteLayerUpload
+              - ecr:CreateRepository
+              - ecr:DescribeRepositories
+              - ecr:ListImages
+              - ecr:DescribeImages
+              - ecr:TagResource
+            Resource: !Sub "arn:aws:ecr:*:${AWS::AccountId}:repository/e2b*"
+          - Sid: AllowSecretsManagerRead
+            Effect: Allow
+            Action:
+              - secretsmanager:GetSecretValue
+              - secretsmanager:DescribeSecret
+              - secretsmanager:ListSecrets
+            Resource: !Sub "arn:aws:secretsmanager:*:${AWS::AccountId}:secret:*e2b*"
+          - Sid: AllowMonitoring
+            Effect: Allow
+            Action:
+              - cloudwatch:PutMetricData
+              - cloudwatch:GetMetricData
+              - cloudwatch:GetMetricStatistics
+              - cloudwatch:ListMetrics
+              - logs:CreateLogGroup
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+              - logs:DescribeLogStreams
+              - ec2:DescribeInstances
+              - ec2:DescribeTags
+            Resource: "*"
+          - Sid: AllowSSM
+            Effect: Allow
+            Action:
+              - ssm:GetParameter
+              - ssm:GetParameters
+              - ssm:GetParametersByPath
+              - ssm:UpdateInstanceInformation
+              - ssm:ListInstanceAssociations
+              - ssm:DescribeInstanceProperties
+              - ssmmessages:*
+              - ec2messages:*
+            Resource: "*"
+          - Sid: DenyIAMEscalation
+            Effect: Deny
+            Action:
+              - iam:CreateRole
+              - iam:PutRolePolicy
+              - iam:AttachRolePolicy
+              - iam:DetachRolePolicy
+              - iam:DeleteRolePolicy
+              - iam:CreateUser
+              - iam:CreatePolicy
+              - iam:PassRole
+              - iam:AddRoleToInstanceProfile
+              - iam:DeleteRole
+              - iam:UpdateAssumeRolePolicy
+              - sts:AssumeRole
+            Resource: "*"
+
   EC2ServiceRole:
     Type: AWS::IAM::Role
     Properties:
@@ -632,48 +705,65 @@ Resources:
                   - ecr:TagResource
                 Resource:
                   - !Sub "arn:aws:ecr:*:${AWS::AccountId}:repository/e2b*"
-              - Sid: IAMAccess
+              - Sid: IAMReadOnly
                 Effect: Allow
                 Action:
-                  - iam:CreateRole
-                  - iam:DeleteRole
                   - iam:GetRole
                   - iam:ListRoles
-                  - iam:UpdateRole
-                  - iam:TagRole
-                  - iam:UntagRole
-                  - iam:CreateInstanceProfile
-                  - iam:DeleteInstanceProfile
                   - iam:GetInstanceProfile
                   - iam:ListInstanceProfiles
                   - iam:ListInstanceProfilesForRole
-                  - iam:AddRoleToInstanceProfile
-                  - iam:RemoveRoleFromInstanceProfile
-                  - iam:CreatePolicy
-                  - iam:DeletePolicy
                   - iam:GetPolicy
                   - iam:GetPolicyVersion
                   - iam:ListPolicies
                   - iam:ListPolicyVersions
                   - iam:ListAttachedRolePolicies
-                  - iam:AttachRolePolicy
-                  - iam:DetachRolePolicy
-                  - iam:PutRolePolicy
                   - iam:GetRolePolicy
-                  - iam:DeleteRolePolicy
                   - iam:ListRolePolicies
-                  - iam:TagPolicy
-                  - iam:UntagPolicy
                 Resource:
                   - !Sub "arn:aws:iam::${AWS::AccountId}:role/*e2b*"
                   - !Sub "arn:aws:iam::${AWS::AccountId}:instance-profile/*e2b*"
                   - !Sub "arn:aws:iam::${AWS::AccountId}:policy/*e2b*"
+              - Sid: IAMCreateRoleWithBoundary
+                Effect: Allow
+                Action:
+                  - iam:CreateRole
+                  - iam:TagRole
+                  - iam:UntagRole
+                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/${AWS::StackName}-*"
+                Condition:
+                  StringEquals:
+                    iam:PermissionsBoundary: !Ref E2BPermissionsBoundary
+              - Sid: IAMManageWorkerRole
+                Effect: Allow
+                Action:
+                  - iam:DeleteRole
+                  - iam:UpdateRole
+                  - iam:PutRolePolicy
+                  - iam:DeleteRolePolicy
+                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/${AWS::StackName}-infra-instances-role"
+              - Sid: IAMManageInstanceProfile
+                Effect: Allow
+                Action:
+                  - iam:CreateInstanceProfile
+                  - iam:DeleteInstanceProfile
+                  - iam:AddRoleToInstanceProfile
+                  - iam:RemoveRoleFromInstanceProfile
+                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:instance-profile/${AWS::StackName}-*"
+              - Sid: IAMManageCustomPolicy
+                Effect: Allow
+                Action:
+                  - iam:CreatePolicy
+                  - iam:DeletePolicy
+                  - iam:TagPolicy
+                  - iam:UntagPolicy
+                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:policy/${AWS::StackName}-*"
               - Sid: IAMAttachAWSManagedPolicy
                 Effect: Allow
                 Action:
                   - iam:AttachRolePolicy
                   - iam:DetachRolePolicy
-                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/*e2b*"
+                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/${AWS::StackName}-*"
                 Condition:
                   ArnEquals:
                     iam:PolicyARN:
@@ -681,15 +771,22 @@ Resources:
                       - arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
                       - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
                       - arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role
-              - Sid: IAMPassRole
+              - Sid: IAMAttachCustomPolicy
                 Effect: Allow
                 Action:
-                  - iam:PassRole
-                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/*e2b*"
+                  - iam:AttachRolePolicy
+                  - iam:DetachRolePolicy
+                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/${AWS::StackName}-infra-instances-role"
+                Condition:
+                  ArnLike:
+                    iam:PolicyARN: !Sub "arn:aws:iam::${AWS::AccountId}:policy/${AWS::StackName}-*"
+              - Sid: IAMPassRole
+                Effect: Allow
+                Action: iam:PassRole
+                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/${AWS::StackName}-infra-instances-role"
                 Condition:
                   StringEquals:
-                    iam:PassedToService:
-                      - ec2.amazonaws.com
+                    iam:PassedToService: ec2.amazonaws.com
               - Sid: IAMCreateServiceLinkedRole
                 Effect: Allow
                 Action:
@@ -702,15 +799,63 @@ Resources:
                     iam:AWSServiceName:
                       - autoscaling.amazonaws.com
                       - elasticloadbalancing.amazonaws.com
-              - Sid: CloudWatchMonitoring
+              - Sid: DenySelfEscalation
+                Effect: Deny
+                Action:
+                  - iam:PutRolePolicy
+                  - iam:AttachRolePolicy
+                  - iam:DetachRolePolicy
+                  - iam:DeleteRolePolicy
+                  - iam:UpdateRole
+                  - iam:DeleteRole
+                  - iam:UpdateAssumeRolePolicy
+                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/${AWS::StackName}-bastion-role"
+              - Sid: DenyBoundaryModification
+                Effect: Deny
+                Action:
+                  - iam:DeletePolicy
+                  - iam:CreatePolicyVersion
+                  - iam:DeletePolicyVersion
+                  - iam:SetDefaultPolicyVersion
+                Resource: !Ref E2BPermissionsBoundary
+              - Sid: DenyRemoveBoundary
+                Effect: Deny
+                Action:
+                  - iam:DeleteRolePermissionsBoundary
+                  - iam:PutRolePermissionsBoundary
+                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/${AWS::StackName}-*"
+              - Sid: CloudWatchMetrics
                 Effect: Allow
                 Action:
                   - cloudwatch:PutMetricData
                   - cloudwatch:GetMetricData
+                  - cloudwatch:GetMetricStatistics
                   - cloudwatch:ListMetrics
                   - cloudwatch:DescribeAlarms
                   - cloudwatch:PutMetricAlarm
                   - cloudwatch:DeleteAlarms
+                Resource: "*"
+              - Sid: CloudWatchLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:DeleteLogGroup
+                  - logs:CreateLogStream
+                  - logs:DeleteLogStream
+                  - logs:PutLogEvents
+                  - logs:DescribeLogStreams
+                  - logs:PutRetentionPolicy
+                  - logs:TagResource
+                  - logs:UntagResource
+                  - logs:ListTagsForResource
+                Resource:
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:*e2b*"
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:*e2b*:*"
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/ec2/*"
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/ec2/*:*"
+              - Sid: CloudWatchLogsDescribe
+                Effect: Allow
+                Action: logs:DescribeLogGroups
                 Resource: "*"
               - Sid: ElastiCacheAccess
                 Effect: Allow
@@ -983,7 +1128,6 @@ Resources:
         - IsX64
         - c7i.xlarge
         - c7g.xlarge
-      KeyName: !Ref KeyName
       MetadataOptions:
         HttpTokens: required
         HttpPutResponseHopLimit: 1
@@ -1073,7 +1217,7 @@ Resources:
               # Create directory for E2B infrastructure code
               mkdir -p /opt/infra/ && cd /opt/infra/
               git clone https://github.com/aws-samples/sample-e2b-on-aws.git && cd sample-e2b-on-aws
-              git checkout 0303
+              git checkout 122914404e94afb976aee60d4fef875155ba17af
             - !Sub |
               # Initialize Configuration
               touch /tmp/e2b.log
@@ -1226,13 +1370,6 @@ Outputs:
     Value: !Ref SoftwareS3Bucket
     Export:
       Name: !Sub "${AWS::StackName}-CFNSOFTWAREBUCKET"
-
-  # SSH key output
-  CFNSSHKEY:
-    Description: EC2 SSH Key Name for bastion host access
-    Value: !Ref KeyName
-    Export:
-      Name: !Sub "${AWS::StackName}-CFNSSHKEY"
 
   # Database connection string (password stored separately in Secrets Manager)
   CFNDBURL:

@@ -180,13 +180,25 @@ mkdir -p /opt/nomad/tls
 get_secret "${NOMAD_TLS_CA_SECRET}" > /opt/nomad/tls/ca.pem
 get_secret "${NOMAD_TLS_CERT_SECRET}" > /opt/nomad/tls/cert.pem
 get_secret "${NOMAD_TLS_KEY_SECRET}" > /opt/nomad/tls/key.pem
-chmod 644 /opt/nomad/tls/*.pem
+chmod 600 /opt/nomad/tls/*.pem
+
+cp /opt/nomad/tls/ca.pem /opt/consul/tls/ca/ca.pem
+cp /opt/nomad/tls/cert.pem /opt/consul/tls/cert.pem
+cp /opt/nomad/tls/key.pem /opt/consul/tls/key.pem
+chown -R consul:consul /opt/consul/tls
+chmod 600 /opt/consul/tls/key.pem /opt/consul/tls/cert.pem
+chmod 644 /opt/consul/tls/ca/ca.pem
 
 /opt/consul/bin/run-consul.sh --client \
     --consul-token "$${CONSUL_TOKEN}" \
     --cluster-tag-name "${CLUSTER_TAG_NAME}" \
     --enable-gossip-encryption \
     --gossip-encryption-key "$${CONSUL_GOSSIP_ENCRYPTION_KEY}" \
-    --dns-request-token "$${CONSUL_DNS_REQUEST_TOKEN}" &
+    --dns-request-token "$${CONSUL_DNS_REQUEST_TOKEN}" \
+    --enable-rpc-encryption \
+    --verify-server-hostname \
+    --ca-path /opt/consul/tls/ca \
+    --cert-file-path /opt/consul/tls/cert.pem \
+    --key-file-path /opt/consul/tls/key.pem &
 
 /opt/nomad/bin/run-nomad.sh --consul-token "$${CONSUL_TOKEN}" &

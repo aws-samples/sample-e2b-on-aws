@@ -80,8 +80,6 @@ Before deploying to production, verify these critical security and reliability s
 | **Environment** | `dev` or `prod` (prod has stricter resource protection) |
 | **Architecture** | x64 or [AWS Graviton](https://aws.amazon.com/ec2/graviton/) |
 | **Domain** | A domain you own (e.g., `example.com`) |
-| **EC2 Key Pair** | Existing key pair for SSH access |
-| **AllowRemoteSSHIPs** | IP range for SSH access (defaults to private networks) |
 | **Database Settings** | RDS password: 8-30 characters with letters and numbers |
 
 5. Complete all required fields and launch the stack
@@ -97,12 +95,13 @@ Before deploying to production, verify these critical security and reliability s
 
 ### Step 3 — Connect to Bastion Machine
 
-```bash
-# Option A: SSH with your key pair
-ssh -i your-key.pem ubuntu@<instance-ip>
+Use AWS Systems Manager Session Manager to connect:
 
-# Option B: AWS Session Manager from the EC2 console
+```bash
+aws ssm start-session --target <instance-id>
 ```
+
+Or connect via the AWS EC2 console → select instance → Connect → Session Manager.
 
 ### Step 4 — Watch Deployment Logs
 

@@ -26,7 +26,14 @@ else
     exit 1
 fi
 
-# Read all database credentials from Secrets Manager (only in memory, not written to config file)
+# Write secrets to files instead of exporting as env vars.
+# This prevents secrets from being baked into HCL by envsubst and
+# subsequently stored in plaintext in Nomad state (visible via nomad job inspect).
+SECRETS_DIR="/opt/e2b/secrets"
+mkdir -p "$SECRETS_DIR"
+chmod 700 "$SECRETS_DIR"
+
+# Read DB credentials from Secrets Manager -> write to individual files
 DB_CREDENTIAL_SECRET=$(grep "^CFNDBCredentialSecretName=" /opt/config.properties | cut -d'=' -f2)
 if [ -n "$DB_CREDENTIAL_SECRET" ]; then
     DB_SECRET_JSON=$(aws secretsmanager get-secret-value --secret-id "$DB_CREDENTIAL_SECRET" --query SecretString --output text)
@@ -35,21 +42,33 @@ if [ -n "$DB_CREDENTIAL_SECRET" ]; then
     DB_NAME=$(echo "$DB_SECRET_JSON" | jq -r '.dbname')
     DB_USER=$(echo "$DB_SECRET_JSON" | jq -r '.username')
     DB_PASS=$(echo "$DB_SECRET_JSON" | jq -r '.password')
-    export postgres_password="$DB_PASS"
-    export postgres_host="$DB_HOST"
-    export postgres_user="$DB_USER"
-    export CFNDBURL="postgresql://${DB_USER}:${DB_PASS}@${DB_HOST}/${DB_NAME}"
+
+    printf '%s' "postgresql://${DB_USER}:${DB_PASS}@${DB_HOST}/${DB_NAME}" > "$SECRETS_DIR/postgres_connection_string"
+    printf '%s' "$DB_HOST" > "$SECRETS_DIR/postgres_host"
+    printf '%s' "$DB_USER" > "$SECRETS_DIR/postgres_user"
+    printf '%s' "$DB_PASS" > "$SECRETS_DIR/postgres_password"
 fi
 
-# Read infra tokens from Secrets Manager (only in memory, not written to config file)
+# Read infra tokens from Secrets Manager -> write to individual files
 AWSREGION=$(grep "^AWSREGION=" /opt/config.properties | cut -d'=' -f2)
 INFRA_TOKENS_SECRET=$(grep "^infra_tokens_secret_name=" /opt/config.properties | cut -d'=' -f2)
 if [ -n "$INFRA_TOKENS_SECRET" ]; then
     INFRA_TOKENS_JSON=$(aws secretsmanager get-secret-value --secret-id "$INFRA_TOKENS_SECRET" --region "$AWSREGION" --query SecretString --output text)
-    export nomad_acl_token=$(echo "$INFRA_TOKENS_JSON" | jq -r '.nomad_acl_token')
-    export consul_http_token=$(echo "$INFRA_TOKENS_JSON" | jq -r '.consul_http_token')
-    export admin_token=$(echo "$INFRA_TOKENS_JSON" | jq -r '.admin_token')
+    printf '%s' "$(echo "$INFRA_TOKENS_JSON" | jq -r '.nomad_acl_token')" > "$SECRETS_DIR/nomad_acl_token"
+    printf '%s' "$(echo "$INFRA_TOKENS_JSON" | jq -r '.consul_http_token')" > "$SECRETS_DIR/consul_http_token"
+    printf '%s' "$(echo "$INFRA_TOKENS_JSON" | jq -r '.admin_token')" > "$SECRETS_DIR/admin_token"
+    SEED=$(echo "$INFRA_TOKENS_JSON" | jq -r '.sandbox_access_token_hash_seed // empty')
+    if [ -z "$SEED" ]; then
+        SEED=$(echo "$INFRA_TOKENS_JSON" | jq -r '.admin_token')
+    fi
+    printf '%s' "$SEED" > "$SECRETS_DIR/sandbox_access_token_hash_seed"
 fi
+
+chmod 600 "$SECRETS_DIR"/*
+
+IMAGE_TAG=$(git rev-parse --short HEAD)
+export IMAGE_TAG
+echo "Using IMAGE_TAG: $IMAGE_TAG"
 
 # Process each HCL file in the origin directory
 for file in origin/*.hcl; do
@@ -79,4 +98,5 @@ for file in origin/*.hcl; do
     fi
 done
 
+chmod 600 deploy/*.hcl
 echo "Deployment files generation completed"

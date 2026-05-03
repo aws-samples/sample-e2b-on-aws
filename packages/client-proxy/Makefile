@@ -35,6 +35,7 @@ build-and-upload-aws:
 	$(eval AWS_ACCOUNT_ID := $(shell grep "^account_id=" /opt/config.properties | cut -d= -f2))
 	$(eval AWS_REGION := $(shell grep "^AWSREGION=" /opt/config.properties | cut -d= -f2))
 	$(eval ARCHITECTURE := $(shell grep "^CFNARCHITECTURE=" /opt/config.properties | cut -d= -f2 || echo "amd64"))
+	$(eval COMMIT_SHA := $(shell git rev-parse --short HEAD))
 
 	@rm -rf .shared/
 	@cp -r ../shared .shared/
@@ -48,11 +49,11 @@ build-and-upload-aws:
 
 	@if [ "$(ARCHITECTURE)" = "arm64" ]; then \
 		echo "Building for ARM64 architecture"; \
-		docker build --platform linux/arm64 --tag "$(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/$(IMAGE):latest" .; \
+		docker build --platform linux/arm64 --tag "$(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/$(IMAGE):$(COMMIT_SHA)" .; \
 	else \
 		echo "Building for x86_64 architecture"; \
-		docker build --platform linux/amd64 --tag "$(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/$(IMAGE):latest" .; \
+		docker build --platform linux/amd64 --tag "$(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/$(IMAGE):$(COMMIT_SHA)" .; \
 	fi
 
-	@docker push "$(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/$(IMAGE):latest"
+	@docker push "$(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/$(IMAGE):$(COMMIT_SHA)"
 	@rm -rf .shared/

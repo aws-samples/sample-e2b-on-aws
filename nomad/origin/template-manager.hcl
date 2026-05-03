@@ -38,7 +38,6 @@ job "template-manager" {
         ARTIFACTS_REGISTRY_PROVIDER  = "AWS_ECR"
         AWS_DOCKER_REPOSITORY_NAME   = "e2bdev/base"
         AWS_REGION                   = "${AWSREGION}"
-        CONSUL_TOKEN                 = "${consul_http_token}"
         AWS_ECR_REPOSITORY           = "e2bdev/base"
         OTEL_TRACING_PRINT           = false
         ENVIRONMENT                  = "dev"
@@ -47,6 +46,16 @@ job "template-manager" {
         BUILD_CONTEXT_BUCKET_NAME    = "${BUCKET_DOCKER_CONTEXTS}"
         OTEL_COLLECTOR_GRPC_ENDPOINT = "localhost:4317"
         ORCHESTRATOR_SERVICES        = "template-manager"
+      }
+
+      template {
+        data = <<EOH
+CONSUL_TOKEN={{ file "/opt/e2b/secrets/consul_http_token" }}
+EOH
+        destination = "secrets/secrets.env"
+        env         = true
+        change_mode = "restart"
+        perms       = "400"
       }
 
       config {

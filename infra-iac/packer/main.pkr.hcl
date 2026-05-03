@@ -250,6 +250,14 @@ build {
 
   provisioner "shell" {
     inline = [
+      "sudo snap install amazon-ssm-agent --classic",
+      "sudo systemctl enable snap.amazon-ssm-agent.amazon-ssm-agent.service",
+      "sudo systemctl start snap.amazon-ssm-agent.amazon-ssm-agent.service"
+    ]
+  }
+
+  provisioner "shell" {
+    inline = [
       # Increase the maximum number of open files
       "sudo mv /tmp/limits.conf /etc/security/limits.conf",
       # Increase the maximum number of connections by 4x

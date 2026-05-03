@@ -290,20 +290,28 @@ resource "random_password" "admin_token" {
   override_special = "!@#$%^&*()_+{}|:<>?=-"
 }
 
+# -------------------- Sandbox Access Token Hash Seed --------------------
+# Dedicated HMAC seed for generating sandbox access tokens, separate from admin_token
+resource "random_password" "sandbox_access_token_hash_seed" {
+  length  = 32
+  special = false
+}
+
 # -------------------- Infra Tokens (aggregated) --------------------
-# Aggregated secret containing nomad_acl_token, consul_http_token, and admin_token
+# Aggregated secret containing nomad_acl_token, consul_http_token, admin_token, and sandbox seed
 resource "aws_secretsmanager_secret" "infra_tokens" {
   name        = "${var.prefix}-infra-tokens"
-  description = "Infrastructure tokens (nomad_acl_token, consul_http_token, admin_token)"
+  description = "Infrastructure tokens (nomad_acl_token, consul_http_token, admin_token, sandbox_access_token_hash_seed)"
   tags        = local.common_tags
 }
 
 resource "aws_secretsmanager_secret_version" "infra_tokens" {
   secret_id = aws_secretsmanager_secret.infra_tokens.id
   secret_string = jsonencode({
-    nomad_acl_token   = random_uuid.nomad_acl_token.result
-    consul_http_token = random_uuid.consul_acl_token.result
-    admin_token       = random_password.admin_token.result
+    nomad_acl_token                = random_uuid.nomad_acl_token.result
+    consul_http_token              = random_uuid.consul_acl_token.result
+    admin_token                    = random_password.admin_token.result
+    sandbox_access_token_hash_seed = random_password.sandbox_access_token_hash_seed.result
   })
 }
 
@@ -361,6 +369,7 @@ resource "tls_cert_request" "nomad_server" {
   dns_names = [
     "server.${local.aws_region}.nomad",
     "server.global.nomad",
+    "server.${local.aws_region}.consul",
     "localhost",
   ]
 
@@ -400,6 +409,7 @@ resource "tls_cert_request" "nomad_client" {
 
   dns_names = [
     "client.${local.aws_region}.nomad",
+    "client.${local.aws_region}.consul",
     "localhost",
   ]
 
@@ -518,9 +528,9 @@ resource "aws_iam_policy" "monitoring_policy" {
 
 # Create IAM Role for EC2 instances
 resource "aws_iam_role" "infra_instances_role" {
-  name = "${var.prefix}-infra-instances-role"
+  name                 = "${var.prefix}-infra-instances-role"
+  permissions_boundary = "arn:aws:iam::${local.account_id}:policy/${var.prefix}-e2b-permissions-boundary"
 
-  # Trust policy allowing EC2 to assume this role
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -738,30 +748,6 @@ resource "aws_security_group" "server_sg" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  # Allow DNS outbound (UDP) for microVM DNS resolution
-  egress {
-    from_port   = 53
-    to_port     = 53
-    protocol    = "udp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  # Allow DNS outbound (TCP) for large DNS responses
-  egress {
-    from_port   = 53
-    to_port     = 53
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  # Allow NTP outbound (UDP) for time synchronization
-  egress {
-    from_port   = 123
-    to_port     = 123
-    protocol    = "udp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
   tags = merge(
     local.common_tags,
     {
@@ -776,8 +762,6 @@ resource "aws_launch_template" "server" {
   update_default_version = true
   image_id               = data.aws_ami.e2b.id
   instance_type          = var.architecture == "x86_64" ? local.clusters.server.instance_type_x86 : local.clusters.server.instance_type_arm
-  key_name               = var.sshkey
-
   iam_instance_profile {
     name = aws_iam_instance_profile.ec2_instance_profile.name
   }
@@ -939,14 +923,6 @@ resource "aws_security_group" "client_sg" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  # Allow NTP outbound (UDP) for time synchronization
-  egress {
-    from_port   = 123
-    to_port     = 123
-    protocol    = "udp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
   tags = merge(
     local.common_tags,
     {
@@ -961,7 +937,7 @@ resource "aws_launch_template" "client" {
   update_default_version = true
   image_id      = data.aws_ami.e2b.id
   instance_type = var.architecture == "x86_64" ? local.clusters.client.instance_type_x86 : local.clusters.client.instance_type_arm
-  key_name               = var.sshkey
+
   iam_instance_profile {
     name = aws_iam_instance_profile.ec2_instance_profile.name
   }
@@ -1166,30 +1142,6 @@ resource "aws_security_group" "api_sg" {
     from_port   = 443
     to_port     = 443
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  # Allow DNS outbound (UDP) for microVM DNS resolution
-  egress {
-    from_port   = 53
-    to_port     = 53
-    protocol    = "udp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  # Allow DNS outbound (TCP) for large DNS responses
-  egress {
-    from_port   = 53
-    to_port     = 53
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  # Allow NTP outbound (UDP) for time synchronization
-  egress {
-    from_port   = 123
-    to_port     = 123
-    protocol    = "udp"
     cidr_blocks = ["0.0.0.0/0"]
   }
 
@@ -1465,8 +1417,6 @@ resource "aws_launch_template" "api" {
   update_default_version = true
   image_id               = data.aws_ami.e2b.id
   instance_type          = var.architecture == "x86_64" ? local.clusters.api.instance_type_x86 : local.clusters.api.instance_type_arm
-  key_name               = var.sshkey
-
   iam_instance_profile {
     name = aws_iam_instance_profile.ec2_instance_profile.name
   }
@@ -1646,14 +1596,6 @@ resource "aws_security_group" "build_sg" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  # Allow NTP outbound (UDP) for time synchronization
-  egress {
-    from_port   = 123
-    to_port     = 123
-    protocol    = "udp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
   tags = merge(
     local.common_tags,
     {
@@ -1668,8 +1610,6 @@ resource "aws_launch_template" "build" {
   update_default_version = true
   image_id               = data.aws_ami.e2b.id
   instance_type          = var.architecture == "x86_64" ? local.clusters.build.instance_type_x86 : local.clusters.build.instance_type_arm
-  key_name               = var.sshkey
-
   iam_instance_profile {
     name = aws_iam_instance_profile.ec2_instance_profile.name
   }

@@ -80,8 +80,6 @@ E2B on AWS 为在您自己的 AWS 账户中运行 AI Agent 沙箱提供了安全
 | **Environment** | `dev` 或 `prod`（prod 有更严格的资源保护机制） |
 | **Architecture** | x64 或 [AWS Graviton](https://aws.amazon.com/ec2/graviton/) |
 | **Domain** | 您拥有的域名（例如 `example.com`） |
-| **EC2 Key Pair** | 用于 SSH 访问的现有密钥对 |
-| **AllowRemoteSSHIPs** | SSH 访问的 IP 范围（默认限制为私有网络） |
 | **Database Settings** | RDS 密码：8-30 个字符，包含字母和数字 |
 
 5. 填写所有必填字段并启动堆栈
@@ -97,12 +95,13 @@ E2B on AWS 为在您自己的 AWS 账户中运行 AI Agent 沙箱提供了安全
 
 ### 步骤 3 — 连接堡垒机
 
-```bash
-# 方式 A：使用密钥对 SSH 连接
-ssh -i your-key.pem ubuntu@<instance-ip>
+通过 AWS Systems Manager Session Manager 连接：
 
-# 方式 B：通过 EC2 控制台使用 AWS Session Manager
+```bash
+aws ssm start-session --target <instance-id>
 ```
+
+或通过 AWS EC2 控制台 → 选择实例 → 连接 → Session Manager。
 
 ### 步骤 4 — 查看部署日志
 

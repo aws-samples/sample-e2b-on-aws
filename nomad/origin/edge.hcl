@@ -67,7 +67,6 @@ job "client-proxy" {
         NODE_IP = "$${attr.unique.network.ip-address}"
 
         EDGE_PORT         = 3001
-        EDGE_SECRET       = "${admin_token}"
         PROXY_PORT        = 3002
         ORCHESTRATOR_PORT = 5008
 
@@ -90,9 +89,19 @@ job "client-proxy" {
         LOKI_URL                      = "http://loki.service.consul:3100"
       }
 
+      template {
+        data = <<EOH
+EDGE_SECRET={{ file "/opt/e2b/secrets/admin_token" }}
+EOH
+        destination = "secrets/secrets.env"
+        env         = true
+        change_mode = "restart"
+        perms       = "400"
+      }
+
       config {
         network_mode = "host"
-        image        = "${account_id}.dkr.ecr.${AWSREGION}.amazonaws.com/e2b-orchestration/client-proxy:latest"
+        image        = "${account_id}.dkr.ecr.${AWSREGION}.amazonaws.com/e2b-orchestration/client-proxy:${IMAGE_TAG}"
         ports        = ["session", "edge-api"]
       }
     }

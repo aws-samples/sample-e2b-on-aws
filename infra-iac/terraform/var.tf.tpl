@@ -16,14 +16,6 @@ variable "prefix" {
   default     = "${CFNSTACKNAME}"
 }
 
-# SSH Key Name
-# The name of the SSH key pair to be used for EC2 instances
-variable "sshkey" {
-  description = "Name of ssh Key"
-  type        = string
-  default     = "${CFNSSHKEY}"
-}
-
 # ACM Certificate ARN
 # Amazon Resource Name of the SSL/TLS certificate in AWS Certificate Manager
 variable "certarn" {
