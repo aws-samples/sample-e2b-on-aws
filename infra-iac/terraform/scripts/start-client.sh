@@ -237,7 +237,7 @@ sudo udevadm trigger
 
 set -euo pipefail
 
-NBDS_MAX="${NBDS_MAX:-4096}"
+NBDS_MAX="$${NBDS_MAX:-4096}"
 
 exec > >(tee -a /var/log/cloud-init-audit-rules.log) 2>&1
 echo "=== $(date -Is) prepend-never-task-rules starting ==="
@@ -255,7 +255,7 @@ EOF
 if grep -qF "$MARKER" "$RULES_FILE"; then
   echo "never-task exemptions already present in $RULES_FILE; skipping."
 else
-  cp -a "$RULES_FILE" "${RULES_FILE}.bak.$(date +%Y%m%d%H%M%S)"
+  cp -a "$RULES_FILE" "$${RULES_FILE}.bak.$(date +%Y%m%d%H%M%S)"
   TMP=$(mktemp)
   {
     printf '%s\n\n' "$NEVER_RULES"
@@ -283,10 +283,10 @@ else
   echo "nbd module not loaded or could not be unloaded (may be harmless)." >&2
 fi
 
-if time modprobe nbd "nbds_max=${NBDS_MAX}"; then
-  echo "nbd module loaded with nbds_max=${NBDS_MAX}."
+if time modprobe nbd "nbds_max=$${NBDS_MAX}"; then
+  echo "nbd module loaded with nbds_max=$${NBDS_MAX}."
 else
-  echo "Failed to load nbd module with nbds_max=${NBDS_MAX}." >&2
+  echo "Failed to load nbd module with nbds_max=$${NBDS_MAX}." >&2
   exit 1
 fi
 
