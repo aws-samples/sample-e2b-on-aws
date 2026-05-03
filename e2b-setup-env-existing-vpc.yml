@@ -724,12 +724,16 @@ Resources:
                 Effect: Allow
                 Action:
                   - iam:CreateRole
-                  - iam:TagRole
-                  - iam:UntagRole
                 Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/${AWS::StackName}-*"
                 Condition:
                   StringEquals:
                     iam:PermissionsBoundary: !Ref E2BPermissionsBoundary
+              - Sid: IAMTagRole
+                Effect: Allow
+                Action:
+                  - iam:TagRole
+                  - iam:UntagRole
+                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/${AWS::StackName}-*"
               - Sid: IAMManageWorkerRole
                 Effect: Allow
                 Action:
