@@ -26,7 +26,8 @@ aws s3 cp "s3://${SCRIPTS_BUCKET}/run-nomad-${RUN_NOMAD_FILE_HASH}.sh" /opt/noma
 
 chmod +x /opt/consul/bin/run-consul.sh /opt/nomad/bin/run-nomad.sh
 
-# Retrieve secrets at runtime from AWS Secrets Manager
+# Retrieve secrets at runtime from AWS Secrets Manager (trace off to protect secrets)
+set +x
 get_secret() {
   aws secretsmanager get-secret-value --secret-id "$1" --region "${AWS_REGION}" --query SecretString --output text
 }
@@ -34,12 +35,14 @@ get_secret() {
 CONSUL_TOKEN=$(get_secret "${CONSUL_SECRET_NAME}")
 NOMAD_TOKEN=$(get_secret "${NOMAD_SECRET_NAME}")
 CONSUL_GOSSIP_ENCRYPTION_KEY=$(get_secret "${CONSUL_GOSSIP_SECRET_NAME}")
+echo "Secrets retrieved successfully"
 
-# Retrieve Nomad TLS certificates and write to disk
 mkdir -p /opt/nomad/tls
 get_secret "${NOMAD_TLS_CA_SECRET}" > /opt/nomad/tls/ca.pem
 get_secret "${NOMAD_TLS_CERT_SECRET}" > /opt/nomad/tls/cert.pem
 get_secret "${NOMAD_TLS_KEY_SECRET}" > /opt/nomad/tls/key.pem
+echo "TLS certificates written"
+set -x
 chown nomad:nomad /opt/nomad/tls/*.pem
 chmod 600 /opt/nomad/tls/*.pem
 
@@ -50,6 +53,7 @@ chown -R consul:consul /opt/consul/tls
 chmod 600 /opt/consul/tls/key.pem /opt/consul/tls/cert.pem
 chmod 644 /opt/consul/tls/ca/ca.pem
 
+set +x
 /opt/consul/bin/run-consul.sh --server \
     --cluster-tag-name "${CLUSTER_TAG_NAME}" \
     --consul-token "$${CONSUL_TOKEN}" \
@@ -60,7 +64,10 @@ chmod 644 /opt/consul/tls/ca/ca.pem
     --ca-path /opt/consul/tls/ca \
     --cert-file-path /opt/consul/tls/cert.pem \
     --key-file-path /opt/consul/tls/key.pem
+echo "Consul started"
 /opt/nomad/bin/run-nomad.sh --server --num-servers "${NUM_SERVERS}" --consul-token "$${CONSUL_TOKEN}" --nomad-token "$${NOMAD_TOKEN}"
+echo "Nomad started"
+set -x
 
 # HTTP health check endpoint for ALB (Nomad mTLS blocks ALB HTTPS health checks)
 nohup bash -c 'while true; do

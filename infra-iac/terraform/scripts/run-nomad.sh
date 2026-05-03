@@ -3,9 +3,6 @@
 
 set -e
 
-# Enable command tracing
-set -x
-
 readonly NOMAD_CONFIG_FILE="default.hcl"
 readonly SUPERVISOR_CONFIG_PATH="/etc/supervisor/conf.d/run-nomad.conf"
 
