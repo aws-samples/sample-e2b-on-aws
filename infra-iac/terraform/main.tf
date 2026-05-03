@@ -42,6 +42,7 @@ locals {
     "scripts/run-nomad.sh"               = substr(filesha256("${path.module}/scripts/run-nomad.sh"), 0, 5)
     "scripts/run-api-nomad.sh"           = substr(filesha256("${path.module}/scripts/run-api-nomad.sh"), 0, 5)
     "scripts/run-build-cluster-nomad.sh" = substr(filesha256("${path.module}/scripts/run-build-cluster-nomad.sh"), 0, 5)
+    "scripts/setup-secrets.sh"           = substr(filesha256("${path.module}/scripts/setup-secrets.sh"), 0, 5)
   }
 
   # Define common resource tags to be applied to all resources
@@ -681,7 +682,8 @@ variable "setup_files" {
     "scripts/run-nomad.sh"               = "run-nomad",
     "scripts/run-api-nomad.sh"           = "run-api-nomad",
     "scripts/run-build-cluster-nomad.sh" = "run-build-cluster-nomad",
-    "scripts/run-consul.sh"              = "run-consul"
+    "scripts/run-consul.sh"              = "run-consul",
+    "scripts/setup-secrets.sh"           = "setup-secrets"
   }
 }
 
@@ -994,6 +996,7 @@ resource "aws_launch_template" "client" {
     NOMAD_TLS_CA_SECRET          = aws_secretsmanager_secret.nomad_tls_ca_cert.name
     NOMAD_TLS_CERT_SECRET        = aws_secretsmanager_secret.nomad_tls_client_cert.name
     NOMAD_TLS_KEY_SECRET         = aws_secretsmanager_secret.nomad_tls_client_key.name
+    SETUP_SECRETS_FILE_HASH      = local.file_hash["scripts/setup-secrets.sh"]
     DB_CREDENTIAL_SECRET_NAME    = "e2b-${var.prefix}-db-credential"
     INFRA_TOKENS_SECRET_NAME     = aws_secretsmanager_secret.infra_tokens.name
   }))
@@ -1464,6 +1467,7 @@ resource "aws_launch_template" "api" {
     NOMAD_TLS_CA_SECRET          = aws_secretsmanager_secret.nomad_tls_ca_cert.name
     NOMAD_TLS_CERT_SECRET        = aws_secretsmanager_secret.nomad_tls_client_cert.name
     NOMAD_TLS_KEY_SECRET         = aws_secretsmanager_secret.nomad_tls_client_key.name
+    SETUP_SECRETS_FILE_HASH      = local.file_hash["scripts/setup-secrets.sh"]
     DB_CREDENTIAL_SECRET_NAME    = "e2b-${var.prefix}-db-credential"
     INFRA_TOKENS_SECRET_NAME     = aws_secretsmanager_secret.infra_tokens.name
   }))
@@ -1659,6 +1663,7 @@ resource "aws_launch_template" "build" {
     NOMAD_TLS_CA_SECRET          = aws_secretsmanager_secret.nomad_tls_ca_cert.name
     NOMAD_TLS_CERT_SECRET        = aws_secretsmanager_secret.nomad_tls_client_cert.name
     NOMAD_TLS_KEY_SECRET         = aws_secretsmanager_secret.nomad_tls_client_key.name
+    SETUP_SECRETS_FILE_HASH      = local.file_hash["scripts/setup-secrets.sh"]
     DB_CREDENTIAL_SECRET_NAME    = "e2b-${var.prefix}-db-credential"
     INFRA_TOKENS_SECRET_NAME     = aws_secretsmanager_secret.infra_tokens.name
   }))
