@@ -1,4 +1,5 @@
 AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::SecretsManager-2020-07-23
 Description: >-
   E2B Infrastructure CloudFormation Template (Existing VPC) - Deploys core
   infrastructure components for E2B platform using existing VPC including IAM
