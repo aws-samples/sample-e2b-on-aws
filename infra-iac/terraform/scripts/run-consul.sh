@@ -409,7 +409,7 @@ function bootstrap {
       log_info "Consul ACL bootstrapped"
       break
     fi
-    if echo "$out" | grep -qE "already been bootstrapped|already bootstrapped"; then
+    if echo "$out" | grep -qE "already been bootstrapped|already bootstrapped|bootstrap no longer allowed"; then
       log_info "Consul ACL already bootstrapped"
       break
     fi
