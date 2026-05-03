@@ -728,7 +728,8 @@ Resources:
                   - iam:UpdateRole
                   - iam:PutRolePolicy
                   - iam:DeleteRolePolicy
-                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/${AWS::StackName}-infra-instances-role"
+                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/${AWS::StackName}-infra-ins\
+                  tances-role"
               - Sid: IAMManageInstanceProfile
                 Effect: Allow
                 Action:
@@ -736,7 +737,8 @@ Resources:
                   - iam:DeleteInstanceProfile
                   - iam:AddRoleToInstanceProfile
                   - iam:RemoveRoleFromInstanceProfile
-                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:instance-profile/${AWS::StackName}-*"
+                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:instance-profile/${AWS::StackNam\
+                  e}-*"
               - Sid: IAMManageCustomPolicy
                 Effect: Allow
                 Action:
@@ -763,14 +765,16 @@ Resources:
                 Action:
                   - iam:AttachRolePolicy
                   - iam:DetachRolePolicy
-                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/${AWS::StackName}-infra-instances-role"
+                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/${AWS::StackName}-infra-ins\
+                  tances-role"
                 Condition:
                   ArnLike:
                     iam:PolicyARN: !Sub "arn:aws:iam::${AWS::AccountId}:policy/${AWS::StackName}-*"
               - Sid: IAMPassRole
                 Effect: Allow
                 Action: iam:PassRole
-                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/${AWS::StackName}-infra-instances-role"
+                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/${AWS::StackName}-infra-ins\
+                  tances-role"
                 Condition:
                   StringEquals:
                     iam:PassedToService: ec2.amazonaws.com
@@ -779,8 +783,10 @@ Resources:
                 Action:
                   - iam:CreateServiceLinkedRole
                 Resource:
-                  - "arn:aws:iam::*:role/aws-service-role/autoscaling.amazonaws.com/*"
-                  - "arn:aws:iam::*:role/aws-service-role/elasticloadbalancing.amazonaws.com/*"
+                  - "arn:aws:iam::*:role/aws-service-role/autoscaling.amazonaws\
+                    .com/*"
+                  - "arn:aws:iam::*:role/aws-service-role/elasticloadbalancing.\
+                    amazonaws.com/*"
                 Condition:
                   StringEquals:
                     iam:AWSServiceName:
@@ -796,7 +802,8 @@ Resources:
                   - iam:UpdateRole
                   - iam:DeleteRole
                   - iam:UpdateAssumeRolePolicy
-                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/${AWS::StackName}-bastion-role"
+                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/${AWS::StackName}-bastion-r\
+                  ole"
               - Sid: DenyBoundaryModification
                 Effect: Deny
                 Action:
@@ -854,8 +861,10 @@ Resources:
                 Resource:
                   - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:*e2b*"
                   - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:*e2b*:*"
-                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/ec2/*"
-                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/ec2/*:*"
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/ec\
+                    2/*"
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/a\
+                    ws/ec2/*:*"
               - Sid: CloudWatchLogsDescribe
                 Effect: Allow
                 Action: logs:DescribeLogGroups
@@ -1211,7 +1220,7 @@ Resources:
               # Create directory for E2B infrastructure code
               mkdir -p /opt/infra/ && cd /opt/infra/
               git clone https://github.com/aws-samples/sample-e2b-on-aws.git && cd sample-e2b-on-aws
-              git checkout 3cc5e4296d8b2a2e3a7dc5415c8d135de6f624d5
+              git checkout 1e6c1fa1ffe3d5a1b5fa39fd4b4076ee48cc04ba
             - !Sub |
               # Initialize Configuration
               touch /tmp/e2b.log
