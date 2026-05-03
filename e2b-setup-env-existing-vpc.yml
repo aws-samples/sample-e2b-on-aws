@@ -1,7 +1,8 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >-
-  E2B Infrastructure CloudFormation Template (Existing VPC) - Deploys core infrastructure components for E2B platform
-  using existing VPC including IAM Roles, PostgreSQL Database, and S3 Buckets.
+  E2B Infrastructure CloudFormation Template (Existing VPC) - Deploys core
+  infrastructure components for E2B platform using existing VPC including IAM
+  Roles, PostgreSQL Database, and S3 Buckets.
 
 # ===================================================================================================
 # Metadata - Organizes template parameters into logical groups in the CloudFormation console
@@ -64,7 +65,8 @@ Parameters:
 
   # Architecture Configuration - Choose CPU architecture
   Architecture:
-    Description: "Choose between x86_64 (Intel/AMD compatible) and arm64 (AWS Graviton) processor architectures."
+    Description: "Choose between x86_64 (Intel/AMD compatible) and arm64 (AWS
+      Graviton) processor architectures."
     Type: String
     AllowedValues:
       - x86_64
@@ -72,7 +74,9 @@ Parameters:
 
   # Client Cluster Configuration - Instance type for client nodes
   ClientInstanceType:
-    Description: "Instance type for client cluster nodes (must support nested virtualization, e.g. *.metal). Leave empty to use architecture default (x86: m7i.metal-24xl, arm64: c7g.metal)."
+    Description: "Instance type for client cluster nodes (must support nested
+      virtualization, e.g. *.metal). Leave empty to use architecture default
+      (x86: m7i.metal-24xl, arm64: c7g.metal)."
     Type: String
     Default: ""
 
@@ -80,15 +84,15 @@ Parameters:
   BaseDomain:
     Type: String
     Description: >-
-      Base domain name (e.g. domain.com or sub.domain.com).
-      Wildcard certificate will be issued for *.{BaseDomain}
-    AllowedPattern: '^([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}$'
+      Base domain name (e.g. domain.com or sub.domain.com). Wildcard certificate
+      will be issued for *.{BaseDomain}
+    AllowedPattern: "^([a-zA-Z0-9-]+\\.)+[a-zA-Z]{2,}$"
     ConstraintDescription: Must be a valid domain (e.g. sub.domain.com)
 
   ExistingCertificateArn:
     Type: String
     Description: ARN of an existing ACM certificate for *.{BaseDomain}
-    AllowedPattern: '^arn:aws:acm:[a-z0-9-]+:\d{12}:certificate/[a-f0-9-]+$'
+    AllowedPattern: "^arn:aws:acm:[a-z0-9-]+:\\d{12}:certificate/[a-f0-9-]+$"
     ConstraintDescription: Must be a valid ACM certificate ARN
 
   # Existing VPC Configuration
@@ -106,20 +110,24 @@ Parameters:
 
   ExistingPublicSubnet1Id:
     Type: AWS::EC2::Subnet::Id
-    Description: ID of existing public subnet in first availability zone(not available in private access mode)
+    Description: ID of existing public subnet in first availability zone(not
+      available in private access mode)
 
   ExistingPublicSubnet2Id:
     Type: AWS::EC2::Subnet::Id
-    Description: ID of existing public subnet in second availability zone(not available in private access mode)
+    Description: ID of existing public subnet in second availability zone(not
+      available in private access mode)
 
   # Data Subnet Configuration - Isolated subnets for managed data services (RDS, ElastiCache)
   ExistingDataSubnet1Id:
     Type: AWS::EC2::Subnet::Id
-    Description: ID of existing data subnet in first availability zone (for RDS and ElastiCache)
+    Description: ID of existing data subnet in first availability zone (for RDS and
+      ElastiCache)
 
   ExistingDataSubnet2Id:
     Type: AWS::EC2::Subnet::Id
-    Description: ID of existing data subnet in second availability zone (for RDS and ElastiCache)
+    Description: ID of existing data subnet in second availability zone (for RDS and
+      ElastiCache)
 
   PublicAccess:
     Type: String
@@ -142,7 +150,8 @@ Parameters:
   DBName:
     Type: String
     Default: e2b
-    Description: Initial database name for E2B application data (must be characters with letters and numbers)
+    Description: Initial database name for E2B application data (must be characters
+      with letters and numbers)
   DBUsername:
     Type: String
     NoEcho: true
@@ -150,18 +159,20 @@ Parameters:
   DBPassword:
     Type: String
     NoEcho: true
-    Description: Master password for PostgreSQL database (must be 8-30 characters with letters and numbers)
+    Description: Master password for PostgreSQL database (must be 8-30 characters
+      with letters and numbers)
     AllowedPattern: ^(?=.*[a-zA-Z])(?=.*\d)[a-zA-Z0-9]{8,30}$
-    ConstraintDescription: Password must be 8-30 characters and contain at least one letter and one number
+    ConstraintDescription: Password must be 8-30 characters and contain at least one
+      letter and one number
 
 # ===================================================================================================
 # Conditions - Conditional logic for resource creation
 # ===================================================================================================
 Conditions:
-  IsX64: !Equals [!Ref Architecture, x86_64]
-  IsArm64: !Equals [!Ref Architecture, arm64]
-  IsProd: !Equals [!Ref Environment, prod]
-  HasCustomClientInstanceType: !Not [!Equals [!Ref ClientInstanceType, ""]]
+  IsX64: !Equals [ !Ref Architecture, x86_64 ]
+  IsArm64: !Equals [ !Ref Architecture, arm64 ]
+  IsProd: !Equals [ !Ref Environment, prod ]
+  HasCustomClientInstanceType: !Not [ !Equals [ !Ref ClientInstanceType, "" ] ]
 
 # ===================================================================================================
 # Resources - AWS resources to be provisioned for the E2B infrastructure
@@ -265,9 +276,9 @@ Resources:
       #   - existing-route-table-id-1
       #   - existing-route-table-id-2
 
-  # ------------------------------------------------------------------------------------------------
-  # Security Groups - Network access control for different infrastructure tiers
-  # ------------------------------------------------------------------------------------------------
+      # ------------------------------------------------------------------------------------------------
+      # Security Groups - Network access control for different infrastructure tiers
+      # ------------------------------------------------------------------------------------------------
   BastionSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -332,7 +343,8 @@ Resources:
   DBSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: Security group controlling access to the PostgreSQL database (port 5432) from application subnets only
+      GroupDescription: Security group controlling access to the PostgreSQL database
+        (port 5432) from application subnets only
       SecurityGroupIngress:
         - IpProtocol: tcp
           FromPort: 5432
@@ -359,7 +371,8 @@ Resources:
   RedisSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: Security group controlling access to the Redis cache (port 6379) from application subnets only
+      GroupDescription: Security group controlling access to the Redis cache (port
+        6379) from application subnets only
       SecurityGroupIngress:
         - IpProtocol: tcp
           FromPort: 6379
@@ -741,7 +754,8 @@ Resources:
                   - iam:UpdateRole
                   - iam:PutRolePolicy
                   - iam:DeleteRolePolicy
-                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/${AWS::StackName}-infra-instances-role"
+                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/${AWS::StackName}-infra-ins\
+                  tances-role"
               - Sid: IAMManageInstanceProfile
                 Effect: Allow
                 Action:
@@ -749,7 +763,8 @@ Resources:
                   - iam:DeleteInstanceProfile
                   - iam:AddRoleToInstanceProfile
                   - iam:RemoveRoleFromInstanceProfile
-                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:instance-profile/${AWS::StackName}-*"
+                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:instance-profile/${AWS::StackNam\
+                  e}-*"
               - Sid: IAMManageCustomPolicy
                 Effect: Allow
                 Action:
@@ -776,14 +791,16 @@ Resources:
                 Action:
                   - iam:AttachRolePolicy
                   - iam:DetachRolePolicy
-                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/${AWS::StackName}-infra-instances-role"
+                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/${AWS::StackName}-infra-ins\
+                  tances-role"
                 Condition:
                   ArnLike:
                     iam:PolicyARN: !Sub "arn:aws:iam::${AWS::AccountId}:policy/${AWS::StackName}-*"
               - Sid: IAMPassRole
                 Effect: Allow
                 Action: iam:PassRole
-                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/${AWS::StackName}-infra-instances-role"
+                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/${AWS::StackName}-infra-ins\
+                  tances-role"
                 Condition:
                   StringEquals:
                     iam:PassedToService: ec2.amazonaws.com
@@ -792,8 +809,10 @@ Resources:
                 Action:
                   - iam:CreateServiceLinkedRole
                 Resource:
-                  - "arn:aws:iam::*:role/aws-service-role/autoscaling.amazonaws.com/*"
-                  - "arn:aws:iam::*:role/aws-service-role/elasticloadbalancing.amazonaws.com/*"
+                  - "arn:aws:iam::*:role/aws-service-role/autoscaling.amazonaws\
+                    .com/*"
+                  - "arn:aws:iam::*:role/aws-service-role/elasticloadbalancing.\
+                    amazonaws.com/*"
                 Condition:
                   StringEquals:
                     iam:AWSServiceName:
@@ -809,7 +828,8 @@ Resources:
                   - iam:UpdateRole
                   - iam:DeleteRole
                   - iam:UpdateAssumeRolePolicy
-                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/${AWS::StackName}-bastion-role"
+                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/${AWS::StackName}-bastion-r\
+                  ole"
               - Sid: DenyBoundaryModification
                 Effect: Deny
                 Action:
@@ -851,8 +871,10 @@ Resources:
                 Resource:
                   - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:*e2b*"
                   - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:*e2b*:*"
-                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/ec2/*"
-                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/ec2/*:*"
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/ec\
+                    2/*"
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/a\
+                    ws/ec2/*:*"
               - Sid: CloudWatchLogsDescribe
                 Effect: Allow
                 Action: logs:DescribeLogGroups
@@ -889,7 +911,8 @@ Resources:
                 Action:
                   - sts:GetCallerIdentity
                 Resource: "*"
-      Description: IAM role with complete permissions for E2B infrastructure deployment including Packer and Terraform
+      Description: IAM role with complete permissions for E2B infrastructure
+        deployment including Packer and Terraform
 
   EC2InstanceProfile:
     Type: AWS::IAM::InstanceProfile
@@ -907,7 +930,8 @@ Resources:
       Name: !Sub "e2b-${AWS::StackName}-db-credential"
       Description: PostgreSQL database credentials (JSON) encrypted in AWS Secrets Manager
       SecretString: !Sub
-        - '{"host":"${DBEndpoint}","port":"5432","dbname":"${DBName}","username":"${DBUsername}","password":"${DBPassword}"}'
+        - "{\"host\":\"${DBEndpoint}\",\"port\":\"5432\",\"dbname\":\"${DBName}\",\"\
+          username\":\"${DBUsername}\",\"password\":\"${DBPassword}\"}"
         - DBEndpoint: !GetAtt AuroraCluster.Endpoint.Address
 
   DBCredentialSecretTargetAttachment:
@@ -1045,8 +1069,8 @@ Resources:
         MinCapacity: 0.5
         MaxCapacity: 64
       StorageEncrypted: true
-      DeletionProtection: !If [IsProd, true, false]
-      BackupRetentionPeriod: !If [IsProd, 14, 7]
+      DeletionProtection: !If [ IsProd, true, false ]
+      BackupRetentionPeriod: !If [ IsProd, 14, 7 ]
       EnableIAMDatabaseAuthentication: true
       MasterUserPassword: !Ref DBPassword
       VpcSecurityGroupIds:
@@ -1122,7 +1146,8 @@ Resources:
   BastionInstance:
     Type: AWS::EC2::Instance
     Metadata:
-      Comment: "Terraform Bastion Host for deploying and managing E2B infrastructure components"
+      Comment: "Terraform Bastion Host for deploying and managing E2B infrastructure
+        components"
     Properties:
       InstanceType: !If
         - IsX64
@@ -1217,7 +1242,7 @@ Resources:
               # Create directory for E2B infrastructure code
               mkdir -p /opt/infra/ && cd /opt/infra/
               git clone https://github.com/aws-samples/sample-e2b-on-aws.git && cd sample-e2b-on-aws
-              git checkout 122914404e94afb976aee60d4fef875155ba17af
+              git checkout 3cc5e4296d8b2a2e3a7dc5415c8d135de6f624d5
             - !Sub |
               # Initialize Configuration
               touch /tmp/e2b.log
@@ -1308,7 +1333,8 @@ Outputs:
       Name: !Sub "${AWS::StackName}-CFNVPCID"
 
   CFNVPCCIDR:
-    Description: VPC CIDR Block defining the overall network address space (automatically retrieved)
+    Description: VPC CIDR Block defining the overall network address space
+      (automatically retrieved)
     Value: !GetAtt VpcCidrLookup.CidrBlock
     Export:
       Name: !Sub "${AWS::StackName}-CFNVPCCIDR"
@@ -1453,7 +1479,6 @@ Outputs:
     Value: !Ref AWS::StackName
     Export:
       Name: !Sub "${AWS::StackName}-AWSSTACKNAME"
-
   # Bastion Host information
   # BASTIONPUBLICDNS:
   #   Description: Public DNS name of the Bastion Host for SSH access
