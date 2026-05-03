@@ -994,6 +994,8 @@ resource "aws_launch_template" "client" {
     NOMAD_TLS_CA_SECRET          = aws_secretsmanager_secret.nomad_tls_ca_cert.name
     NOMAD_TLS_CERT_SECRET        = aws_secretsmanager_secret.nomad_tls_client_cert.name
     NOMAD_TLS_KEY_SECRET         = aws_secretsmanager_secret.nomad_tls_client_key.name
+    DB_CREDENTIAL_SECRET_NAME    = "e2b-${var.prefix}-db-credential"
+    INFRA_TOKENS_SECRET_NAME     = aws_secretsmanager_secret.infra_tokens.name
   }))
 
   tag_specifications {
@@ -1462,6 +1464,8 @@ resource "aws_launch_template" "api" {
     NOMAD_TLS_CA_SECRET          = aws_secretsmanager_secret.nomad_tls_ca_cert.name
     NOMAD_TLS_CERT_SECRET        = aws_secretsmanager_secret.nomad_tls_client_cert.name
     NOMAD_TLS_KEY_SECRET         = aws_secretsmanager_secret.nomad_tls_client_key.name
+    DB_CREDENTIAL_SECRET_NAME    = "e2b-${var.prefix}-db-credential"
+    INFRA_TOKENS_SECRET_NAME     = aws_secretsmanager_secret.infra_tokens.name
   }))
 
   tag_specifications {
@@ -1655,6 +1659,8 @@ resource "aws_launch_template" "build" {
     NOMAD_TLS_CA_SECRET          = aws_secretsmanager_secret.nomad_tls_ca_cert.name
     NOMAD_TLS_CERT_SECRET        = aws_secretsmanager_secret.nomad_tls_client_cert.name
     NOMAD_TLS_KEY_SECRET         = aws_secretsmanager_secret.nomad_tls_client_key.name
+    DB_CREDENTIAL_SECRET_NAME    = "e2b-${var.prefix}-db-credential"
+    INFRA_TOKENS_SECRET_NAME     = aws_secretsmanager_secret.infra_tokens.name
   }))
 
   tag_specifications {
