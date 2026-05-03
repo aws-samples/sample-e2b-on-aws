@@ -43,6 +43,10 @@ job "orchestrator" {
         STORAGE_PROVIDER             = "AWSBucket"
         ARTIFACTS_REGISTRY_PROVIDER  = "AWS_ECR"
         ORCHESTRATOR_SERVICES        = "orchestrator"
+        CONSUL_HTTP_ADDR             = "https://127.0.0.1:8501"
+        CONSUL_CACERT                = "/opt/consul/tls/ca/ca.pem"
+        CONSUL_CLIENT_CERT           = "/opt/consul/tls/cert.pem"
+        CONSUL_CLIENT_KEY            = "/opt/consul/tls/key.pem"
       }
 
       template {
