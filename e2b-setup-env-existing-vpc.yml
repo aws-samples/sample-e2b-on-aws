@@ -332,6 +332,15 @@ Resources:
           FromPort: 6379
           ToPort: 6379
           CidrIp: !GetAtt VpcCidrLookup.Subnet4Cidr
+        # SSH to private subnets for Packer AMI builds
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !GetAtt VpcCidrLookup.Subnet1Cidr
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !GetAtt VpcCidrLookup.Subnet2Cidr
         # DNS (UDP) for name resolution
         - IpProtocol: udp
           FromPort: 53
