@@ -589,6 +589,18 @@ resource "aws_iam_role_policy" "s3_scoped_access" {
   })
 }
 
+resource "aws_ecr_registry_scanning_configuration" "enhanced" {
+  scan_type = "ENHANCED"
+
+  rule {
+    scan_frequency = "CONTINUOUS_SCAN"
+    repository_filter {
+      filter      = "e2b*"
+      filter_type = "WILDCARD"
+    }
+  }
+}
+
 # Scoped ECR access policy - restricted to e2b repositories
 resource "aws_iam_role_policy" "ecr_scoped_access" {
   name = "${var.prefix}-ecr-scoped-access"

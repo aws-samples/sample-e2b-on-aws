@@ -14,7 +14,8 @@ DB_HOST=$(echo "$DB_SECRET_JSON" | jq -r '.host')
 DB_USER=$(echo "$DB_SECRET_JSON" | jq -r '.username')
 DB_PASS=$(echo "$DB_SECRET_JSON" | jq -r '.password')
 DB_NAME=$(echo "$DB_SECRET_JSON" | jq -r '.dbname')
-printf '%s' "postgresql://${DB_USER}:${DB_PASS}@${DB_HOST}/${DB_NAME}" > "$SECRETS_DIR/postgres_connection_string"
+DB_PASS_ENCODED=$(printf '%s' "$DB_PASS" | python3 -c "import sys, urllib.parse; print(urllib.parse.quote(sys.stdin.read(), safe=''))")
+printf '%s' "postgresql://${DB_USER}:${DB_PASS_ENCODED}@${DB_HOST}/${DB_NAME}" > "$SECRETS_DIR/postgres_connection_string"
 printf '%s' "$DB_HOST" > "$SECRETS_DIR/postgres_host"
 printf '%s' "$DB_USER" > "$SECRETS_DIR/postgres_user"
 printf '%s' "$DB_PASS" > "$SECRETS_DIR/postgres_password"

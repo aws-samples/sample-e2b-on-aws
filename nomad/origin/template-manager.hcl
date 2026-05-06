@@ -45,6 +45,7 @@ job "template-manager" {
         TEMPLATE_BUCKET_NAME         = "${BUCKET_FC_TEMPLATE}"
         BUILD_CONTEXT_BUCKET_NAME    = "${BUCKET_DOCKER_CONTEXTS}"
         OTEL_COLLECTOR_GRPC_ENDPOINT = "localhost:4317"
+        LOGS_COLLECTOR_ADDRESS       = "http://localhost:30006"
         ORCHESTRATOR_SERVICES        = "template-manager"
       }
 

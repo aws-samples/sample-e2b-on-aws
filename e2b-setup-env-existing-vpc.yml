@@ -160,11 +160,11 @@ Parameters:
   DBPassword:
     Type: String
     NoEcho: true
-    Description: Master password for PostgreSQL database (must be 8-30 characters
-      with letters and numbers)
-    AllowedPattern: ^(?=.*[a-zA-Z])(?=.*\d)[a-zA-Z0-9]{8,30}$
-    ConstraintDescription: Password must be 8-30 characters and contain at least one
-      letter and one number
+    Description: Master password for PostgreSQL database (must be 8-30 characters,
+      must not contain double quotes or backslashes)
+    AllowedPattern: ^(?=.*[a-zA-Z])(?=.*\d)[^"\\]{8,30}$
+    ConstraintDescription: Password must be 8-30 characters, contain at least one
+      letter and one number, and must not contain double quotes or backslashes
 
 # ===================================================================================================
 # Conditions - Conditional logic for resource creation
@@ -277,9 +277,39 @@ Resources:
       #   - existing-route-table-id-1
       #   - existing-route-table-id-2
 
-      # ------------------------------------------------------------------------------------------------
-      # Security Groups - Network access control for different infrastructure tiers
-      # ------------------------------------------------------------------------------------------------
+  # ------------------------------------------------------------------------------------------------
+  # VPC Endpoint - Provides private access to Secrets Manager for rotation Lambda
+  # ------------------------------------------------------------------------------------------------
+  SecretsManagerEndpointSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for Secrets Manager VPC Endpoint
+      VpcId: !Ref ExistingVpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: !GetAtt VpcCidrLookup.CidrBlock
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-secretsmanager-vpce-sg"
+
+  SecretsManagerVPCEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.secretsmanager"
+      VpcId: !Ref ExistingVpcId
+      VpcEndpointType: Interface
+      SubnetIds:
+        - !Ref ExistingDataSubnet1Id
+        - !Ref ExistingDataSubnet2Id
+      SecurityGroupIds:
+        - !GetAtt SecretsManagerEndpointSecurityGroup.GroupId
+      PrivateDnsEnabled: true
+
+  # ------------------------------------------------------------------------------------------------
+  # Security Groups - Network access control for different infrastructure tiers
+  # ------------------------------------------------------------------------------------------------
   BastionSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -354,7 +384,7 @@ Resources:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupDescription: Security group controlling access to the PostgreSQL database
-        (port 5432) from application subnets only
+        (port 5432) from application and data subnets
       SecurityGroupIngress:
         - IpProtocol: tcp
           FromPort: 5432
@@ -364,6 +394,14 @@ Resources:
           FromPort: 5432
           ToPort: 5432
           CidrIp: !GetAtt VpcCidrLookup.Subnet2Cidr
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          CidrIp: !GetAtt VpcCidrLookup.Subnet3Cidr
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          CidrIp: !GetAtt VpcCidrLookup.Subnet4Cidr
       SecurityGroupEgress:
         - IpProtocol: tcp
           FromPort: 1024
@@ -377,6 +415,28 @@ Resources:
       Tags:
         - Key: Name
           Value: !Sub "${AWS::StackName}-db-sg"
+
+  RotationLambdaSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for DB credential rotation Lambda
+      VpcId: !Ref ExistingVpcId
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: !GetAtt VpcCidrLookup.CidrBlock
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          CidrIp: !GetAtt VpcCidrLookup.Subnet3Cidr
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          CidrIp: !GetAtt VpcCidrLookup.Subnet4Cidr
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-rotation-lambda-sg"
 
   RedisSecurityGroup:
     Type: AWS::EC2::SecurityGroup
@@ -939,7 +999,8 @@ Resources:
       SecretId: !Ref DBCredentialSecret
       HostedRotationLambda:
         RotationType: PostgreSQLSingleUser
-        VpcSecurityGroupIds: !GetAtt DBSecurityGroup.GroupId
+        RotationLambdaName: !Sub "${AWS::StackName}-db-credential-rotation"
+        VpcSecurityGroupIds: !GetAtt RotationLambdaSecurityGroup.GroupId
         VpcSubnetIds: !Join
           - ","
           - - !Ref ExistingDataSubnet1Id
