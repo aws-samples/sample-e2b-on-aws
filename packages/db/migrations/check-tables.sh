@@ -1,15 +1,15 @@
 #!/bin/bash
 set -e
 
-echo "=== 从配置文件加载数据库连接信息 ==="
-# 加载配置文件，但只提取我们需要的变量
+echo "=== Loading database connection info from config file ==="
+# Load config file, extracting only the variables we need
 CONFIG_FILE="/opt/config.properties"
 if [ -f "$CONFIG_FILE" ]; then
-  echo "找到配置文件: $CONFIG_FILE"
-  # 只提取CFNDBURL变量，避免执行其他可能的命令
-  echo "成功找到配置文件"
+  echo "Found config file: $CONFIG_FILE"
+  # Extract only the CFNDBURL variable, avoiding execution of other possible commands
+  echo "Successfully found config file"
 else
-  echo "错误: 配置文件 $CONFIG_FILE 不存在"
+  echo "Error: config file $CONFIG_FILE does not exist"
   exit 1
 fi
 
@@ -21,22 +21,22 @@ DB_USER=$(echo "$DB_SECRET_JSON" | jq -r '.username')
 DB_NAME=$(echo "$DB_SECRET_JSON" | jq -r '.dbname')
 DB_PASSWORD=$(echo "$DB_SECRET_JSON" | jq -r '.password')
 
-echo "检查数据库中的表..."
+echo "Checking tables in database..."
 
-# 提取所有SQL文件中的CREATE TABLE语句，获取表名
-echo "分析SQL文件中的表定义..."
+# Extract CREATE TABLE statements from all SQL files to get table names
+echo "Analyzing table definitions in SQL files..."
 expected_tables=$(grep -h -i "CREATE TABLE" *.sql | grep -v "IF NOT EXISTS" | sed -E 's/.*CREATE TABLE[[:space:]]+([^[:space:]()]+).*/\1/i' | sort | uniq)
 
-# 如果没有找到表，可能是因为表名格式不同，尝试另一种方式
+# If no tables found, it may be due to different table name format, try another approach
 if [ -z "$expected_tables" ]; then
   expected_tables=$(grep -h -i "CREATE TABLE" *.sql | grep -v "IF NOT EXISTS" | sed -E 's/.*CREATE TABLE[[:space:]]+"?([^"[:space:]()]+)"?.*/\1/i' | sort | uniq)
 fi
 
-echo "预期的表:"
+echo "Expected tables:"
 echo "$expected_tables"
 
-# 从数据库中获取实际表
-echo -e "\n从数据库获取实际表..."
+# Get actual tables from database
+echo -e "\nRetrieving actual tables from database..."
 actual_tables=$(PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -U $DB_USER -d $DB_NAME -t -c "
 SELECT table_name 
 FROM information_schema.tables 
@@ -44,27 +44,27 @@ WHERE table_schema NOT IN ('pg_catalog', 'information_schema')
 AND table_type = 'BASE TABLE'
 ORDER BY table_name;")
 
-echo "数据库中的表:"
+echo "Tables in database:"
 echo "$actual_tables"
 
-# 检查是否所有预期的表都存在
-echo -e "\n验证表是否存在..."
+# Check if all expected tables exist
+echo -e "\nVerifying table existence..."
 missing_tables=0
 
 for table in $expected_tables; do
-  # 移除引号和模式前缀
+  # Remove quotes and schema prefix
   clean_table=$(echo $table | sed 's/"//g' | sed 's/.*\.//')
   if ! echo "$actual_tables" | grep -q "$clean_table"; then
-    echo "❌ 表 '$clean_table' 不存在!"
+    echo "❌ Table '$clean_table' does not exist!"
     missing_tables=$((missing_tables+1))
   else
-    echo "✅ 表 '$clean_table' 存在"
+    echo "✅ Table '$clean_table' exists"
   fi
 done
 
 if [ $missing_tables -eq 0 ]; then
-  echo -e "\n✅ 所有表都已成功创建!"
+  echo -e "\n✅ All tables created successfully!"
 else
-  echo -e "\n❌ 有 $missing_tables 个表未创建成功，请检查SQL文件"
+  echo -e "\n❌ $missing_tables table(s) failed to create, please check SQL files"
   exit 1
 fi

@@ -75,14 +75,14 @@ func GetAWSECRAuthToken() (*AWSAuthResponse, error) {
 		return nil, fmt.Errorf("failed to get AWS session: %v", err)
 	}
 
-	// 确保会话有区域信息
+	// Ensure session has region info
 	if sess.Config.Region == nil || *sess.Config.Region == "" {
 		region, err := constants.GetAWSRegion()
 		if err != nil {
 			return nil, fmt.Errorf("failed to get AWS region: %v", err)
 		}
 
-		// 使用获取到的区域创建新的会话
+		// Create a new session with the retrieved region
 		newConfig := aws.Config{
 			Region: aws.String(region),
 		}
@@ -117,7 +117,7 @@ func GetAWSECRAuthToken() (*AWSAuthResponse, error) {
 	log.Printf("[DEBUG] ECR Auth - Got token expiring at: %s", authData.ExpiresAt.Format(time.RFC3339))
 	log.Printf("[DEBUG] ECR Auth - Proxy endpoint: %s", *authData.ProxyEndpoint)
 
-	// 验证令牌格式
+	// Validate token format
 	decodedToken, err := base64.StdEncoding.DecodeString(*authData.AuthorizationToken)
 	if err != nil {
 		log.Printf("[ERROR] ECR Auth - Failed to decode token: %v", err)

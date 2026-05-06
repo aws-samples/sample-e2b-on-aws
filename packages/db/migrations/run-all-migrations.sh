@@ -1,27 +1,27 @@
 #!/bin/bash
 set -e
 
-echo "=== 从配置文件加载数据库连接信息 ==="
-# 加载配置文件，但只提取我们需要的变量
+echo "=== Loading database connection info from config file ==="
+# Load config file, extracting only the variables we need
 CONFIG_FILE="/opt/config.properties"
 if [ -f "$CONFIG_FILE" ]; then
-  echo "找到配置文件: $CONFIG_FILE"
-  # 只提取CFNDBURL变量，避免执行其他可能的命令
+  echo "Found config file: $CONFIG_FILE"
+  # Extract only the CFNDBURL variable, avoiding execution of other possible commands
   CFNDBURL=$(grep "^CFNDBURL=" "$CONFIG_FILE" | cut -d'=' -f2-)
   AWSREGION=$(grep "^AWSREGION=" "$CONFIG_FILE" | cut -d'=' -f2-)
 
   if [ -z "$CFNDBURL" ]; then
-    echo "错误: 配置文件中没有找到 CFNDBURL"
+    echo "Error: CFNDBURL not found in config file"
     exit 1
   fi
 
-  echo "成功提取数据库连接信息"
+  echo "Successfully extracted database connection info"
 else
-  echo "错误: 配置文件 $CONFIG_FILE 不存在"
+  echo "Error: config file $CONFIG_FILE does not exist"
   exit 1
 fi
 
-echo "从 Secrets Manager 获取数据库连接信息..."
+echo "Retrieving database connection info from Secrets Manager..."
 # Read all database connection information from Secrets Manager
 DB_CREDENTIAL_SECRET=$(grep "^CFNDBCredentialSecretName=" "$CONFIG_FILE" | cut -d'=' -f2-)
 DB_SECRET_JSON=$(aws secretsmanager get-secret-value --secret-id "$DB_CREDENTIAL_SECRET" --query SecretString --output text)
@@ -30,50 +30,50 @@ DB_USER=$(echo "$DB_SECRET_JSON" | jq -r '.username')
 DB_NAME=$(echo "$DB_SECRET_JSON" | jq -r '.dbname')
 DB_PASSWORD=$(echo "$DB_SECRET_JSON" | jq -r '.password')
 
-echo "数据库连接信息:"
-echo "- 主机: $DB_HOST"
-echo "- 数据库: $DB_NAME"
-echo "- 用户: $DB_USER"
-echo "- 密码: ********"
+echo "Database connection info:"
+echo "- Host: $DB_HOST"
+echo "- Database: $DB_NAME"
+echo "- User: $DB_USER"
+echo "- Password: ********"
 
-# 检查数据库连接
-echo -e "\n=== 检查数据库连接 ==="
+# Check database connection
+echo -e "\n=== Checking database connection ==="
 max_attempts=5
 attempt=0
 
 while [ $attempt -lt $max_attempts ]; do
   attempt=$((attempt+1))
-  echo "尝试连接数据库... 尝试 $attempt/$max_attempts"
-  
+  echo "Attempting to connect to database... attempt $attempt/$max_attempts"
+
   if PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -U $DB_USER -d $DB_NAME -c "SELECT 1" > /dev/null 2>&1; then
-    echo "数据库连接成功!"
+    echo "Database connection successful!"
     break
   else
-    echo "连接失败，等待重试..."
+    echo "Connection failed, waiting to retry..."
     if [ $attempt -eq $max_attempts ]; then
-      echo "错误: 无法连接到数据库，超过最大尝试次数"
-      echo "请检查数据库连接信息和网络连接"
+      echo "Error: unable to connect to database, maximum attempts exceeded"
+      echo "Please check database connection info and network connectivity"
       exit 1
     fi
     sleep 5
   fi
 done
 
-# 按照文件名排序执行所有SQL文件
-echo -e "\n=== 开始执行SQL迁移 ==="
+# Execute all SQL files sorted by filename
+echo -e "\n=== Starting SQL migrations ==="
 for sql_file in $(ls -v *.sql); do
-  echo "执行: $sql_file"
+  echo "Executing: $sql_file"
   if ! PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -U $DB_USER -d $DB_NAME -f $sql_file; then
-    echo "执行 $sql_file 失败，重试..."
-    # 重试最多3次
+    echo "Execution of $sql_file failed, retrying..."
+    # Retry up to 3 times
     for i in {1..3}; do
-      echo "重试 $i/3..."
+      echo "Retry $i/3..."
       if PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -U $DB_USER -d $DB_NAME -f $sql_file; then
-        echo "重试成功!"
+        echo "Retry successful!"
         break
       fi
       if [ $i -eq 3 ]; then
-        echo "执行 $sql_file 失败，请检查SQL语法"
+        echo "Execution of $sql_file failed, please check SQL syntax"
         exit 1
       fi
       sleep 2
@@ -81,14 +81,14 @@ for sql_file in $(ls -v *.sql); do
   fi
 done
 
-echo "所有SQL迁移已执行完成"
+echo "All SQL migrations completed successfully"
 
-# 检查所有表是否存在
-echo -e "\n=== 检查数据库表 ==="
+# Check that all tables exist
+echo -e "\n=== Checking database tables ==="
 PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -U $DB_USER -d $DB_NAME -c "
 SELECT table_schema, table_name 
 FROM information_schema.tables 
 WHERE table_schema NOT IN ('pg_catalog', 'information_schema') 
 ORDER BY table_schema, table_name;"
 
-echo -e "\n=== 迁移完成! ==="
+echo -e "\n=== Migration complete! ==="

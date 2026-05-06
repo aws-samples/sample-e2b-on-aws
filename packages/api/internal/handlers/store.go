@@ -134,13 +134,13 @@ func NewAPIStore(ctx context.Context, tel *telemetry.Client) *APIStore {
 		redisClient = redis.NewClusterClient(&redis.ClusterOptions{
 			Addrs:        []string{redisClusterUrl},
 			MinIdleConns: 1,
-			TLSConfig:    &tls.Config{}, // 添加 TLS 支持
+			TLSConfig:    &tls.Config{}, // Add TLS support
 		})
 	} else if rurl := os.Getenv("REDIS_URL"); rurl != "" {
 		redisClient = redis.NewClient(&redis.Options{
 			Addr:         rurl,
 			MinIdleConns: 1,
-			TLSConfig:    &tls.Config{}, // 添加 TLS 支持
+			TLSConfig:    &tls.Config{}, // Add TLS support
 		})
 	} else {
 		zap.L().Warn("REDIS_URL not set, using local caches")

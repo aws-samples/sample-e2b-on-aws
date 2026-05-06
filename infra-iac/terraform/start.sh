@@ -74,26 +74,26 @@ echo "# Terraform outputs added on $(date)" >> "$CONFIG_FILE"
 
 #!/bin/bash
 
-# 确保 CONFIG_FILE 变量已定义
+# Ensure CONFIG_FILE variable is defined
 if [ -z "$CONFIG_FILE" ]; then
     CONFIG_FILE="./config.env"
     echo "CONFIG_FILE not set, using default: $CONFIG_FILE"
 fi
 
-# 处理所有 bucket 输出
+# Process all bucket outputs
 echo "Processing bucket outputs..."
 
-# 获取所有以 _bucket_name 结尾的输出
+# Get all outputs ending with _bucket_name
 bucket_outputs=$(terraform output | grep "_bucket_name" | cut -d "=" -f1 | tr -d " ")
 
 for output_name in $bucket_outputs; do
-    # 获取 bucket 名称值
+    # Get bucket name value
     bucket_value=$(terraform output -raw $output_name)
     
-    # 转换输出名称为所需格式 (去掉 _bucket_name 后缀，转换为大写，替换 _ 为 _)
+    # Convert output name to required format (remove _bucket_name suffix, convert to uppercase)
     formatted_name=$(echo $output_name | sed 's/_bucket_name$//' | tr '[:lower:]' '[:upper:]' | tr '-' '_')
     
-    # 写入配置文件
+    # Write to config file
     echo "BUCKET_${formatted_name}=${bucket_value}" >> "$CONFIG_FILE"
     echo "Added bucket: BUCKET_${formatted_name}=${bucket_value}"
 done

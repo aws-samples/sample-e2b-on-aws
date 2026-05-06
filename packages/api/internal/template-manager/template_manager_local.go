@@ -34,7 +34,7 @@ func (tm *TemplateManager) localClientPeriodicHealthSync(ctx context.Context) {
 }
 
 func (tm *TemplateManager) localClientHealthSync(ctx context.Context) {
-	zap.L().Debug("开始检查template manager健康状态", 
+	zap.L().Debug("starting to check template manager health status",
 		zap.String("templateManagerHost", templateManagerHost))
 	
 	reqCtx, reqCtxCancel := context.WithTimeout(ctx, healthCheckTimeout)
@@ -43,14 +43,14 @@ func (tm *TemplateManager) localClientHealthSync(ctx context.Context) {
 
 	err = utils.UnwrapGRPCError(err)
 	if err != nil {
-		zap.L().Error("获取template manager健康状态失败", 
+		zap.L().Error("failed to get template manager health status",
 			zap.String("templateManagerHost", templateManagerHost), 
 			zap.Error(err))
 		tm.setLocalClientStatus(orchestratorinfo.ServiceInfoStatus_OrchestratorUnhealthy)
 		return
 	}
 
-	zap.L().Debug("成功获取template manager健康状态", 
+	zap.L().Debug("successfully got template manager health status",
 		zap.String("templateManagerHost", templateManagerHost), 
 		zap.String("status", res.ServiceStatus.String()))
 	tm.setLocalClientStatus(res.ServiceStatus)
@@ -64,14 +64,14 @@ func (tm *TemplateManager) setLocalClientStatus(s orchestratorinfo.ServiceInfoSt
 	tm.localClientStatus = s
 	
 	if oldStatus != s {
-		zap.L().Info("template manager健康状态变更", 
+		zap.L().Info("template manager health status changed",
 			zap.String("oldStatus", oldStatus.String()), 
 			zap.String("newStatus", s.String()))
 	}
 }
 
 func (tm *TemplateManager) GetLocalClientStatus() orchestratorinfo.ServiceInfoStatus {
-	tm.localClientMutex.RLock()  // 改为读锁
+	tm.localClientMutex.RLock() // Use read lock
     defer tm.localClientMutex.RUnlock()
     return tm.localClientStatus
 }

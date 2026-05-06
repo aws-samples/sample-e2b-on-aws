@@ -1,14 +1,14 @@
 #!/bin/bash
 
-# 设置LC_ALL=C以避免字符编码问题
+# Set LC_ALL=C to avoid character encoding issues
 export LC_ALL=C
 
-# 生成UUID格式的teamId
+# Generate UUID format teamId
 generate_uuid() {
     if command -v uuidgen &> /dev/null; then
         uuidgen | tr '[:upper:]' '[:lower:]'
     else
-        # 使用更可靠的方法生成UUID
+        # Use a more reliable method to generate UUID
         printf '%04x%04x-%04x-%04x-%04x-%04x%04x%04x\n' \
             $((RANDOM%65536)) $((RANDOM%65536)) \
             $((RANDOM%65536)) \
@@ -18,7 +18,7 @@ generate_uuid() {
     fi
 }
 
-# 生成随机的accessToken (格式: sk_e2b_后跟32个随机字符)
+# Generate random accessToken (format: sk_e2b_ followed by 32 random chars)
 generate_access_token() {
     local chars="abcdefghijklmnopqrstuvwxyz0123456789"
     local token="sk_e2b_"
@@ -30,7 +30,7 @@ generate_access_token() {
     echo "$token"
 }
 
-# 生成随机的teamApiKey (格式: e2b_后跟32个随机字符)
+# Generate random teamApiKey (format: e2b_ followed by 32 random chars)
 generate_team_api_key() {
     local chars="abcdefghijklmnopqrstuvwxyz0123456789"
     local key="e2b_"
@@ -58,7 +58,7 @@ if [ -n "$EXISTING" ] && [ "$EXISTING" != "null" ]; then
     exit 0
 fi
 
-# 生成随机值
+# Generate random values
 TEAM_ID=$(generate_uuid)
 ACCESS_TOKEN=$(generate_access_token)
 TEAM_API_KEY=$(generate_team_api_key)

@@ -1,25 +1,25 @@
 #!/bin/bash
 set -e
 
-echo "=== 开始清理所有创建的内容 ==="
+echo "=== Starting cleanup of all created resources ==="
 
-# 停止并删除Docker容器和卷
-echo "停止并删除Docker容器和卷..."
-docker-compose down -v || echo "Docker容器可能已经停止或不存在"
+# Stop and remove Docker containers and volumes
+echo "Stopping and removing Docker containers and volumes..."
+docker-compose down -v || echo "Docker containers may already be stopped or do not exist"
 
-# 删除Docker镜像（可选，取消注释以删除）
-# echo "删除PostgreSQL Docker镜像..."
-# docker rmi postgres:15 || echo "PostgreSQL镜像可能不存在或正在被使用"
+# Remove Docker images (optional, uncomment to remove)
+# echo "Removing PostgreSQL Docker image..."
+# docker rmi postgres:15 || echo "PostgreSQL image may not exist or is in use"
 
-# 删除创建的脚本文件
-echo "删除创建的脚本文件..."
+# Remove created script files
+echo "Removing created script files..."
 rm -f run-all-migrations.sh check-tables.sh migrate-and-verify.sh
 
-# 删除init-scripts目录
-echo "删除init-scripts目录..."
+# Remove init-scripts directory
+echo "Removing init-scripts directory..."
 rm -rf init-scripts
 
-# 删除本清理脚本（最后执行）
-echo "=== 清理完成 ==="
-echo "注意：此脚本(cleanup.sh)将在执行后自删除"
-echo "执行 'rm -f cleanup.sh' 删除此脚本"
+# Remove this cleanup script (executed last)
+echo "=== Cleanup complete ==="
+echo "Note: this script (cleanup.sh) will self-delete after execution"
+echo "Run 'rm -f cleanup.sh' to delete this script"

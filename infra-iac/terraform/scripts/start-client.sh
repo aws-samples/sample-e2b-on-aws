@@ -27,7 +27,7 @@ exec > >(tee /var/log/user-data.log | logger -t user-data -s 2>/dev/console) 2>&
 # Add cache disk for orchestrator and swapfile
 MOUNT_POINT="/orchestrator"
 
-# 获取当前实例类型 (使用 IMDSv2)
+# Get current instance type (using IMDSv2)
 IMDS_TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" \
     -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
 INSTANCE_TYPE=$(curl -s -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" \
@@ -35,14 +35,14 @@ INSTANCE_TYPE=$(curl -s -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" \
 echo "Detected instance type: $INSTANCE_TYPE"
 
 
-# 获取 IAM Role 名称 (使用 IMDSv2)
+# Get IAM Role name (using IMDSv2)
 IAM_ROLE=$(curl -s -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" \
     http://169.254.169.254/latest/meta-data/iam/security-credentials/)
 echo "Detected IAM Role: $IAM_ROLE"
 
 
 
-# 使用 case 语句检查是否支持多盘 LVM
+# Use case statement to check if multi-disk LVM is supported
 USE_LVM=false
 case "$INSTANCE_TYPE" in
     m5d.metal|r5d.metal|m5dn.metal|r5dn.metal|i3.metal|i3en.metal)
@@ -54,21 +54,21 @@ echo "USE_LVM=$USE_LVM"
 if [[ "$USE_LVM" == "true" ]]; then
     echo "Instance type $INSTANCE_TYPE supports multiple local NVMe disks, using LVM..."
 
-    # 安装 LVM2 工具（如果未安装）
+    # Install LVM2 tools (if not already installed)
     if ! command -v pvcreate &>/dev/null; then
         apt-get -o DPkg::Lock::Timeout=300 update && apt-get -o DPkg::Lock::Timeout=300 install -y lvm2
     fi
 
-    # 查找所有本地 NVMe 实例存储设备（排除 EBS 卷）
+    # Find all local NVMe instance store devices (excluding EBS volumes)
     NVME_DEVICES=()
     for dev in /dev/nvme*n1; do
         if [[ -b "$dev" ]]; then
-            # 检查是否是实例存储（非 EBS）
-            # EBS 卷的序列号通常以 "vol" 开头
+            # Check if it is instance store (not EBS)
+            # EBS volume serial numbers typically start with "vol"
             SERIAL=$(nvme id-ctrl "$dev" 2>/dev/null | grep -i "sn" | awk '{print $3}')
 
             if [[ ! "$SERIAL" =~ ^vol ]]; then
-                # 确保不是根卷
+                # Ensure it is not the root volume
                 ROOT_DEV=$(df / | tail -1 | awk '{print $1}' | sed 's/p[0-9]*$//' | sed 's/[0-9]*$//')
                 if [[ "$dev" != "$ROOT_DEV" ]]; then
                     NVME_DEVICES+=("$dev")
@@ -87,39 +87,39 @@ if [[ "$USE_LVM" == "true" ]]; then
         VG_NAME="vg_orchestrator"
         LV_NAME="lv_orchestrator"
 
-        # 清理可能存在的旧配置
+        # Clean up any existing old configuration
         if vgdisplay $VG_NAME &>/dev/null; then
             echo "Removing existing volume group $VG_NAME..."
             lvremove -f /dev/$VG_NAME/$LV_NAME 2>/dev/null || true
             vgremove -f $VG_NAME 2>/dev/null || true
         fi
 
-        # 清理设备上的旧签名
+        # Clean up old signatures on devices
         for dev in "$${NVME_DEVICES[@]}"; do
             wipefs -a "$dev" 2>/dev/null || true
             pvremove -f "$dev" 2>/dev/null || true
         done
 
-        # Step 1: 创建物理卷 (PV)
+        # Step 1: Create physical volumes (PV)
         echo "Creating physical volumes..."
         for dev in "$${NVME_DEVICES[@]}"; do
             pvcreate -f "$dev"
             echo "  Created PV on $dev"
         done
 
-        # Step 2: 创建卷组 (VG)
+        # Step 2: Create volume group (VG)
         echo "Creating volume group $VG_NAME..."
         vgcreate $VG_NAME "$${NVME_DEVICES[@]}"
 
-        # Step 3: 创建逻辑卷 (LV) - 使用 100% 可用空间，条带化以提高性能
+        # Step 3: Create logical volume (LV) - use 100% free space, striped for better performance
         echo "Creating logical volume $LV_NAME with striping..."
         lvcreate -l 100%FREE -i $NVME_COUNT -I 256K -n $LV_NAME $VG_NAME
 
-        # 设置 DISK 变量为 LVM 设备
+        # Set DISK variable to LVM device
         DISK="/dev/$VG_NAME/$LV_NAME"
         echo "LVM logical volume created: $DISK"
 
-        # 显示 LVM 配置信息
+        # Display LVM configuration info
         echo "=== LVM Configuration ==="
         pvs
         vgs
@@ -136,7 +136,7 @@ if [[ "$USE_LVM" == "true" ]]; then
 
 else
     echo "Instance type $INSTANCE_TYPE uses single disk mode..."
-    # 动态检测数据盘：找到非根卷的 EBS 设备
+    # Dynamically detect data disk: find EBS device that is not the root volume
     ROOT_DEV=$(lsblk -no PKNAME $(findmnt -n -o SOURCE /) | head -1)
     echo "Root device: /dev/$ROOT_DEV"
 
@@ -144,12 +144,12 @@ else
     for dev in /dev/nvme*n1; do
         if [[ -b "$dev" ]]; then
             DEV_NAME=$(basename "$dev")
-            # 跳过根卷
+            # Skip root volume
             if [[ "$DEV_NAME" == "$ROOT_DEV" ]]; then
                 echo "Skipping root device: $dev"
                 continue
             fi
-            # 确认是 EBS 卷（序列号以 vol 开头）
+            # Confirm it is an EBS volume (serial number starts with vol)
             SERIAL=$(nvme id-ctrl "$dev" 2>/dev/null | grep -i "sn" | awk '{print $3}')
             if [[ "$SERIAL" =~ ^vol ]]; then
                 DISK="$dev"
@@ -168,7 +168,7 @@ fi
 
 echo "Using disk: $DISK"
 
-# 确保设备未被挂载
+# Ensure device is not mounted
 sudo umount "$DISK" 2>/dev/null || true
 
 # Step 1: Format the disk with XFS and standard block size
@@ -315,7 +315,7 @@ if ! command -v s3fs &>/dev/null; then
 fi
 
 # Mount S3 buckets using s3fs
-# 使用显式 IAM role 名称挂载 s3fs (而不是 iam_role=auto)
+# Mount s3fs using explicit IAM role name (instead of iam_role=auto)
 s3fs ${FC_ENV_PIPELINE_BUCKET_NAME} $envd_dir -o iam_role=$IAM_ROLE,allow_other,ro,umask=0022
 s3fs ${FC_KERNELS_BUCKET_NAME} $kernels_dir -o iam_role=$IAM_ROLE,allow_other,ro,umask=0022,use_cache=/tmp/s3fs_cache_kernels
 s3fs ${FC_VERSIONS_BUCKET_NAME} $fc_versions_dir -o iam_role=$IAM_ROLE,allow_other,ro,umask=0022,use_cache=/tmp/s3fs_cache_versions

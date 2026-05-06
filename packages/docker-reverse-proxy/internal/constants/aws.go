@@ -34,10 +34,10 @@ var (
 	awsSession    *session.Session
 )
 
-// 尝试从 EC2 实例元数据服务获取区域信息
+// getRegionFromEC2Metadata attempts to retrieve region info from the EC2 instance metadata service
 func getRegionFromEC2Metadata() (string, error) {
 	client := &http.Client{
-		Timeout: 2 * time.Second, // 设置较短的超时时间
+		Timeout: 2 * time.Second, // Set a short timeout
 	}
 	
 	resp, err := client.Get("http://169.254.169.254/latest/meta-data/placement/region")
@@ -63,19 +63,19 @@ func getRegionFromEC2Metadata() (string, error) {
 	return region, nil
 }
 
-// InitAWSConfig 初始化 AWS 配置信息
+// InitAWSConfig initializes AWS configuration
 func InitAWSConfig() error {
 	awsConfigOnce.Do(func() {
-		// 创建 AWS 会话
+		// Create AWS session
 		config := &aws.Config{}
 
-		// 处理区域配置
+		// Handle region configuration
 		if AWSRegion != "" {
-			// 如果环境变量中提供了区域，直接使用
+			// If region is provided via environment variable, use it directly
 			config.Region = aws.String(AWSRegion)
 			log.Printf("Using region from environment variable: %s", AWSRegion)
 		} else {
-			// 尝试从 EC2 元数据获取区域
+			// Try to get region from EC2 metadata
 			metadataRegion, err := getRegionFromEC2Metadata()
 			if err == nil && metadataRegion != "" {
 				config.Region = aws.String(metadataRegion)
@@ -85,7 +85,7 @@ func InitAWSConfig() error {
 			}
 		}
 
-		// 处理凭证配置
+		// Handle credentials configuration
 		if AWSAccessKeyID != "" && AWSSecretAccessKey != "" {
 			config.Credentials = credentials.NewStaticCredentials(
 				AWSAccessKeyID,
@@ -95,7 +95,7 @@ func InitAWSConfig() error {
 			log.Printf("Using AWS credentials from environment variables")
 		}
 
-		// 创建 AWS 会话
+		// Create AWS session
 		var err error
 		awsSession, err = session.NewSession(config)
 		if err != nil {
@@ -103,11 +103,11 @@ func InitAWSConfig() error {
 			return
 		}
 
-		// 获取 AWS 账户 ID
+		// Get AWS account ID
 		if AWSAccountID != "" {
 			awsAccountID = AWSAccountID
 		} else {
-			// 通过 STS 获取账户 ID
+			// Get account ID via STS
 			stsClient := sts.New(awsSession)
 			result, err := stsClient.GetCallerIdentity(&sts.GetCallerIdentityInput{})
 			if err != nil {
@@ -117,26 +117,26 @@ func InitAWSConfig() error {
 			awsAccountID = *result.Account
 		}
 
-		// 确定最终使用的区域
+		// Determine the final region to use
 		if AWSRegion != "" {
 			awsRegion = AWSRegion
 		} else if awsSession.Config.Region != nil && *awsSession.Config.Region != "" {
 			awsRegion = *awsSession.Config.Region
 			log.Printf("Using region from AWS session: %s", awsRegion)
 		} else {
-			// 如果仍然无法获取区域，使用默认区域
-			awsRegion = "us-east-1" // 默认区域
+			// If region is still unavailable, use the default region
+			awsRegion = "us-east-1" // default region
 			log.Printf("No region found, using default: %s", awsRegion)
 		}
 
-		// 设置注册表主机
+		// Set the registry host
 		awsRegistryHost = fmt.Sprintf("%s.dkr.ecr.%s.amazonaws.com", awsAccountID, awsRegion)
 	})
 
 	return awsConfigErr
 }
 
-// GetAWSSession 返回 AWS 会话
+// GetAWSSession returns the AWS session
 func GetAWSSession() (*session.Session, error) {
 	if err := InitAWSConfig(); err != nil {
 		return nil, err
@@ -144,7 +144,7 @@ func GetAWSSession() (*session.Session, error) {
 	return awsSession, nil
 }
 
-// GetAWSAccountID 返回 AWS 账户 ID
+// GetAWSAccountID returns the AWS account ID
 func GetAWSAccountID() (string, error) {
 	if err := InitAWSConfig(); err != nil {
 		return "", err
@@ -152,7 +152,7 @@ func GetAWSAccountID() (string, error) {
 	return awsAccountID, nil
 }
 
-// GetAWSRegion 返回 AWS 区域
+// GetAWSRegion returns the AWS region
 func GetAWSRegion() (string, error) {
 	if err := InitAWSConfig(); err != nil {
 		return "", err
@@ -160,7 +160,7 @@ func GetAWSRegion() (string, error) {
 	return awsRegion, nil
 }
 
-// GetAWSRegistryHost 返回 AWS ECR 注册表主机
+// GetAWSRegistryHost returns the AWS ECR registry host
 func GetAWSRegistryHost() (string, error) {
 	if err := InitAWSConfig(); err != nil {
 		return "", err
@@ -168,16 +168,16 @@ func GetAWSRegistryHost() (string, error) {
 	return awsRegistryHost, nil
 }
 
-// GetAWSUploadPrefix 返回 AWS ECR 上传前缀
-// 使用 base_repo_name/template_id 格式的仓库名称
+// GetAWSUploadPrefix returns the AWS ECR upload prefix
+// Uses the base_repo_name/template_id format for the repository name
 func GetAWSUploadPrefix(templateID string) (string, error) {
 	if err := InitAWSConfig(); err != nil {
 		return "", err
 	}
 	
-	// 使用 base_repo_name/template_id 格式的仓库名称
+	// Use the base_repo_name/template_id format for the repository name
 	templateRepo := fmt.Sprintf("%s/%s", AWSECRRepository, templateID)
-	
-	// 返回上传前缀
+
+	// Return the upload prefix
 	return fmt.Sprintf("/v2/%s/blobs/uploads/", templateRepo), nil
 }

@@ -47,11 +47,11 @@ fc_versions_dir="/fc-versions"
 mkdir -p $fc_versions_dir
 
 
-# 获取当前实例类型 (使用 IMDSv2)
+# Get current instance type (using IMDSv2)
 IMDS_TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" \
     -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
 
-# 获取 IAM Role 名称 (使用 IMDSv2)
+# Get IAM Role name (using IMDSv2)
 IAM_ROLE=$(curl -s -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" \
     http://169.254.169.254/latest/meta-data/iam/security-credentials/)
 echo "Detected IAM Role: $IAM_ROLE"

@@ -51,7 +51,7 @@ RUN \
 # Set the default terminal
 RUN ln -sf /usr/bin/xfce4-terminal.wrapper /etc/alternatives/x-terminal-emulator
 
-# 安装中文语言支持
+# Install Chinese language support
 RUN apt-get update && \
     apt-get install -y language-pack-zh-hans language-pack-zh-hant && \
     apt-get install -y fonts-noto-cjk && \
@@ -100,6 +100,6 @@ COPY firefox-policies.json /usr/lib/firefox-esr/distribution/policies.json
 COPY firefox-autoconfig.js /usr/lib/firefox-esr/defaults/pref/autoconfig.js
 COPY firefox.cfg /usr/lib/firefox-esr/firefox.cfg
 
-# 安装Playwright for Python
+# Install Playwright for Python
 RUN pip3 install playwright && \
     playwright install firefox

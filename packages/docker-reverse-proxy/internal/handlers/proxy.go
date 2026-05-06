@@ -97,31 +97,31 @@ func handleAWSProxy(a *APIStore, w http.ResponseWriter, req *http.Request, path 
 
 	log.Printf("[INFO] AWS Proxy - Request: %s %s", req.Method, req.URL.Path)
 
-	// 使用缓存中的令牌，而不是每次都获取新的令牌
+	// Use cached token instead of fetching a new one each time
 	req.Header.Set("Authorization", fmt.Sprintf("Basic %s", token.DockerToken))
 	log.Printf("[DEBUG] AWS Proxy - Set Basic auth header for AWS ECR using cached token")
 
-	// 客户端请求路径前缀
+	// Client request path prefix
 	repoPrefix := "/v2/e2b/custom-envs/"
 
-	// 对于 AWS ECR，使用 base_repo_name 作为基础仓库名
+	// For AWS ECR, use base_repo_name as the base repository name
 	baseRepo := strings.Trim(constants.AWSECRRepository, "/")
 
-	// 设置真实的仓库前缀，包含 templateID
+	// Set the real repository prefix, including templateID
 	realRepoPrefix := fmt.Sprintf("/v2/%s/%s/", baseRepo, templateID)
 
-	// 如果路径不是以客户端仓库前缀开头，拒绝访问
+	// If path does not start with client repo prefix, deny access
 	if !strings.HasPrefix(path, repoPrefix) {
 		log.Printf("[ERROR] No matching route found for path: %s", path)
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}
 
-	// 提取路径中的模板 ID
+	// Extract template ID from path
 	pathInRepo := strings.TrimPrefix(path, repoPrefix)
 	templateWithBuildID := strings.Split(strings.Split(pathInRepo, "/")[0], ":")
 
-	// 如果路径中的模板 ID 与令牌中的不同，拒绝访问
+	// If template ID in path differs from token's, deny access
 	if templateWithBuildID[0] != templateID {
 		log.Printf("[ERROR] Access denied: path template ID %s doesn't match token template ID %s",
 			templateWithBuildID[0], templateID)
@@ -129,18 +129,18 @@ func handleAWSProxy(a *APIStore, w http.ResponseWriter, req *http.Request, path 
 		return
 	}
 
-	// 替换路径前缀，确保不会重复 templateID
+	// Replace path prefix, ensuring templateID is not duplicated
 	newPath := strings.Replace(req.URL.Path,
 		fmt.Sprintf("%s%s", repoPrefix, templateID),
 		realRepoPrefix,
 		1)
 
-	// 移除任何双斜杠
+	// Remove any double slashes
 	newPath = strings.ReplaceAll(newPath, "//", "/")
 	req.URL.Path = newPath
 
 	log.Printf("[DEBUG] AWS Proxy - Converted path: %s", req.URL.Path)
 
-	// 代理请求
+	// Proxy the request
 	a.ServeHTTP(w, req)
 }

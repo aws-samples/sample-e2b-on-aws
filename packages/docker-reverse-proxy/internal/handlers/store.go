@@ -63,7 +63,7 @@ func NewStore() *APIStore {
 
 	// Custom ModifyResponse function
 	proxy.ModifyResponse = func(resp *http.Response) error {
-		// 重写 ECR 返回的 Location header，确保 Docker client 继续通过 proxy
+		// Rewrite ECR-returned Location header so the Docker client continues through the proxy
 		if loc := resp.Header.Get("Location"); loc != "" {
 			registryHost, err := constants.GetAWSRegistryHost()
 			if err == nil && constants.CurrentCloudProvider == constants.AWS {
@@ -72,10 +72,10 @@ func NewStore() *APIStore {
 				proxyPrefix := "/v2/e2b/custom-envs/"
 
 				newLoc := loc
-				// 去掉 ECR 主机名（变成相对路径）
+				// Strip the ECR hostname (convert to relative path)
 				ecrSchemeHost := "https://" + registryHost
 				newLoc = strings.TrimPrefix(newLoc, ecrSchemeHost)
-				// ECR 路径转回 proxy 路径
+				// Convert ECR path back to proxy path
 				newLoc = strings.Replace(newLoc, ecrPrefix, proxyPrefix, 1)
 
 				if newLoc != loc {
@@ -85,12 +85,12 @@ func NewStore() *APIStore {
 			}
 		}
 
-		// 记录所有响应，特别关注错误响应
+		// Log all responses, with special attention to error responses
 		if resp.StatusCode >= 400 {
 			log.Printf("[ERROR] Proxy Response - Status: %d, URL: %s, Method: %s", 
 				resp.StatusCode, resp.Request.URL, resp.Request.Method)
 			
-			// 读取响应体
+			// Read response body
 			respBody, err := io.ReadAll(resp.Body)
 			if err != nil {
 				log.Printf("[ERROR] Failed to read response body: %v", err)
@@ -99,20 +99,20 @@ func NewStore() *APIStore {
 			
 			bodyStr := string(respBody)
 			
-			// 记录详细的错误信息
+			// Log detailed error information
 			log.Printf("[ERROR] Detailed error response [%d] for %s %s:", 
 				resp.StatusCode, resp.Request.Method, resp.Request.URL)
 			log.Printf("[ERROR] Response body: %s", bodyStr)
 			
-			// 特别检查认证错误
+			// Specifically check for authentication errors
 			if resp.StatusCode == http.StatusUnauthorized {
 				log.Printf("[ERROR] Authentication error detected!")
 				
-				// 检查是否包含 "Not Authorized" 错误
+				// Check if it contains a "Not Authorized" error
 				if strings.Contains(bodyStr, "Not Authorized") {
 					log.Printf("[ERROR] ECR Not Authorized error detected!")
 					
-					// 记录请求头信息
+					// Log request headers
 					log.Printf("[ERROR] Request headers:")
 					for name, values := range resp.Request.Header {
 						if name == "Authorization" {
@@ -132,7 +132,7 @@ func NewStore() *APIStore {
 				resp.StatusCode, resp.Request.Method, resp.Request.URL)
 			log.Printf("[ERROR] Response body: %s", bodyStr)
 			
-			// 记录请求头信息（不包括完整的授权令牌）
+			// Log request headers (excluding the full authorization token)
 			log.Printf("[ERROR] Request headers:")
 			for name, values := range resp.Request.Header {
 				if name == "Authorization" {
@@ -147,13 +147,13 @@ func NewStore() *APIStore {
 				}
 			}
 			
-			// 记录响应头信息
+			// Log response headers
 			log.Printf("[ERROR] Response headers:")
 			for name, values := range resp.Header {
 				log.Printf("[ERROR]   %s: %v", name, values)
 			}
 			
-			// 创建一个新的读取器，包含相同的内容供下一个处理程序使用
+			// Create a new reader with the same content for downstream handlers
 			resp.Body = io.NopCloser(strings.NewReader(bodyStr))
 		}
 
@@ -165,11 +165,11 @@ func NewStore() *APIStore {
 	proxy.Director = func(req *http.Request) {
 		originalDirector(req)
 		
-		// 只记录基本请求信息
+		// Only log basic request information
 		log.Printf("[INFO] Proxy Director - Forwarding request to: %s %s", 
 			req.Method, req.URL.String())
 		
-		// 对于PUT请求和digest参数，记录特殊调试信息
+		// For PUT requests with a digest parameter, log special debug info
 		if req.Method == http.MethodPut && req.URL.Query().Get("digest") != "" {
 			log.Printf("[INFO] Proxy Director - PUT request with digest: %s", req.URL.Query().Get("digest"))
 		}

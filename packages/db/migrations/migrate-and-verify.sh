@@ -1,12 +1,12 @@
 #!/bin/bash
 set -e
 
-echo "=== 开始数据库迁移和验证流程 ==="
+echo "=== Starting database migration and verification ==="
 
-# 检查配置文件是否存在
+# Check if config file exists
 CONFIG_FILE="/opt/config.properties"
 if [ ! -f "$CONFIG_FILE" ]; then
-  echo "错误: 配置文件 $CONFIG_FILE 不存在"
+  echo "Error: config file $CONFIG_FILE does not exist"
   exit 1
 fi
 
@@ -19,24 +19,24 @@ DB_NAME=$(echo "$DB_SECRET_JSON" | jq -r '.dbname')
 DB_PASSWORD=$(echo "$DB_SECRET_JSON" | jq -r '.password')
 AWSREGION=$(grep "^AWSREGION=" "$CONFIG_FILE" | cut -d'=' -f2-)
 
-echo "数据库连接信息:"
-echo "- 主机: $DB_HOST"
-echo "- 数据库: $DB_NAME"
-echo "- 用户: $DB_USER"
-echo "- 密码: ********"
-echo "- 区域: $AWSREGION"
+echo "Database connection info:"
+echo "- Host: $DB_HOST"
+echo "- Database: $DB_NAME"
+echo "- User: $DB_USER"
+echo "- Password: ********"
+echo "- Region: $AWSREGION"
 
-# 执行迁移
-echo -e "\n=== 执行SQL迁移 ==="
+# Execute migrations
+echo -e "\n=== Executing SQL migrations ==="
 ./run-all-migrations.sh
 
-# 验证表
-echo -e "\n=== 验证数据库表 ==="
+# Verify tables
+echo -e "\n=== Verifying database tables ==="
 ./check-tables.sh
 
-echo -e "\n=== 迁移和验证完成 ==="
-echo "数据库已成功初始化，所有表都已创建"
-echo "数据库连接信息:"
-echo "- 主机: $DB_HOST"
-echo "- 数据库: $DB_NAME"
-echo "- 用户: $DB_USER"
+echo -e "\n=== Migration and verification complete ==="
+echo "Database successfully initialized, all tables created"
+echo "Database connection info:"
+echo "- Host: $DB_HOST"
+echo "- Database: $DB_NAME"
+echo "- User: $DB_USER"

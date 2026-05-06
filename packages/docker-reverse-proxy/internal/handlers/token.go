@@ -195,11 +195,11 @@ func getAWSToken(templateID string) (*DockerToken, error) {
 		return nil, fmt.Errorf("failed to get AWS ECR auth token: %w", err)
 	}
 
-	// 直接返回完整的 base64 编码令牌
+	// Return the full base64-encoded token directly
 	log.Printf("[DEBUG] ECR Token - Got token expiring at: %s", authResponse.ExpiresAt.Format(time.RFC3339))
 
 	return &DockerToken{
-		Token:     authResponse.Token, // 返回完整的 base64 编码令牌
+		Token:     authResponse.Token, // Return the full base64-encoded token
 		ExpiresIn: int(time.Until(authResponse.ExpiresAt).Seconds()),
 	}, nil
 }

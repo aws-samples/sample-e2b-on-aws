@@ -130,21 +130,21 @@ func (tm *TemplateManager) getBuilderClient(clusterID *uuid.UUID, nodeID *string
 		tm.localClientMutex.RLock()
 		defer tm.localClientMutex.RUnlock()
 
-		zap.L().Info("使用本地template manager",
+		zap.L().Info("using local template manager",
 			zap.Bool("placement", placement),
 			zap.String("localClientStatus", tm.GetLocalClientStatus().String()),
 			zap.String("templateManagerHost", templateManagerHost))
 
 		// build placement requires healthy template builder
 		if placement && tm.GetLocalClientStatus() != infogrpc.ServiceInfoStatus_OrchestratorHealthy {
-			zap.L().Error("本地template manager不健康，无法用于放置新构建",
+			zap.L().Error("local template manager unhealthy, cannot place new builds",
 				zap.String("status", tm.GetLocalClientStatus().String()))
 			return nil, nil, nil, ErrLocalTemplateManagerNotAvailable
 		}
 
 		// for getting build information only not valid state is getting already unhealthy builder
 		if tm.GetLocalClientStatus() == infogrpc.ServiceInfoStatus_OrchestratorUnhealthy {
-			zap.L().Error("本地template manager不健康")
+			zap.L().Error("local template manager unhealthy")
 			return nil, nil, nil, ErrLocalTemplateManagerNotAvailable
 		}
 
@@ -153,19 +153,19 @@ func (tm *TemplateManager) getBuilderClient(clusterID *uuid.UUID, nodeID *string
 		return tm.grpc, meta, logs, nil
 	}
 
-	zap.L().Info("使用集群template manager",
+	zap.L().Info("using cluster template manager",
 		zap.String("clusterID", clusterID.String()),
 		zap.String("nodeID", *nodeID))
 
 	cluster, ok := tm.edgePool.GetClusterById(*clusterID)
 	if !ok {
-		zap.L().Error("找不到集群", zap.String("clusterID", clusterID.String()))
+		zap.L().Error("cluster not found", zap.String("clusterID", clusterID.String()))
 		return nil, nil, nil, errors.New("cluster not found")
 	}
 
 	node, err := cluster.GetTemplateBuilderByID(*nodeID)
 	if err != nil {
-		zap.L().Error("无法通过ID获取构建器",
+		zap.L().Error("failed to get builder by ID",
 			zap.String("nodeID", *nodeID),
 			zap.Error(err))
 		return nil, nil, nil, fmt.Errorf("failed to get builder by id '%s': %w", *nodeID, err)
@@ -225,20 +225,20 @@ func (tm *TemplateManager) CreateTemplate(t trace.Tracer, ctx context.Context, t
 	)
 	defer span.End()
 
-	zap.L().Info("开始创建模板 - template-manager",
+	zap.L().Info("starting to create template - template-manager",
 		zap.String("templateID", templateID),
 		zap.String("buildID", buildID.String()),
 		zap.String("templateManagerHost", templateManagerHost))
 
 	features, err := sandbox.NewVersionInfo(firecrackerVersion)
 	if err != nil {
-		zap.L().Error("获取Firecracker版本特性失败",
+		zap.L().Error("failed to get Firecracker version features",
 			zap.String("firecrackerVersion", firecrackerVersion),
 			zap.Error(err))
 		return fmt.Errorf("failed to get features for firecracker version '%s': %w", firecrackerVersion, err)
 	}
 
-	zap.L().Info("获取builder客户端",
+	zap.L().Info("getting builder client",
 		zap.String("templateID", templateID),
 		zap.String("buildID", buildID.String()),
 		zap.Bool("hasClusterID", clusterID != nil),
@@ -246,14 +246,14 @@ func (tm *TemplateManager) CreateTemplate(t trace.Tracer, ctx context.Context, t
 
 	client, clientMd, _, err := tm.getBuilderClient(clusterID, clusterNodeID, true)
 	if err != nil {
-		zap.L().Error("获取builder客户端失败",
+		zap.L().Error("failed to get builder client",
 			zap.String("templateID", templateID),
 			zap.String("buildID", buildID.String()),
 			zap.Error(err))
 		return fmt.Errorf("failed to get builder edgeHttpClient: %w", err)
 	}
 
-	zap.L().Info("准备发送模板创建请求",
+	zap.L().Info("preparing to send template creation request",
 		zap.String("templateID", templateID),
 		zap.String("buildID", buildID.String()))
 
@@ -278,7 +278,7 @@ func (tm *TemplateManager) CreateTemplate(t trace.Tracer, ctx context.Context, t
 	)
 
 	if err != nil {
-		zap.L().Error("发送模板创建请求失败",
+		zap.L().Error("failed to send template creation request",
 			zap.String("templateID", templateID),
 			zap.String("buildID", buildID.String()),
 			zap.Error(err))
@@ -286,7 +286,7 @@ func (tm *TemplateManager) CreateTemplate(t trace.Tracer, ctx context.Context, t
 		return fmt.Errorf("failed to create template '%s': %w", templateID, err)
 	}
 
-	zap.L().Info("模板创建请求发送成功",
+	zap.L().Info("template creation request sent successfully",
 		zap.String("templateID", templateID),
 		zap.String("buildID", buildID.String()))
 
