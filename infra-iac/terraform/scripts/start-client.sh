@@ -307,9 +307,9 @@ fc_versions_dir="/fc-versions"
 mkdir -p $fc_versions_dir
 
 mkdir -p /tmp/mp_cache_kernels /tmp/mp_cache_versions
-mount-s3 ${FC_ENV_PIPELINE_BUCKET_NAME} $envd_dir --read-only --allow-other
+mount-s3 ${FC_ENV_PIPELINE_BUCKET_NAME} $envd_dir --read-only --allow-other --file-mode 0755
 mount-s3 ${FC_KERNELS_BUCKET_NAME} $kernels_dir --read-only --allow-other --cache /tmp/mp_cache_kernels
-mount-s3 ${FC_VERSIONS_BUCKET_NAME} $fc_versions_dir --read-only --allow-other --cache /tmp/mp_cache_versions
+mount-s3 ${FC_VERSIONS_BUCKET_NAME} $fc_versions_dir --read-only --allow-other --file-mode 0755 --cache /tmp/mp_cache_versions
 
 # These variables are passed in via Terraform template interpolation
 aws s3 cp "s3://${SCRIPTS_BUCKET}/run-consul-${RUN_CONSUL_FILE_HASH}.sh" /opt/consul/bin/run-consul.sh
