@@ -10,7 +10,6 @@ readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly CONSUL_CONFIG_FILE="default.json"
 readonly SYSTEMD_CONFIG_PATH="/etc/systemd/system/consul.service"
 
-readonly EC2_METADATA_URL="http://169.254.169.254/latest"
 readonly CLUSTER_SIZE_INSTANCE_METADATA_KEY_NAME="cluster-size"
 
 readonly DEFAULT_RAFT_PROTOCOL="3"
@@ -78,25 +77,14 @@ function print_usage {
   echo "  run-consul.sh --server --cluster-tag-name consul-xyz --config-dir /custom/path/to/consul/config"
 }
 
-# Get the value at a specific EC2 Instance Metadata path
-function get_instance_metadata_value {
-  local -r path="$1"
-
-  # AWS IMDSv2 requires a token first for security
-  TOKEN=$(curl -X PUT --silent --show-error "$EC2_METADATA_URL/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 60")
-
-  log_info "Looking up Metadata value at $EC2_METADATA_URL/$path"
-  curl --silent --show-error --location -H "X-aws-ec2-metadata-token: $TOKEN" "$EC2_METADATA_URL/$path"
-}
-
 # Get the value of a tag from EC2 Instance Tags
 function get_instance_tag_value {
   local -r key="$1"
 
   log_info "Looking up Instance Tag value for key \"$key\""
   # This requires instance profile with permission to describe tags
-  # Using the instance-id from metadata to find the tags
-  aws ec2 describe-tags --filters "Name=resource-id,Values=$(get_instance_id)" "Name=key,Values=$key" --query "Tags[0].Value" --output text
+  # Using the instance-id from DMI to find the tags
+  aws ec2 describe-tags --filters "Name=resource-id,Values=$(cat /sys/devices/virtual/dmi/id/board_asset_tag)" "Name=key,Values=$key" --query "Tags[0].Value" --output text
 }
 
 # Get the value of a custom metadata tag for the EC2 instance
@@ -127,31 +115,6 @@ function get_instance_custom_metadata_value {
 function get_aws_account_id {
   log_info "Looking up AWS Account ID"
   aws sts get-caller-identity --query "Account" --output text
-}
-
-# Get the AWS Region in which this EC2 Instance currently resides
-function get_instance_region {
-  log_info "Looking up Region of the current EC2 Instance"
-
-  # Extract region from availability zone (e.g., us-east-1a -> us-east-1)
-  get_instance_metadata_value "meta-data/placement/availability-zone" | sed 's/[a-z]$//'
-}
-
-# Get the ID of the current EC2 Instance
-function get_instance_name {
-  log_info "Looking up current EC2 Instance ID"
-  get_instance_metadata_value "meta-data/instance-id"
-}
-
-# Get the ID of the current EC2 Instance (alternative name)
-function get_instance_id {
-  get_instance_metadata_value "meta-data/instance-id"
-}
-
-# Get the IP Address of the current EC2 Instance
-function get_instance_ip_address {
-  log_info "Looking up EC2 Instance IP Address"
-  get_instance_metadata_value "meta-data/local-ipv4"
 }
 
 function split_by_lines {
@@ -194,15 +157,14 @@ function generate_consul_config {
   local instance_ip_address=""
   local ui="false"
 
-  instance_id=$(get_instance_id)
-  instance_ip_address=$(get_instance_ip_address)
+  instance_id=$(cat /sys/devices/virtual/dmi/id/board_asset_tag)
+  instance_ip_address=$(ip route get 1 | awk '{print $7; exit}')
   # Configure Cloud Auto Join. See https://www.consul.io/docs/install/cloud-auto-join#amazon-ec2 for more info.
   local retry_join_json=""
   if [[ -z "$cluster_tag_name" ]]; then
     log_warn "The --cluster-tag-name property is empty. Will not automatically try to form a cluster based on Cluster Tag Name."
   else
-    # Get region from instance metadata
-    local aws_region=$(get_instance_region)
+    local aws_region="$AWS_REGION"
     # Get prefix from cluster_tag_name (e.g. e2b-us-east-1)
     local prefix=${cluster_tag_name%-*}
     retry_join_json=$(
@@ -685,7 +647,7 @@ function run {
   fi
 
   if [[ -z "$datacenter" ]]; then
-    datacenter=$(get_instance_region)
+    datacenter="$AWS_REGION"
   fi
 
   if [[ "$skip_consul_config" == "true" ]]; then

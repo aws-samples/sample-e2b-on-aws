@@ -21,6 +21,12 @@ export GOMAXPROCS='nproc'
 sudo apt-get -o DPkg::Lock::Timeout=300 update
 sudo apt-get -o DPkg::Lock::Timeout=300 install -y amazon-ecr-credential-helper
 
+export AWS_REGION="${AWS_REGION}"
+export AWS_AVAILABILITY_ZONE=$(aws ec2 describe-instances \
+    --instance-ids "$(cat /sys/devices/virtual/dmi/id/board_asset_tag)" \
+    --query 'Reservations[0].Instances[0].Placement.AvailabilityZone' \
+    --output text --region "${AWS_REGION}")
+
 aws s3 cp "s3://${SCRIPTS_BUCKET}/run-consul-${RUN_CONSUL_FILE_HASH}.sh" /opt/consul/bin/run-consul.sh
 aws s3 cp "s3://${SCRIPTS_BUCKET}/run-nomad-${RUN_NOMAD_FILE_HASH}.sh" /opt/nomad/bin/run-nomad.sh
 

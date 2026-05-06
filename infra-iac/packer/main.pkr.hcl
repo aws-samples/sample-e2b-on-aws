@@ -181,8 +181,8 @@ build {
       "sudo -E apt-get install -y zip",
       "sudo unzip awscliv2.zip",
       "sudo ./aws/install",
-      "sudo -E apt-get install -y s3fs-fuse || echo 'Failed to install s3fs-fuse'",
-      "sudo -E apt-get install -y s3fs || echo 'Failed to install s3fs'"
+      "wget -q https://s3.amazonaws.com/mountpoint-s3-release/latest/$(uname -m)/mount-s3.deb -O /tmp/mount-s3.deb",
+      "sudo apt-get install -y /tmp/mount-s3.deb && rm -f /tmp/mount-s3.deb"
     ]
   }
 

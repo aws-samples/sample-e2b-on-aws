@@ -999,6 +999,7 @@ resource "aws_launch_template" "client" {
     SETUP_SECRETS_FILE_HASH      = local.file_hash["scripts/setup-secrets.sh"]
     DB_CREDENTIAL_SECRET_NAME    = "e2b-${var.prefix}-db-credential"
     INFRA_TOKENS_SECRET_NAME     = aws_secretsmanager_secret.infra_tokens.name
+    INSTANCE_TYPE                = var.architecture == "x86_64" ? local.clusters.client.instance_type_x86 : local.clusters.client.instance_type_arm
   }))
 
   tag_specifications {
@@ -1020,10 +1021,14 @@ resource "aws_launch_template" "client" {
   depends_on = [aws_s3_object.setup_config_objects]
 }
 
+data "aws_ec2_instance_type" "client" {
+  instance_type = var.client_instance_type
+}
+
 # Create a new launch template version with NestedVirtualization enabled via AWS CLI
 # Terraform AWS provider does not support the NestedVirtualization parameter in cpu_options
 resource "null_resource" "client_nested_virtualization" {
-  count = endswith(var.client_instance_type, ".metal") ? 0 : 1
+  count = data.aws_ec2_instance_type.client.bare_metal ? 0 : 1
 
   triggers = {
     launch_template_id      = aws_launch_template.client.id

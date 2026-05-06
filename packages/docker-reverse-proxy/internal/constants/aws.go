@@ -2,12 +2,9 @@ package constants
 
 import (
 	"fmt"
-	"io"
 	"log"
-	"net/http"
 	"os"
 	"sync"
-	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/credentials"
@@ -34,55 +31,17 @@ var (
 	awsSession    *session.Session
 )
 
-// getRegionFromEC2Metadata attempts to retrieve region info from the EC2 instance metadata service
-func getRegionFromEC2Metadata() (string, error) {
-	client := &http.Client{
-		Timeout: 2 * time.Second, // Set a short timeout
-	}
-	
-	resp, err := client.Get("http://169.254.169.254/latest/meta-data/placement/region")
-	if err != nil {
-		return "", fmt.Errorf("failed to get region from EC2 metadata: %v", err)
-	}
-	defer resp.Body.Close()
-	
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("EC2 metadata service returned non-OK status: %d", resp.StatusCode)
-	}
-	
-	regionBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("failed to read region from EC2 metadata: %v", err)
-	}
-	
-	region := string(regionBytes)
-	if region == "" {
-		return "", fmt.Errorf("empty region from EC2 metadata")
-	}
-	
-	return region, nil
-}
-
 // InitAWSConfig initializes AWS configuration
 func InitAWSConfig() error {
 	awsConfigOnce.Do(func() {
-		// Create AWS session
 		config := &aws.Config{}
 
-		// Handle region configuration
 		if AWSRegion != "" {
-			// If region is provided via environment variable, use it directly
 			config.Region = aws.String(AWSRegion)
-			log.Printf("Using region from environment variable: %s", AWSRegion)
+			log.Printf("Using region: %s", AWSRegion)
 		} else {
-			// Try to get region from EC2 metadata
-			metadataRegion, err := getRegionFromEC2Metadata()
-			if err == nil && metadataRegion != "" {
-				config.Region = aws.String(metadataRegion)
-				log.Printf("Using region from EC2 metadata: %s", metadataRegion)
-			} else {
-				log.Printf("Could not get region from EC2 metadata: %v", err)
-			}
+			awsConfigErr = fmt.Errorf("AWS_REGION environment variable is required")
+			return
 		}
 
 		// Handle credentials configuration

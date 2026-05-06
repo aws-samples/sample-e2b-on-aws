@@ -6,8 +6,6 @@ set -e
 readonly NOMAD_CONFIG_FILE="default.hcl"
 readonly SUPERVISOR_CONFIG_PATH="/etc/supervisor/conf.d/run-nomad.conf"
 
-readonly EC2_METADATA_URL="http://169.254.169.254/latest"
-
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly SCRIPT_NAME="$(basename "$0")"
 
@@ -78,60 +76,20 @@ function assert_not_empty {
   fi
 }
 
-# Get the value at a specific EC2 Instance Metadata path
-function get_instance_metadata_value {
-  local readonly path="$1"
-
-  # AWS IMDSv2 requires a token first for security
-  TOKEN=$(curl -X PUT --silent --show-error "$EC2_METADATA_URL/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 60")
-
-  log_info "Looking up Metadata value at $EC2_METADATA_URL/$path"
-  curl --silent --show-error --location -H "X-aws-ec2-metadata-token: $TOKEN" "$EC2_METADATA_URL/$path"
-}
-
 # Get the value of a tag from EC2 Instance Tags
 function get_instance_tag_value {
   local readonly key="$1"
 
   log_info "Looking up Instance Tag value for key \"$key\""
   # This requires instance profile with permission to describe tags
-  # Using the instance-id from metadata to find the tags
-  aws ec2 describe-tags --filters "Name=resource-id,Values=$(get_instance_id)" "Name=key,Values=$key" --query "Tags[0].Value" --output text
+  # Using the instance-id from DMI to find the tags
+  aws ec2 describe-tags --filters "Name=resource-id,Values=$(cat /sys/devices/virtual/dmi/id/board_asset_tag)" "Name=key,Values=$key" --query "Tags[0].Value" --output text
 }
 
 # Get the AWS account ID
 function get_aws_account_id {
   log_info "Looking up AWS Account ID"
   aws sts get-caller-identity --query "Account" --output text
-}
-
-# Get the AWS Zone (availability zone) in which this EC2 Instance currently resides
-function get_instance_zone {
-  log_info "Looking up Availability Zone of the current EC2 Instance"
-  get_instance_metadata_value "meta-data/placement/availability-zone"
-}
-
-function get_instance_region {
-  # Remove the last character from the availability zone to get the region
-  # e.g., us-east-1a -> us-east-1
-  get_instance_zone | sed 's/[a-z]$//'
-}
-
-# Get the ID of the current EC2 Instance
-function get_instance_name {
-  log_info "Looking up current EC2 Instance ID"
-  get_instance_metadata_value "meta-data/instance-id"
-}
-
-# Get the ID of the current EC2 Instance (alternative name)
-function get_instance_id {
-  get_instance_metadata_value "meta-data/instance-id"
-}
-
-# Get the IP Address of the current EC2 Instance
-function get_instance_ip_address {
-  log_info "Looking up EC2 Instance IP Address"
-  get_instance_metadata_value "meta-data/local-ipv4"
 }
 
 function assert_is_installed {
@@ -155,12 +113,12 @@ function generate_nomad_config {
   local instance_name=""
   local instance_ip_address=""
   local instance_region=""
-  local instance_zone=""
+  local zone=""
 
-  instance_name=$(get_instance_name)
-  instance_ip_address=$(get_instance_ip_address)
-  instance_region=$(get_instance_region)
-  zone=$(get_instance_zone)
+  instance_name=$(cat /sys/devices/virtual/dmi/id/board_asset_tag)
+  instance_ip_address=$(ip route get 1 | awk '{print $7; exit}')
+  instance_region="$AWS_REGION"
+  zone="$AWS_AVAILABILITY_ZONE"
 
   local server_config=""
   if [[ "$server" == "true" ]]; then
@@ -314,7 +272,7 @@ function start_nomad {
 
 function bootstrap {
   local readonly nomad_token="$1"
-  local readonly region="$(get_instance_region)"
+  local readonly region="$AWS_REGION"
 
   log_info "Waiting for Nomad to start"
   while test -z "$(curl -sk --cert /opt/nomad/tls/cert.pem --key /opt/nomad/tls/key.pem https://127.0.0.1:4646/v1/agent/health)"; do

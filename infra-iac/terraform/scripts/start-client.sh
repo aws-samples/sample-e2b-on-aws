@@ -27,18 +27,15 @@ exec > >(tee /var/log/user-data.log | logger -t user-data -s 2>/dev/console) 2>&
 # Add cache disk for orchestrator and swapfile
 MOUNT_POINT="/orchestrator"
 
-# Get current instance type (using IMDSv2)
-IMDS_TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" \
-    -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
-INSTANCE_TYPE=$(curl -s -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" \
-    http://169.254.169.254/latest/meta-data/instance-type)
-echo "Detected instance type: $INSTANCE_TYPE"
+INSTANCE_TYPE="${INSTANCE_TYPE}"
+echo "Instance type: $INSTANCE_TYPE"
 
-
-# Get IAM Role name (using IMDSv2)
-IAM_ROLE=$(curl -s -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" \
-    http://169.254.169.254/latest/meta-data/iam/security-credentials/)
-echo "Detected IAM Role: $IAM_ROLE"
+export AWS_REGION="${AWS_REGION}"
+export AWS_AVAILABILITY_ZONE=$(aws ec2 describe-instances \
+    --instance-ids "$(cat /sys/devices/virtual/dmi/id/board_asset_tag)" \
+    --query 'Reservations[0].Instances[0].Placement.AvailabilityZone' \
+    --output text --region "${AWS_REGION}")
+echo "Availability Zone: $AWS_AVAILABILITY_ZONE"
 
 
 
@@ -309,16 +306,9 @@ mkdir -p $kernels_dir
 fc_versions_dir="/fc-versions"
 mkdir -p $fc_versions_dir
 
-# Install s3fs-fuse if not already installed
-if ! command -v s3fs &>/dev/null; then
-    apt-get -o DPkg::Lock::Timeout=300 update && apt-get -o DPkg::Lock::Timeout=300 install -y s3fs
-fi
-
-# Mount S3 buckets using s3fs
-# Mount s3fs using explicit IAM role name (instead of iam_role=auto)
-s3fs ${FC_ENV_PIPELINE_BUCKET_NAME} $envd_dir -o iam_role=$IAM_ROLE,allow_other,ro,umask=0022
-s3fs ${FC_KERNELS_BUCKET_NAME} $kernels_dir -o iam_role=$IAM_ROLE,allow_other,ro,umask=0022,use_cache=/tmp/s3fs_cache_kernels
-s3fs ${FC_VERSIONS_BUCKET_NAME} $fc_versions_dir -o iam_role=$IAM_ROLE,allow_other,ro,umask=0022,use_cache=/tmp/s3fs_cache_versions
+mount-s3 ${FC_ENV_PIPELINE_BUCKET_NAME} $envd_dir --read-only --allow-other
+mount-s3 ${FC_KERNELS_BUCKET_NAME} $kernels_dir --read-only --allow-other --cache /tmp/mp_cache_kernels
+mount-s3 ${FC_VERSIONS_BUCKET_NAME} $fc_versions_dir --read-only --allow-other --cache /tmp/mp_cache_versions
 
 # These variables are passed in via Terraform template interpolation
 aws s3 cp "s3://${SCRIPTS_BUCKET}/run-consul-${RUN_CONSUL_FILE_HASH}.sh" /opt/consul/bin/run-consul.sh
