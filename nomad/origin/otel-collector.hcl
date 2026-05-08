@@ -87,12 +87,11 @@ receivers:
           scrape_interval: 15s
           scrape_timeout: 5s
           metrics_path: '/v1/metrics'
-          scheme: https
-          tls_config:
-            insecure_skip_verify: true
+          # Nomad agent on AWS deploy listens HTTP on 4646 (no TLS).
+          scheme: http
           authorization:
             type: Bearer
-            credentials: "{{ file "/opt/e2b/secrets/nomad_acl_token" }}"
+            credentials: "${nomad_acl_token}"
           static_configs:
             - targets: ['localhost:4646']
           params:
@@ -116,6 +115,10 @@ processors:
           - "template.*"
           - "api.*"
           - "client_proxy.*"
+          - "e2b\\.sandbox\\..*"      # per-sandbox cpu/ram gauges
+          - "http\\..*"                  # api HTTP middleware histograms
+          - "rpc\\..*"                   # otelgrpc client/server histograms
+          - "otelcol_.*"                   # collector self-metrics
 
 
   filter/prometheus:
@@ -123,7 +126,7 @@ processors:
       include:
         match_type: strict
         metric_names:
-          - "nomad_client.host_cpu_total_percent"
+          - "nomad_client_host_cpu_total_percent"
           - "nomad_client_host_cpu_idle"
           - "nomad_client_host_disk_available"
           - "nomad_client_host_disk_size"
