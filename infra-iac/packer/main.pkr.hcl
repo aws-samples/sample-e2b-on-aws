@@ -17,7 +17,9 @@ source "amazon-ebs" "orch" {
 
   source_ami = var.custom_ami_id
 
-  ssh_username = "ubuntu"
+  ssh_username         = "ubuntu"
+  ssh_keypair_name     = var.ssh_keypair_name != "" ? var.ssh_keypair_name : null
+  ssh_private_key_file = var.ssh_private_key_file != "" ? var.ssh_private_key_file : null
 
   # Enable nested virtualization
   ami_virtualization_type = "hvm"
@@ -264,6 +266,12 @@ build {
       "echo 'net.netfilter.nf_conntrack_max = 2097152' | sudo tee -a /etc/sysctl.conf",
       "sudo systemctl disable apt-daily.timer apt-daily-upgrade.timer || true",
       "sudo systemctl mask apt-daily.service apt-daily-upgrade.service unattended-upgrades.service || true"
+    ]
+  }
+
+  provisioner "shell" {
+    inline = [
+      "if [ -n \"${var.ssh_keypair_name}\" ]; then rm -f /home/ubuntu/.ssh/authorized_keys /root/.ssh/authorized_keys; fi"
     ]
   }
 }
