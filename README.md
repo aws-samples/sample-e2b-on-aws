@@ -150,9 +150,10 @@ The logging and monitoring stack consists of three components deployed via `noma
 
 #### Deploy with Customer OTel Endpoint
 
-Configure your OTel-compatible backend endpoint:
+Configure your OTel-compatible backend endpoint (any service supporting OTLP/HTTP, e.g. Grafana Cloud, Datadog, Honeycomb, or a self-hosted collector):
 
 ```bash
+# 1. Write the endpoint into config.properties
 cat << EOF >> /opt/config.properties
 
 # Customer OTel endpoint (no authentication)
@@ -160,9 +161,14 @@ cat << EOF >> /opt/config.properties
 otel_customer_endpoint=http://your-otel-collector:4318
 EOF
 
-# Deploy all monitoring components
+# 2. Re-render deploy HCLs so envsubst injects otel_customer_endpoint
+bash nomad/prepare.sh
+
+# 3. Deploy all monitoring components
 bash nomad/deploy.sh --all
 ```
+
+> **Important:** `otel_customer_endpoint` must be present in `/opt/config.properties` **before** running `nomad/prepare.sh`. `prepare.sh` uses `envsubst` to render `origin/*.hcl` → `deploy/*-deploy.hcl`; if the variable is missing, the exporter endpoint becomes an empty string and the otel-collector job fails to start.
 
 #### Data Flow Details
 
