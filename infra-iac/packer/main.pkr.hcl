@@ -21,6 +21,20 @@ source "amazon-ebs" "orch" {
   ssh_keypair_name     = var.ssh_keypair_name != "" ? var.ssh_keypair_name : null
   ssh_private_key_file = var.ssh_private_key_file != "" ? var.ssh_private_key_file : null
 
+  user_data = <<-EOF
+    #cloud-config
+    system_info:
+      default_user:
+        name: ubuntu
+        lock_passwd: true
+        gecos: Ubuntu
+        groups: [adm, audio, cdrom, dialout, dip, floppy, lxd, netdev, plugdev, sudo, video]
+        sudo: ["ALL=(ALL) NOPASSWD:ALL"]
+        shell: /bin/bash
+    users:
+      - default
+  EOF
+
   # Enable nested virtualization
   ami_virtualization_type = "hvm"
 
