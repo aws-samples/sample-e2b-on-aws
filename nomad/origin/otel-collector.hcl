@@ -49,6 +49,8 @@ job "otel-collector" {
         auth_soft_fail = true
         volumes = [
           "local/config:/config",
+          "/opt/nomad/tls:/opt/nomad/tls:ro",
+          "/opt/e2b/secrets:/opt/e2b/secrets:ro",
         ]
         args = [
           "--config=local/config/otel-collector-config.yaml",
@@ -87,11 +89,18 @@ receivers:
           scrape_interval: 15s
           scrape_timeout: 5s
           metrics_path: '/v1/metrics'
-          # Nomad agent on AWS deploy listens HTTP on 4646 (no TLS).
-          scheme: http
+          # Nomad 4646 HTTPS + mTLS (see run-nomad.sh: http=true, verify_https_client=true)
+          scheme: https
+          tls_config:
+            ca_file: /opt/nomad/tls/ca.pem
+            cert_file: /opt/nomad/tls/cert.pem
+            key_file: /opt/nomad/tls/key.pem
+            insecure_skip_verify: true
           authorization:
             type: Bearer
-            credentials: "${nomad_acl_token}"
+            # Read token from file mounted from host (see volumes above)
+            # Secrets were migrated from envsubst to file refs in commit 3cc5e429
+            credentials_file: /opt/e2b/secrets/nomad_acl_token
           static_configs:
             - targets: ['localhost:4646']
           params:
@@ -197,7 +206,7 @@ processors:
     error_mode: ignore
     logs:
       log_record:
-        - 'severity_number < SEVERITY_NUMBER_WARN'
+        - 'severity_number < SEVERITY_NUMBER_INFO'
 
 extensions:
   health_check:
