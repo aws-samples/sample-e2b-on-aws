@@ -51,7 +51,7 @@ source "amazon-ebs" "orch" {
   # Use EBS for the root volume with encryption
   launch_block_device_mappings {
     device_name           = "/dev/sda1"
-    volume_size           = 20
+    volume_size           = 100
     volume_type           = "gp3"
     delete_on_termination = true
     encrypted             = true
