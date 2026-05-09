@@ -1294,7 +1294,7 @@ Resources:
               # Create directory for E2B infrastructure code
               mkdir -p /opt/infra/ && cd /opt/infra/
               git clone https://github.com/aws-samples/sample-e2b-on-aws.git && cd sample-e2b-on-aws
-              git checkout add1c629b55139206e69b5584b072c0a76b45644
+              git checkout b362893a30f251a8101b7e8e9110b04f69b9fa93
             - !Sub |
               # Initialize Configuration
               touch /tmp/e2b.log
