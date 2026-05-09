@@ -51,6 +51,10 @@ packer init -upgrade .
 sleep 10
 
 echo "Starting Packer build with architecture: ${ARCHITECTURE}"
+TS=$(date -u +%Y%m%dT%H%M%SZ)
+export PACKER_LOG=1
+export PACKER_LOG_PATH="/tmp/packer-debug-${TS}.log"
+echo "Packer debug log: ${PACKER_LOG_PATH}"
 
 VPC_ID=$(grep "^CFNVPCID=" "$CONFIG_FILE" | cut -d'=' -f2)
 SUBNET_ID=$(grep "^CFNPRIVATESUBNET1=" "$CONFIG_FILE" | cut -d'=' -f2)

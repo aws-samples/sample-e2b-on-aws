@@ -15,13 +15,13 @@ variable "aws_region" {
 }
 
 variable "gcp_instance_type" {
-  type = string
+  type    = string
   default = ""
 }
 
 variable "aws_instance_type" {
-  type    = string
-  default = ""  # Empty default, will be determined dynamically in main.pkr.hcl
+  type        = string
+  default     = "" # Empty default, will be determined dynamically in main.pkr.hcl
   description = "AWS instance type to use for building the AMI"
 }
 
@@ -54,7 +54,7 @@ variable "custom_ami_id" {
 
 variable "consul_version" {
   type    = string
-  default = "1.16.7"
+  default = "1.16.6"
 }
 
 variable "nomad_version" {
