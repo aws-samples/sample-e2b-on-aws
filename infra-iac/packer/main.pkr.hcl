@@ -17,7 +17,23 @@ source "amazon-ebs" "orch" {
 
   source_ami = var.custom_ami_id
 
-  ssh_username = "ubuntu"
+  ssh_username         = "ubuntu"
+  ssh_keypair_name     = var.ssh_keypair_name != "" ? var.ssh_keypair_name : null
+  ssh_private_key_file = var.ssh_private_key_file != "" ? var.ssh_private_key_file : null
+
+  user_data = <<-EOF
+    #cloud-config
+    system_info:
+      default_user:
+        name: ubuntu
+        lock_passwd: true
+        gecos: Ubuntu
+        groups: [adm, audio, cdrom, dialout, dip, floppy, lxd, netdev, plugdev, sudo, video]
+        sudo: ["ALL=(ALL) NOPASSWD:ALL"]
+        shell: /bin/bash
+    users:
+      - default
+  EOF
 
   # Enable nested virtualization
   ami_virtualization_type = "hvm"
@@ -51,7 +67,7 @@ source "amazon-ebs" "orch" {
   # Use EBS for the root volume with encryption
   launch_block_device_mappings {
     device_name           = "/dev/sda1"
-    volume_size           = 20
+    volume_size           = 100
     volume_type           = "gp3"
     delete_on_termination = true
     encrypted             = true
@@ -64,12 +80,18 @@ build {
   ]
 
   provisioner "shell" {
-      execute_command = "sudo -E bash '{{ .Path }}'"
+    execute_command = "sudo -E bash '{{ .Path }}'"
     inline = [
       "sudo mount -o remount,exec /tmp",
       "echo 'web' | sudo tee /var/lib/teleport/team > /dev/null && sudo chown root:root /var/lib/teleport/team && sudo chmod 0644 /var/lib/teleport/team",
       "echo 'Waiting for cloud-init to finish...'",
+      "sudo cp -f /home/ubuntu/.ssh/authorized_keys /tmp/packer-authorized-keys 2>/dev/null || true",
+      "stat -c '%u:%g' /home/ubuntu/.ssh/authorized_keys | sudo tee /tmp/packer-login-owner >/dev/null 2>&1 || true",
       "cloud-init status --wait || true",
+      "echo 'Waiting for baseline post-cloud-init cleanup to settle...'",
+      "sleep 30",
+      "echo 'Repairing ubuntu user after baseline cloud-init...'",
+      "PACKER_OWNER=$(cat /tmp/packer-login-owner 2>/dev/null || echo 11105:11107); PACKER_UID=$(echo \"$PACKER_OWNER\" | cut -d: -f1); PACKER_GID=$(echo \"$PACKER_OWNER\" | cut -d: -f2); echo \"Packer login owner=$PACKER_OWNER\"; if ! getent group \"$PACKER_GID\" >/dev/null; then sudo groupadd -g \"$PACKER_GID\" packer-ubuntu || true; fi; if getent passwd ubuntu >/dev/null; then sudo usermod -u \"$PACKER_UID\" -g \"$PACKER_GID\" -d /home/ubuntu -s /bin/bash ubuntu || true; elif ! getent passwd \"$PACKER_UID\" >/dev/null; then sudo useradd -M -u \"$PACKER_UID\" -g \"$PACKER_GID\" -d /home/ubuntu -s /bin/bash ubuntu; fi; sudo install -d -m 0755 -o \"$PACKER_UID\" -g \"$PACKER_GID\" /home/ubuntu; sudo install -d -m 0700 -o \"$PACKER_UID\" -g \"$PACKER_GID\" /home/ubuntu/.ssh; if [ -s /tmp/packer-authorized-keys ]; then sudo install -m 0600 -o \"$PACKER_UID\" -g \"$PACKER_GID\" /tmp/packer-authorized-keys /home/ubuntu/.ssh/authorized_keys; fi; sudo usermod -aG sudo ubuntu || true; echo 'ubuntu ALL=(ALL) NOPASSWD:ALL' | sudo tee /etc/sudoers.d/90-packer-ubuntu >/dev/null; sudo chmod 0440 /etc/sudoers.d/90-packer-ubuntu; getent passwd ubuntu || getent passwd \"$PACKER_UID\"; sudo -n true && echo 'passwordless sudo ok'",
       "echo 'Stopping auto-update services...'",
       "sudo systemctl stop apt-daily.service apt-daily-upgrade.service unattended-upgrades.service || true",
       "sudo systemctl kill apt-daily.service apt-daily-upgrade.service unattended-upgrades.service || true",
@@ -78,6 +100,7 @@ build {
       "sudo killall -9 apt-get apt dpkg unattended-upgr 2>/dev/null || true",
       "echo 'Waiting for apt/dpkg locks to be released...'",
       "for i in $(seq 1 60); do if sudo fuser /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock /var/cache/apt/archives/lock >/dev/null 2>&1; then echo \"Lock held, waiting... ($i/60)\"; sleep 5; else echo 'Locks released.'; break; fi; done",
+      "sudo DEBIAN_FRONTEND=noninteractive dpkg --configure -a || true",
       "sleep 5"
     ]
   }
@@ -88,6 +111,7 @@ build {
       "DEBCONF_NONINTERACTIVE_SEEN=true"
     ]
     inline = [
+      "sudo DEBIAN_FRONTEND=noninteractive dpkg --configure -a",
       "sudo -E apt-get clean",
       "sudo -E apt-get update -y",
       "sudo -E apt-get upgrade -y",
@@ -159,7 +183,7 @@ build {
       "sudo -E apt-get install -y unzip jq net-tools qemu-utils make build-essential openssh-client openssh-server" # TODO: openssh-server is updated to prevent security vulnerabilities
     ]
   }
-  
+
   provisioner "shell" {
     environment_vars = [
       "DEBIAN_FRONTEND=noninteractive",
@@ -205,12 +229,12 @@ build {
 
   provisioner "shell" {
     script          = "${path.root}/setup/install-consul.sh"
-    execute_command =  "chmod +x {{ .Path }}; {{ .Vars }} sudo bash  {{ .Path }} --version ${var.consul_version}"
+    execute_command = "chmod +x {{ .Path }}; {{ .Vars }} sudo bash  {{ .Path }} --version ${var.consul_version}"
   }
 
   provisioner "shell" {
     script          = "${path.root}/setup/install-nomad.sh"
-    execute_command =  "chmod +x {{ .Path }}; {{ .Vars }} sudo bash {{ .Path }} --version ${var.nomad_version}"
+    execute_command = "chmod +x {{ .Path }}; {{ .Vars }} sudo bash {{ .Path }} --version ${var.nomad_version}"
   }
 
   provisioner "shell" {
@@ -218,12 +242,12 @@ build {
       "sudo mkdir -p /opt/nomad/plugins",
     ]
   }
-  
+
   provisioner "shell" {
     environment_vars = [
       "DEBIAN_FRONTEND=noninteractive",
       "DEBCONF_NONINTERACTIVE_SEEN=true"
-    ]    
+    ]
     only = ["amazon-ebs.orch"]
     inline = [
       "sudo mkdir -p /opt/aws/amazon-cloudwatch-agent/bin/",
@@ -245,6 +269,12 @@ build {
       "echo 'net.netfilter.nf_conntrack_max = 2097152' | sudo tee -a /etc/sysctl.conf",
       "sudo systemctl disable apt-daily.timer apt-daily-upgrade.timer || true",
       "sudo systemctl mask apt-daily.service apt-daily-upgrade.service unattended-upgrades.service || true"
+    ]
+  }
+
+  provisioner "shell" {
+    inline = [
+      "if [ -n \"${var.ssh_keypair_name}\" ]; then sudo rm -f /home/ubuntu/.ssh/authorized_keys /root/.ssh/authorized_keys /etc/sudoers.d/90-packer-ubuntu; fi"
     ]
   }
 }

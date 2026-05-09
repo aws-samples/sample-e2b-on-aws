@@ -15,13 +15,13 @@ variable "aws_region" {
 }
 
 variable "gcp_instance_type" {
-  type = string
+  type    = string
   default = ""
 }
 
 variable "aws_instance_type" {
-  type    = string
-  default = ""  # Empty default, will be determined dynamically in main.pkr.hcl
+  type        = string
+  default     = "" # Empty default, will be determined dynamically in main.pkr.hcl
   description = "AWS instance type to use for building the AMI"
 }
 
@@ -54,10 +54,22 @@ variable "custom_ami_id" {
 
 variable "consul_version" {
   type    = string
-  default = "1.16.2"
+  default = "1.16.6"
 }
 
 variable "nomad_version" {
   type    = string
-  default = "1.6.2"
+  default = "1.6.10"
+}
+
+variable "ssh_keypair_name" {
+  type        = string
+  default     = ""
+  description = "Name of an existing AWS Key Pair for SSH. Leave empty to use Packer's temporary keypair."
+}
+
+variable "ssh_private_key_file" {
+  type        = string
+  default     = ""
+  description = "Path to the private key file corresponding to ssh_keypair_name. Leave empty if not using a custom keypair."
 }

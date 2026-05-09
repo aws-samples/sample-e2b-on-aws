@@ -51,6 +51,10 @@ packer init -upgrade .
 sleep 10
 
 echo "Starting Packer build with architecture: ${ARCHITECTURE}"
+TS=$(date -u +%Y%m%dT%H%M%SZ)
+export PACKER_LOG=1
+export PACKER_LOG_PATH="/tmp/packer-debug-${TS}.log"
+echo "Packer debug log: ${PACKER_LOG_PATH}"
 
 VPC_ID=$(grep "^CFNVPCID=" "$CONFIG_FILE" | cut -d'=' -f2)
 SUBNET_ID=$(grep "^CFNPRIVATESUBNET1=" "$CONFIG_FILE" | cut -d'=' -f2)
@@ -59,4 +63,13 @@ echo "Using Subnet: ${SUBNET_ID}"
 PACKER_VARS="-var aws_region=${AWS_REGION} -var architecture=${ARCHITECTURE} -var vpc_id=${VPC_ID} -var subnet_id=${SUBNET_ID}"
 echo "Using AMI: ${CUSTOM_AMI_ID}"
 PACKER_VARS="${PACKER_VARS} -var custom_ami_id=${CUSTOM_AMI_ID}"
+
+# SSH Key Pair for Packer (leave SSH_KEYPAIR_NAME empty to use temporary keypair)
+SSH_KEYPAIR_NAME="webasync-ec2-key"
+SSH_PRIVATE_KEY_FILE="/tmp/packer.pem"
+
+if [ -n "${SSH_KEYPAIR_NAME}" ]; then
+    PACKER_VARS="${PACKER_VARS} -var ssh_keypair_name=${SSH_KEYPAIR_NAME} -var ssh_private_key_file=${SSH_PRIVATE_KEY_FILE}"
+fi
+
 packer build -only=amazon-ebs.orch ${PACKER_VARS} .
