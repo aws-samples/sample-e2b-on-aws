@@ -33,7 +33,7 @@ build-and-upload-aws:
 	$(eval ARCHITECTURE := $(shell grep "^CFNARCHITECTURE=" /opt/config.properties | cut -d= -f2 || echo "amd64"))
 	$(eval COMMIT_SHA := $(shell git rev-parse --short HEAD))
 	# Create ECR repository if it doesn't exist
-	@aws ecr describe-repositories --repository-names $(IMAGE) || aws ecr create-repository --repository-name $(IMAGE)
+	@aws ecr describe-repositories --repository-names $(IMAGE) || aws ecr create-repository --repository-name $(IMAGE) --image-tag-mutability IMMUTABLE
 	# Login to ECR
 	@aws ecr get-login-password --region $(AWS_REGION) | docker login --username AWS --password-stdin $(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com
 	@cp -r ../shared .shared/

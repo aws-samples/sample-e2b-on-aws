@@ -77,7 +77,7 @@ build-and-upload-aws:
 	@cp -r ../db .db/
 	@docker buildx install || true # sets up the buildx as default docker builder
 	# Create ECR repository if it doesn't exist
-	@aws ecr describe-repositories --repository-names $(IMAGE) || aws ecr create-repository --repository-name $(IMAGE)
+	@aws ecr describe-repositories --repository-names $(IMAGE) || aws ecr create-repository --repository-name $(IMAGE) --image-tag-mutability IMMUTABLE
 	# Login to ECR
 	@aws ecr get-login-password --region $(AWS_REGION) | docker login --username AWS --password-stdin $(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com
 	# Build and push the image
