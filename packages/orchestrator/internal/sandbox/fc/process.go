@@ -438,24 +438,34 @@ func (p *Process) Stop() error {
 	default:
 	}
 
-	err := p.cmd.Process.Kill()
+	err := p.cmd.Process.Signal(syscall.SIGTERM)
 	if err != nil {
-		zap.L().Warn("failed to send KILL to FC process", zap.Error(err))
+		if errors.Is(err, os.ErrProcessDone) {
+			return nil
+		}
+		zap.L().Warn("failed to send SIGTERM to FC process", zap.Error(err))
 	}
+
+	const sigkillTimeout = 10 * time.Second
+	go func() {
+		select {
+		case <-time.After(sigkillTimeout):
+			killErr := p.cmd.Process.Kill()
+			if killErr != nil && !errors.Is(killErr, os.ErrProcessDone) {
+				zap.L().Warn("failed to send SIGKILL to FC process", zap.Error(killErr))
+			} else if killErr == nil {
+				zap.L().Warn("sent SIGKILL to FC process after SIGTERM timeout")
+			}
+		case <-p.exited:
+			return
+		}
+	}()
 
 	return nil
 }
 
-func (p *Process) WaitForExit(timeout time.Duration) error {
-	if p.cmd.Process == nil {
-		return nil
-	}
-	select {
-	case <-p.exited:
-		return nil
-	case <-time.After(timeout):
-		return fmt.Errorf("timeout waiting for FC process to exit after %s", timeout)
-	}
+func (p *Process) Exited() <-chan struct{} {
+	return p.exited
 }
 
 func (p *Process) Pause(ctx context.Context, tracer trace.Tracer) error {

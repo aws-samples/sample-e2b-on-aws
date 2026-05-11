@@ -28,8 +28,11 @@ func NewCleanup() *Cleanup {
 }
 
 func (c *Cleanup) Add(f func(ctx context.Context) error) {
-	if c.hasRun.Load() == true {
-		zap.L().Error("Add called after cleanup has run, ignoring function")
+	if c.hasRun.Load() {
+		err := f(context.Background())
+		if err != nil {
+			zap.L().Error("failed to run function after cleanup has run", zap.Error(err))
+		}
 		return
 	}
 
@@ -40,8 +43,11 @@ func (c *Cleanup) Add(f func(ctx context.Context) error) {
 }
 
 func (c *Cleanup) AddPriority(f func(ctx context.Context) error) {
-	if c.hasRun.Load() == true {
-		zap.L().Error("AddPriority called after cleanup has run, ignoring function")
+	if c.hasRun.Load() {
+		err := f(context.Background())
+		if err != nil {
+			zap.L().Error("failed to run priority function after cleanup has run", zap.Error(err))
+		}
 		return
 	}
 
@@ -53,7 +59,7 @@ func (c *Cleanup) AddPriority(f func(ctx context.Context) error) {
 
 func (c *Cleanup) Run(ctx context.Context) error {
 	c.once.Do(func() {
-		c.run(ctx)
+		c.run(context.WithoutCancel(ctx))
 	})
 	return c.error
 }

@@ -466,11 +466,9 @@ func (s *Sandbox) Close(ctx context.Context, tracer trace.Tracer) error {
 		errs = append(errs, fmt.Errorf("failed to stop FC: %w", fcStopErr))
 	}
 
-	// The process exited, we can continue with the rest of the cleanup.
-	const fcExitTimeout = 5 * time.Second
-	if waitErr := s.process.WaitForExit(fcExitTimeout); waitErr != nil {
-		zap.L().Warn("timeout waiting for FC process exit, proceeding with cleanup", zap.Error(waitErr))
-	}
+	// Wait for FC process to fully exit before cleaning up NBD and COW files.
+	// SIGTERM→10s→SIGKILL in Stop() guarantees the process will exit.
+	<-s.process.Exited()
 
 	uffdStopErr := s.Resources.memory.Stop()
 	if uffdStopErr != nil {
