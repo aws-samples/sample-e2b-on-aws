@@ -23,6 +23,10 @@ job "otel-collector" {
       port "http" {
         to = 4318
       }
+
+      port "sandbox_http" {
+        to = 4319
+      }
     }
 
     service {
@@ -60,6 +64,7 @@ job "otel-collector" {
           "grpc",
           "health",
           "http",
+          "sandbox_http",
         ]
       }
 
@@ -106,6 +111,12 @@ receivers:
         read_buffer_size: 10943040
         max_concurrent_streams: 200
         write_buffer_size: 10943040
+      http:
+        endpoint: 0.0.0.0:4318
+  otlp/sandbox:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4319
   prometheus:
     config:
       scrape_configs:
@@ -279,6 +290,10 @@ service:
     logs:
       receivers: [otlp]
       processors: [filter/logs_severity, batch]
+      exporters: [otlphttp/customer]
+    logs/sandbox:
+      receivers: [otlp/sandbox]
+      processors: [batch]
       exporters: [otlphttp/customer]
 EOF
 

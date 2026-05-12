@@ -38,7 +38,7 @@ job "logs-collector" {
 
       config {
         network_mode = "host"
-        image        = "timberio/vector:0.34.X-alpine"
+        image        = "timberio/vector:0.44.0-alpine"
         auth_soft_fail = true
         ports = [
           "health",
@@ -154,30 +154,91 @@ source = '''
 del(.internal)
 '''
 
+[transforms.to_otel_logs]
+type = "remap"
+inputs = [ "remove_internal" ]
+source = '''
+severity_text = if .level == "debug" {
+  "DEBUG"
+} else if .level == "info" {
+  "INFO"
+} else if .level == "warn" {
+  "WARN"
+} else if .level == "error" {
+  "ERROR"
+} else if .level == "dpanic" {
+  "ERROR"
+} else if .level == "panic" {
+  "FATAL"
+} else if .level == "fatal" {
+  "FATAL"
+} else {
+  upcase(to_string(.level) ?? "INFO")
+}
+
+message = to_string(.message) ?? ""
+logger_name = to_string(.logger) ?? "sandbox"
+trace_id = if exists(.traceID) { to_string(.traceID) ?? "" } else { "" }
+template_id = if exists(.templateID) { to_string(.templateID) ?? "" } else { "" }
+stacktrace = if exists(.stacktrace) { to_string(.stacktrace) ?? "" } else { "" }
+
+. = {
+  "resourceLogs": [{
+    "resource": {
+      "attributes": [
+        { "key": "service.name", "value": { "stringValue": to_string(.service) ?? "envd" } },
+        { "key": "e2b.team_id", "value": { "stringValue": to_string(.teamID) ?? "unknown" } },
+        { "key": "e2b.env_id", "value": { "stringValue": to_string(.envID) ?? "unknown" } },
+        { "key": "e2b.build_id", "value": { "stringValue": to_string(.buildID) ?? "unknown" } },
+        { "key": "e2b.sandbox_id", "value": { "stringValue": to_string(.sandboxID) ?? "unknown" } },
+        { "key": "e2b.category", "value": { "stringValue": to_string(.category) ?? "default" } }
+      ]
+    },
+    "scopeLogs": [{
+      "scope": {
+        "name": logger_name
+      },
+      "logRecords": [{
+        "timeUnixNano": to_unix_timestamp!(.timestamp, unit: "nanoseconds"),
+        "body": { "stringValue": message },
+        "severityText": severity_text,
+        "attributes": [
+          { "key": "logger", "value": { "stringValue": logger_name } },
+          { "key": "level", "value": { "stringValue": to_string(.level) ?? "" } },
+          { "key": "traceID", "value": { "stringValue": trace_id } },
+          { "key": "templateID", "value": { "stringValue": template_id } },
+          { "key": "stacktrace", "value": { "stringValue": stacktrace } }
+        ]
+      }]
+    }]
+  }]
+}
+'''
+
 # Enable debugging of logs to the console
 # [sinks.console_loki]
 # type = "console"
 # inputs = ["remove_internal"]
 # encoding.codec = "json"
 
-[sinks.local_loki_logs]
-type = "loki"
-inputs = [ "remove_internal" ]
-endpoint = "http://loki.service.consul:3100"
-encoding.codec = "json"
-# This is recommended behavior for Loki 2.4.0 and newer and is default in Vector 0.39.0 and newer
-# https://vector.dev/docs/reference/configuration/sinks/loki/#out_of_order_action
-# https://vector.dev/releases/0.39.0/
-out_of_order_action = "accept"
+[sinks.local_otel_logs]
+type = "opentelemetry"
+inputs = [ "to_otel_logs" ]
+healthcheck.enabled = true
 
-[sinks.local_loki_logs.labels]
-source = "logs-collector"
-service = "{{ service }}"
-teamID = "{{ teamID }}"
-envID = "{{ envID }}"
-buildID = "{{ buildID }}"
-sandboxID = "{{ sandboxID }}"
-category = "{{ category }}"
+[sinks.local_otel_logs.protocol]
+type = "http"
+uri = "http://127.0.0.1:4319/v1/logs"
+method = "post"
+
+[sinks.local_otel_logs.protocol.encoding]
+codec = "json"
+
+[sinks.local_otel_logs.protocol.framing]
+method = "newline_delimited"
+
+[sinks.local_otel_logs.protocol.request.headers]
+content-type = "application/json"
 
         EOH
       }
