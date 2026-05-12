@@ -19,11 +19,10 @@ func (a *APIStore) Proxy(w http.ResponseWriter, req *http.Request) {
 
 	// Validate the token by checking if the generated token is in the cache
 	authHeader := req.Header.Get("Authorization")
-	log.Printf("[DEBUG] Proxy - Auth header: %s", redactAuthorizationHeader(authHeader))
 	e2bToken := strings.TrimPrefix(authHeader, "Bearer ")
 	token, err := a.AuthCache.Get(e2bToken)
 	if err != nil {
-		log.Printf("Error while getting token for %s: %s, header: %s\n", path, err, redactAuthorizationHeader(authHeader))
+		log.Printf("Error while getting token for %s: %s\n", path, err)
 		utils.SetDockerUnauthorizedHeaders(w)
 		return
 	}

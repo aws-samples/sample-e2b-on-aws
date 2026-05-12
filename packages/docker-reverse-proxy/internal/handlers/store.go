@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"net/http/httputil"
@@ -43,17 +42,17 @@ func NewStore() *APIStore {
 		if err != nil {
 			log.Fatalf("Failed to get AWS registry host: %v", err)
 		}
-		
+
 		targetUrl = &url.URL{
 			Scheme: "https",
 			Host:   registryHost,
 		}
 		log.Printf("[DEBUG] Store - Using AWS target URL: %s", targetUrl)
-		
+
 		// Get additional AWS info for debugging
 		accountID, _ := constants.GetAWSAccountID()
 		region, _ := constants.GetAWSRegion()
-		log.Printf("[DEBUG] Store - AWS Account ID: %s, Region: %s, Repository: %s", 
+		log.Printf("[DEBUG] Store - AWS Account ID: %s, Region: %s, Repository: %s",
 			accountID, region, constants.AWSECRRepository)
 	} else {
 		log.Fatal("Unsupported cloud provider")
@@ -87,74 +86,13 @@ func NewStore() *APIStore {
 
 		// Log all responses, with special attention to error responses
 		if resp.StatusCode >= 400 {
-			log.Printf("[ERROR] Proxy Response - Status: %d, URL: %s, Method: %s", 
+			log.Printf("[ERROR] Proxy Response - Status: %d, URL: %s, Method: %s",
 				resp.StatusCode, resp.Request.URL, resp.Request.Method)
-			
-			// Read response body
-			respBody, err := io.ReadAll(resp.Body)
-			if err != nil {
-				log.Printf("[ERROR] Failed to read response body: %v", err)
-				return nil
-			}
-			
-			bodyStr := string(respBody)
-			
-			// Log detailed error information
-			log.Printf("[ERROR] Detailed error response [%d] for %s %s:", 
-				resp.StatusCode, resp.Request.Method, resp.Request.URL)
-			log.Printf("[ERROR] Response body: %s", bodyStr)
-			
-			// Specifically check for authentication errors
+
+			// Preserve signal for auth failures without logging sensitive request or response values.
 			if resp.StatusCode == http.StatusUnauthorized {
 				log.Printf("[ERROR] Authentication error detected!")
-				
-				// Check if it contains a "Not Authorized" error
-				if strings.Contains(bodyStr, "Not Authorized") {
-					log.Printf("[ERROR] ECR Not Authorized error detected!")
-					
-					// Log request headers
-					log.Printf("[ERROR] Request headers:")
-					for name, values := range resp.Request.Header {
-						if name == "Authorization" {
-							authParts := strings.Split(values[0], " ")
-							if len(authParts) >= 2 {
-								log.Printf("[ERROR]   %s: %s ***", name, authParts[0])
-							} else {
-								log.Printf("[ERROR]   %s: ***", name)
-							}
-						} else {
-							log.Printf("[ERROR]   %s: %v", name, values)
-						}
-					}
-				}
 			}
-			log.Printf("[ERROR] Detailed error response [%d] for %s %s:", 
-				resp.StatusCode, resp.Request.Method, resp.Request.URL)
-			log.Printf("[ERROR] Response body: %s", bodyStr)
-			
-			// Log request headers (excluding the full authorization token)
-			log.Printf("[ERROR] Request headers:")
-			for name, values := range resp.Request.Header {
-				if name == "Authorization" {
-					authParts := strings.Split(values[0], " ")
-					if len(authParts) >= 2 {
-						log.Printf("[ERROR]   %s: %s ***", name, authParts[0])
-					} else {
-						log.Printf("[ERROR]   %s: ***", name)
-					}
-				} else {
-					log.Printf("[ERROR]   %s: %v", name, values)
-				}
-			}
-			
-			// Log response headers
-			log.Printf("[ERROR] Response headers:")
-			for name, values := range resp.Header {
-				log.Printf("[ERROR]   %s: %v", name, values)
-			}
-			
-			// Create a new reader with the same content for downstream handlers
-			resp.Body = io.NopCloser(strings.NewReader(bodyStr))
 		}
 
 		return nil
@@ -164,11 +102,11 @@ func NewStore() *APIStore {
 	originalDirector := proxy.Director
 	proxy.Director = func(req *http.Request) {
 		originalDirector(req)
-		
+
 		// Only log basic request information
-		log.Printf("[INFO] Proxy Director - Forwarding request to: %s %s", 
+		log.Printf("[INFO] Proxy Director - Forwarding request to: %s %s",
 			req.Method, req.URL.String())
-		
+
 		// For PUT requests with a digest parameter, log special debug info
 		if req.Method == http.MethodPut && req.URL.Query().Get("digest") != "" {
 			log.Printf("[INFO] Proxy Director - PUT request with digest: %s", req.URL.Query().Get("digest"))
@@ -186,6 +124,6 @@ func (a *APIStore) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	// Set the host to the URL host
 	req.Host = req.URL.Host
 	log.Printf("[INFO] ServeHTTP - Proxying request to: %s %s", req.Method, req.URL.String())
-	
+
 	a.proxy.ServeHTTP(rw, req)
 }
