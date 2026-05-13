@@ -32,7 +32,7 @@ job "orchestrator" {
         NODE_ID                      = "$${node.unique.id}"
         OTEL_TRACING_PRINT           = false
         LOGS_COLLECTOR_ADDRESS       = "http://localhost:30006"
-        LOGS_COLLECTOR_PUBLIC_IP     = "http://127.0.0.1"
+        LOGS_COLLECTOR_PUBLIC_IP     = "http://$${attr.unique.network.ip-address}:30006"
         ENVIRONMENT                  = "${environment}"
         TEMPLATE_BUCKET_NAME         = "${BUCKET_FC_TEMPLATE}"
         OTEL_COLLECTOR_GRPC_ENDPOINT = "localhost:4317"
