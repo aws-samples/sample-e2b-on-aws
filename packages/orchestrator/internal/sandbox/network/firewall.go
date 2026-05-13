@@ -2,9 +2,7 @@ package network
 
 import (
 	"fmt"
-	"net"
 	"net/netip"
-	"net/url"
 	"os"
 	"strings"
 
@@ -238,9 +236,9 @@ func (fw *Firewall) ResetBlockedCustom() error {
 func (fw *Firewall) ResetAllowedCustom() error {
 	initIps := make([]string, 0)
 
-	// Allow Logs Collector IP for logs
-	if ip := os.Getenv("LOGS_COLLECTOR_PUBLIC_IP"); ip != "" {
-		cidr, err := logsCollectorAllowedCIDR(ip)
+	// Allow Logs Collector IP for logs.
+	if ip := os.Getenv("LOGS_COLLECTOR_FIREWALL_IP"); ip != "" {
+		cidr, err := logsCollectorFirewallCIDR(ip)
 		if err != nil {
 			return err
 		}
@@ -259,26 +257,18 @@ func (fw *Firewall) ResetAllowedCustom() error {
 	return fw.conn.Flush()
 }
 
-func logsCollectorAllowedCIDR(address string) (string, error) {
-	address = strings.TrimSpace(address)
-	if address == "" {
+func logsCollectorFirewallCIDR(rawIP string) (string, error) {
+	rawIP = strings.TrimSpace(rawIP)
+	if rawIP == "" {
 		return "", nil
 	}
 
-	host := address
-	if parsed, err := url.Parse(address); err == nil && parsed.Host != "" {
-		host = parsed.Hostname()
-	} else if parsedHost, _, err := net.SplitHostPort(address); err == nil {
-		host = parsedHost
-	}
-
-	host = strings.Trim(host, "[]")
-	ip, err := netip.ParseAddr(host)
+	ip, err := netip.ParseAddr(rawIP)
 	if err != nil {
-		return "", fmt.Errorf("parse logs collector address %q: %w", address, err)
+		return "", fmt.Errorf("parse logs collector firewall IP %q: %w", rawIP, err)
 	}
 	if !ip.Is4() {
-		return "", fmt.Errorf("logs collector address %q must use an IPv4 host", address)
+		return "", fmt.Errorf("logs collector firewall IP %q must be IPv4", rawIP)
 	}
 
 	return ip.String() + "/32", nil

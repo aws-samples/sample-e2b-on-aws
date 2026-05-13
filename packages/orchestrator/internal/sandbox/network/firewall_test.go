@@ -2,7 +2,7 @@ package network
 
 import "testing"
 
-func TestLogsCollectorAllowedCIDR(t *testing.T) {
+func TestLogsCollectorFirewallCIDR(t *testing.T) {
 	tests := []struct {
 		name    string
 		input   string
@@ -10,33 +10,43 @@ func TestLogsCollectorAllowedCIDR(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			name:  "http URL with port",
-			input: "http://10.50.121.182:30006",
+			name:  "pure IPv4",
+			input: "10.50.121.182",
 			want:  "10.50.121.182/32",
 		},
 		{
-			name:  "http URL without port",
-			input: "http://127.0.0.1",
-			want:  "127.0.0.1/32",
-		},
-		{
-			name:  "bare host port",
-			input: "10.50.121.182:30006",
+			name:  "trims whitespace",
+			input: " 10.50.121.182 ",
 			want:  "10.50.121.182/32",
 		},
 		{
 			name: "empty",
 		},
 		{
+			name:    "public URL is not accepted by firewall variable",
+			input:   "http://10.50.121.182:30006",
+			wantErr: true,
+		},
+		{
+			name:    "host port is not accepted by firewall variable",
+			input:   "10.50.121.182:30006",
+			wantErr: true,
+		},
+		{
 			name:    "non IP host",
-			input:   "http://logs-collector:30006",
+			input:   "logs-collector",
+			wantErr: true,
+		},
+		{
+			name:    "IPv6 is not accepted",
+			input:   "2001:db8::1",
 			wantErr: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := logsCollectorAllowedCIDR(tt.input)
+			got, err := logsCollectorFirewallCIDR(tt.input)
 			if tt.wantErr {
 				if err == nil {
 					t.Fatalf("expected error, got nil")
