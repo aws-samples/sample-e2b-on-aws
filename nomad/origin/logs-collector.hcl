@@ -176,11 +176,18 @@ severity_text = if .level == "debug" {
   upcase(to_string(.level) ?? "INFO")
 }
 
-message = to_string(.message) ?? ""
 logger_name = to_string(.logger) ?? "sandbox"
 trace_id = if exists(.traceID) { to_string(.traceID) ?? "" } else { "" }
 template_id = if exists(.templateID) { to_string(.templateID) ?? "" } else { "" }
 stacktrace = if exists(.stacktrace) { to_string(.stacktrace) ?? "" } else { "" }
+event_type = if exists(.event_type) { to_string(.event_type) ?? "" } else { "" }
+operation_id = if exists(.operation_id) { to_string(.operation_id) ?? "" } else { "" }
+data = if exists(.data) { to_string(.data) ?? "" } else { "" }
+message = if data != "" && (event_type == "stdout" || event_type == "stderr") {
+  data
+} else {
+  to_string(.message) ?? ""
+}
 
 . = {
   "resourceLogs": [{
@@ -205,6 +212,8 @@ stacktrace = if exists(.stacktrace) { to_string(.stacktrace) ?? "" } else { "" }
         "attributes": [
           { "key": "logger", "value": { "stringValue": logger_name } },
           { "key": "level", "value": { "stringValue": to_string(.level) ?? "" } },
+          { "key": "event_type", "value": { "stringValue": event_type } },
+          { "key": "operation_id", "value": { "stringValue": operation_id } },
           { "key": "traceID", "value": { "stringValue": trace_id } },
           { "key": "templateID", "value": { "stringValue": template_id } },
           { "key": "stacktrace", "value": { "stringValue": stacktrace } }
