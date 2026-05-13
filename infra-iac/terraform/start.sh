@@ -37,6 +37,15 @@ if [[ ! -f "$CONFIG_FILE" ]]; then
     exit 1
 fi
 
+if [[ -z "$CUSTOM_AMI_ID" ]]; then
+    CUSTOM_AMI_ID=$(grep "^CFNCUSTOMAMI=" "$CONFIG_FILE" | cut -d'=' -f2)
+fi
+
+if [[ -z "$CUSTOM_AMI_ID" ]]; then
+    echo "Error: CUSTOM_AMI_ID is required. Pass it in the environment or set CFNCUSTOMAMI in $CONFIG_FILE."
+    exit 1
+fi
+
 # Execute prepare3.sh script
 echo "Executing prepare.sh script..."
 chmod u+x prepare.sh
@@ -50,7 +59,7 @@ fi
 
 # Execute terraform plan and apply with environment variable
 echo "Creating Terraform plan for environment: $ENVIRONMENT..."
-terraform plan -var="environment=$ENVIRONMENT" -out=tfplan
+terraform plan -var="environment=$ENVIRONMENT" -var="custom_ami_id=$CUSTOM_AMI_ID" -out=tfplan
 
 echo "Applying Terraform plan for environment: $ENVIRONMENT..."
 terraform apply tfplan

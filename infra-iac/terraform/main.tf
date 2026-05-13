@@ -94,17 +94,7 @@ locals {
 # AMI AND BASE INFRASTRUCTURE
 # =========================================================
 
-# Find the latest E2B base AMI to use for all instances
-data "aws_ami" "e2b" {
-  most_recent = true
-  owners = [local.account_id]
-  
-  # Filter for AMIs with the specific naming pattern
-  filter {
-    name   = "name"
-    values = ["e2b-ubuntu-ami-*"]
-  }
-}
+# Cluster instances use the exact Packer-built Golden AMI passed from CloudFormation.
 
 # =========================================================
 # S3 BUCKETS
@@ -762,7 +752,7 @@ resource "aws_security_group" "server_sg" {
 resource "aws_launch_template" "server" {
   name_prefix            = "${var.prefix}-server-"
   update_default_version = true
-  image_id               = data.aws_ami.e2b.id
+  image_id               = var.custom_ami_id
   instance_type          = var.architecture == "x86_64" ? local.clusters.server.instance_type_x86 : local.clusters.server.instance_type_arm
   iam_instance_profile {
     name = aws_iam_instance_profile.ec2_instance_profile.name
@@ -937,7 +927,7 @@ resource "aws_security_group" "client_sg" {
 resource "aws_launch_template" "client" {
   name_prefix            = "${var.prefix}-client-"
   update_default_version = true
-  image_id      = data.aws_ami.e2b.id
+  image_id      = var.custom_ami_id
   instance_type = var.architecture == "x86_64" ? local.clusters.client.instance_type_x86 : local.clusters.client.instance_type_arm
 
   iam_instance_profile {
@@ -1426,7 +1416,7 @@ resource "aws_lb_listener_rule" "nomad" {
 resource "aws_launch_template" "api" {
   name_prefix            = "${var.prefix}-api-"
   update_default_version = true
-  image_id               = data.aws_ami.e2b.id
+  image_id               = var.custom_ami_id
   instance_type          = var.architecture == "x86_64" ? local.clusters.api.instance_type_x86 : local.clusters.api.instance_type_arm
   iam_instance_profile {
     name = aws_iam_instance_profile.ec2_instance_profile.name
@@ -1622,7 +1612,7 @@ resource "aws_security_group" "build_sg" {
 resource "aws_launch_template" "build" {
   name_prefix            = "${var.prefix}-build-"
   update_default_version = true
-  image_id               = data.aws_ami.e2b.id
+  image_id               = var.custom_ami_id
   instance_type          = var.architecture == "x86_64" ? local.clusters.build.instance_type_x86 : local.clusters.build.instance_type_arm
   iam_instance_profile {
     name = aws_iam_instance_profile.ec2_instance_profile.name
@@ -1724,4 +1714,3 @@ resource "aws_autoscaling_group" "build" {
     }
   }
 }
-

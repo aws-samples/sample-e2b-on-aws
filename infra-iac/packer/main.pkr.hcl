@@ -293,6 +293,14 @@ build {
 
   provisioner "shell" {
     inline = [
+      "if [ -f /etc/sysctl.d/99-cis.conf ]; then sudo cp /etc/sysctl.d/99-cis.conf /etc/sysctl.d/99-cis.conf.bak; sudo sed -i -E '/^[[:space:]]*net\\.(ipv4|ipv6)\\.conf\\.ens5\\./d' /etc/sysctl.d/99-cis.conf; fi",
+      "if sudo grep -R '^[[:space:]]*net\\..*\\.conf\\.ens5\\.' /etc/sysctl.conf /etc/sysctl.d /usr/lib/sysctl.d >/tmp/ens5-sysctl-leftovers 2>/dev/null; then echo 'ERROR: stale ens5 sysctl entries remain'; cat /tmp/ens5-sysctl-leftovers; exit 1; fi",
+      "sudo sysctl --system"
+    ]
+  }
+
+  provisioner "shell" {
+    inline = [
       "if [ -n \"${var.ssh_keypair_name}\" ]; then sudo rm -f /home/ubuntu/.ssh/authorized_keys /root/.ssh/authorized_keys /etc/sudoers.d/90-packer-ubuntu; fi"
     ]
   }

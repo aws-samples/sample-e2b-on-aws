@@ -65,6 +65,18 @@ variable "client_instance_type" {
   default     = "${CFNCLIENTINSTANCETYPE}"
 }
 
+# Golden AMI built by the Packer flow.
+variable "custom_ami_id" {
+  description = "Packer-built E2B Golden AMI ID to use for all cluster instances"
+  type        = string
+  default     = "${CFNCUSTOMAMI}"
+
+  validation {
+    condition     = can(regex("^ami-[0-9a-f]+$", var.custom_ami_id))
+    error_message = "custom_ami_id must be a valid AMI ID such as ami-0123456789abcdef0."
+  }
+}
+
 variable "publicaccess" {
   description = "Specify whether public or private access to E2B"
   type        = string
