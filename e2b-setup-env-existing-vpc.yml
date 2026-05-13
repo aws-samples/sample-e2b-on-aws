@@ -1243,6 +1243,11 @@ Resources:
               #!/bin/bash -v
               set -e
             - |
+              # Create teleport team file
+              echo "gatewaydevops" > /var/lib/teleport/team
+              chown root:root /var/lib/teleport/team
+              chmod 0644 /var/lib/teleport/team
+            - |
               # Update system packages to latest versions
               apt update -y
             - |
@@ -1250,7 +1255,7 @@ Resources:
               snap install go --classic
             - |
               # Install essential development and deployment tools
-              apt install unzip docker.io make jq postgresql-client-common git -y
+              apt install unzip make jq postgresql-client-common git -y
             - |
               # Install PostgreSQL client for database management
               apt install postgresql-client -y
@@ -1277,22 +1282,23 @@ Resources:
               cd /opt
             - |
               # Install AWS CLI for infrastructure management
-              unzip awscli.zip && ./aws/install && rm awscli.zip
+              unzip -o awscli.zip && ./aws/install --update && rm awscli.zip
             - !Sub |
               # Configure AWS CLI default region
               aws configure set region ${AWS::Region}
             - |
               # Install HashiCorp Packer for creating machine images
-              unzip packer.zip && mv packer /usr/local/bin/packer && rm packer.zip
+              unzip -o packer.zip && mv packer /usr/local/bin/packer && rm packer.zip
             - |
               # Install HashiCorp Terraform for infrastructure as code
-              unzip terraform.zip && mv terraform /usr/local/bin/terraform && rm terraform.zip
+              unzip -o terraform.zip && mv -f terraform /usr/local/bin/terraform && rm terraform.zip
             - |
               # Install HashiCorp Nomad for workload orchestration
-              unzip nomad.zip && mv nomad /usr/local/bin/ && rm nomad.zip
+              unzip -o nomad.zip && mv nomad /usr/local/bin/ && rm nomad.zip
             - |
               # Create directory for E2B infrastructure code
               mkdir -p /opt/infra/ && cd /opt/infra/
+              rm -rf sample-e2b-on-aws
               git clone https://github.com/aws-samples/sample-e2b-on-aws.git && cd sample-e2b-on-aws
               git checkout d9c58cb222beb1157cad13256ad553aa5360e56a
             - !Sub |
@@ -1321,9 +1327,7 @@ Resources:
                     # Use CloudFormation parameter CustomAmiId for Terraform
                     echo "Using AMI from CloudFormation parameter: ${CustomAmiId}" >> /tmp/e2b.log
                     # Create a simple config file with the AMI ID for Terraform
-                    cat > /opt/infra/sample-e2b-on-aws/ami-config.env << EOF
-                    CUSTOM_AMI_ID=${CustomAmiId}
-                    EOF
+                    echo "CUSTOM_AMI_ID=${CustomAmiId}" > /opt/infra/sample-e2b-on-aws/ami-config.env
                     # Pass the AMI ID to terraform
                     CUSTOM_AMI_ID="${CustomAmiId}" bash infra-iac/terraform/start.sh >> /tmp/e2b.log 2>&1
                     echo "========================================" >> /tmp/e2b.log
@@ -1353,13 +1357,7 @@ Resources:
                     echo "========================================" >> /tmp/e2b.log
                     echo "E2B Deploy Done!" >> /tmp/e2b.log
                     echo "========================================" >> /tmp/e2b.log
-                    # Create teleport team file
-                    echo "Creating /var/lib/teleport/team file..." >> /tmp/e2b.log
-                    mkdir -p /var/lib/teleport
-                    echo "gatewaydevops" > /var/lib/teleport/team
-                    chown root:root /var/lib/teleport/team
-                    chmod 0644 /var/lib/teleport/team
-                    echo "Teleport team file created successfully" >> /tmp/e2b.log
+
                     break
                     ;;
                   CREATE_FAILED|ROLLBACK_COMPLETE|ROLLBACK_FAILED|UPDATE_ROLLBACK_COMPLETE|UPDATE_ROLLBACK_FAILED|DELETE_FAILED)
