@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
 	"runtime"
 
 	"github.com/coreos/go-iptables/iptables"
@@ -162,6 +163,14 @@ func (s *Slot) CreateNetwork() error {
 	})
 	if err != nil {
 		return fmt.Errorf("error adding default NS route: %w", err)
+	}
+
+	// Linux ip_forward is scoped per network namespace. We need it enabled in the
+	// sandbox namespace itself so packets can be forwarded from tap0 to eth0
+	// before the host namespace SNAT/MASQUERADE rules can do their part.
+	err = os.WriteFile("/proc/sys/net/ipv4/ip_forward", []byte("1"), 0o644)
+	if err != nil {
+		return fmt.Errorf("error enabling ipv4 forwarding in namespace: %w", err)
 	}
 
 	tables, err := iptables.New()

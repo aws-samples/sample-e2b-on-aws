@@ -118,6 +118,14 @@ echo "account_id=$(aws sts get-caller-identity --query Account --output text)" >
 echo "build_id=latest" >> "$CONFIG_FILE"
 echo "environment=$ENVIRONMENT" >> "$CONFIG_FILE"
 
+# The Nomad OTel collector deploy uses envsubst on this key. It must come from
+# the cluster-specific config passed in ahead of time, not from a hard-coded
+# workspace default.
+if ! grep -q '^otel_customer_endpoint=' "$CONFIG_FILE"; then
+    echo "Error: otel_customer_endpoint is missing from $CONFIG_FILE" >&2
+    exit 1
+fi
+
 # Extract AWSREGION value from the config file
 AWSREGION=$(grep "^AWSREGION=" "$CONFIG_FILE" | cut -d'=' -f2)
 # Extract CFNAZ1 value from the config file

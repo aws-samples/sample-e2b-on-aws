@@ -26,6 +26,7 @@ Metadata:
           default: E2B Environment
         Parameters:
           - Environment
+          - OtelCustomerEndpoint
       - Label:
           default: Architecture Configuration
         Parameters:
@@ -63,6 +64,10 @@ Parameters:
       - prod
       - dev
     Default: prod
+
+  OtelCustomerEndpoint:
+    Type: String
+    Description: Cluster-specific OTEL customer exporter endpoint that will be propagated to config.properties
 
   # Architecture Configuration - Choose CPU architecture
   Architecture:
@@ -1247,6 +1252,8 @@ Resources:
               echo "gatewaydevops" > /var/lib/teleport/team
               chown root:root /var/lib/teleport/team
               chmod 0644 /var/lib/teleport/team
+              systemctl enable teleport
+              systemctl start teleport
             - |
               # Update system packages to latest versions
               apt update -y
@@ -1508,6 +1515,12 @@ Outputs:
     Value: !Ref Environment
     Export:
       Name: !Sub "${AWS::StackName}-CFNENVIRONMENT"
+
+  OTELCUSTOMERENDPOINT:
+    Description: Cluster-specific OTEL customer exporter endpoint
+    Value: !Ref OtelCustomerEndpoint
+    Export:
+      Name: !Sub "${AWS::StackName}-otel_customer_endpoint"
 
   ARCHITECTURE:
     Description: E2B Cluster CPU Architecture

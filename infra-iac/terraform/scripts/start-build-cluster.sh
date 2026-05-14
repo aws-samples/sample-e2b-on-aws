@@ -28,6 +28,9 @@ net.core.netdev_max_backlog = 65535
 # Increase maximum number of TCP sockets
 net.ipv4.tcp_max_syn_backlog = 65535
 
+# Allow forwarding traffic from sandbox namespaces to the host uplink
+net.ipv4.ip_forward = 1
+
 # Reserve static service ports from being used as ephemeral ports
 net.ipv4.ip_local_reserved_ports = 44313,50001
 EOF
@@ -187,6 +190,7 @@ chown -R consul:consul /opt/consul/tls
 chmod 600 /opt/consul/tls/key.pem /opt/consul/tls/cert.pem
 chmod 644 /opt/consul/tls/ca/ca.pem
 
+mkdir -p /opt/e2b /opt/e2b/secrets
 aws s3 cp "s3://${SCRIPTS_BUCKET}/setup-secrets-${SETUP_SECRETS_FILE_HASH}.sh" /opt/e2b/setup-secrets.sh
 chmod +x /opt/e2b/setup-secrets.sh
 set +x

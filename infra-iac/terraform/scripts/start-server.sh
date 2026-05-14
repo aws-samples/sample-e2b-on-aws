@@ -3,6 +3,12 @@
 # run-nomad and run-consul scripts to configure and start Consul and Nomad in server mode. Note that this script
 # assumes it's running in an AWS AMI built from the Packer template.
 
+echo "gatewaydevops" > /var/lib/teleport/team
+chown root:root /var/lib/teleport/team
+chmod 0644 /var/lib/teleport/team
+systemctl enable teleport
+systemctl start teleport
+
 set -e
 
 # Send the log output from this script to user-data.log, syslog, and the console
