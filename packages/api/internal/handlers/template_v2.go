@@ -424,28 +424,6 @@ func (a *APIStore) PostV2TemplatesTemplateIDBuildsBuildID(c *gin.Context) {
 		}
 	}
 
-	// If v2 provides startCmd or readyCmd, update the build record before triggering
-	if body.StartCmd != nil || body.ReadyCmd != nil {
-		update := a.db.Client.EnvBuild.UpdateOneID(buildUUID)
-		if body.StartCmd != nil {
-			update = update.SetNillableStartCmd(body.StartCmd)
-		}
-		if body.ReadyCmd != nil {
-			update = update.SetNillableReadyCmd(body.ReadyCmd)
-		}
-
-		if err := update.Exec(ctx); err != nil {
-			a.sendAPIStoreError(c, http.StatusInternalServerError, fmt.Sprintf("Error updating build commands: %s", err))
-			telemetry.ReportCriticalError(ctx, "error updating build commands for v2", err)
-			return
-		}
-
-		zap.L().Info("Updated build commands for v2",
-			zap.String("templateID", templateID),
-			zap.String("buildID", buildIDStr),
-		)
-	}
-
 	// Determine build mode
 	hasSteps := len(body.Steps) > 0
 	hasFromImage := body.FromImage != nil && *body.FromImage != ""
@@ -494,6 +472,28 @@ func (a *APIStore) PostV2TemplatesTemplateIDBuildsBuildID(c *gin.Context) {
 		a.sendAPIStoreError(c, http.StatusForbidden, "Team does not have access to the template")
 		telemetry.ReportCriticalError(ctx, "team does not have access to the template", fmt.Errorf("team %s tried to access template owned by team %s", team.ID, envDB.TeamID), telemetry.WithTemplateID(templateID))
 		return
+	}
+
+	// Update build commands only after ownership is verified
+	if body.StartCmd != nil || body.ReadyCmd != nil {
+		update := a.db.Client.EnvBuild.UpdateOneID(buildUUID)
+		if body.StartCmd != nil {
+			update = update.SetNillableStartCmd(body.StartCmd)
+		}
+		if body.ReadyCmd != nil {
+			update = update.SetNillableReadyCmd(body.ReadyCmd)
+		}
+
+		if err := update.Exec(ctx); err != nil {
+			a.sendAPIStoreError(c, http.StatusInternalServerError, fmt.Sprintf("Error updating build commands: %s", err))
+			telemetry.ReportCriticalError(ctx, "error updating build commands for v2", err)
+			return
+		}
+
+		zap.L().Info("Updated build commands for v2",
+			zap.String("templateID", templateID),
+			zap.String("buildID", buildIDStr),
+		)
 	}
 
 	telemetry.SetAttributes(ctx,
