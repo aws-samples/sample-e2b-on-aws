@@ -122,7 +122,7 @@ fi
 
 # Create base ECR repository
 echo "Creating ECR repository e2bdev/base/$TEMPLATE_ID..."
-aws ecr create-repository --repository-name e2bdev/base/$TEMPLATE_ID --region $AWSREGION --image-tag-mutability IMMUTABLE || true
+aws ecr create-repository --repository-name e2bdev/base/$TEMPLATE_ID --region $AWSREGION --image-tag-mutability IMMUTABLE --image-scanning-configuration scanOnPush=true || true
 if [ $? -ne 0 ]; then
     echo "Note: Repository may already exist or there was an error"
 fi

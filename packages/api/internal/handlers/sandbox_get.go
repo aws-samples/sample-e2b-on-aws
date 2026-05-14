@@ -69,9 +69,6 @@ func (a *APIStore) GetSandboxesSandboxID(c *gin.Context, id string) {
 		return
 	}
 
-	memoryMB := int32(lastSnapshot.EnvBuild.RamMb)
-	cpuCount := int32(lastSnapshot.EnvBuild.Vcpu)
-
 	var sbxAccessToken *string = nil
 	if lastSnapshot.Snapshot.EnvSecure {
 		key, err := a.envdAccessTokenGenerator.GenerateAccessToken(lastSnapshot.Snapshot.SandboxID)
@@ -84,29 +81,41 @@ func (a *APIStore) GetSandboxesSandboxID(c *gin.Context, id string) {
 		sbxAccessToken = &key
 	}
 
-	diskSizeMB := lastSnapshot.EnvBuild.FreeDiskSizeMb
-	if lastSnapshot.EnvBuild.TotalDiskSizeMb != nil {
-		diskSizeMB = *lastSnapshot.EnvBuild.TotalDiskSizeMb
+	sandbox := snapshotToSandboxDetail(lastSnapshot, sbxAccessToken)
+
+	c.JSON(http.StatusOK, sandbox)
+}
+
+func envBuildDiskSizeMB(build queries.EnvBuild) int64 {
+	if build.TotalDiskSizeMb != nil {
+		return *build.TotalDiskSizeMb
 	}
+
+	return build.FreeDiskSizeMb
+}
+
+func snapshotToSandboxDetail(lastSnapshot queries.GetLastSnapshotRow, envdAccessToken *string) api.SandboxDetail {
+	snapshot := lastSnapshot.Snapshot
+	build := lastSnapshot.EnvBuild
 
 	sandbox := api.SandboxDetail{
 		ClientID:        "00000000", // for backwards compatibility we need to return a client id
-		TemplateID:      lastSnapshot.Snapshot.EnvID,
-		SandboxID:       lastSnapshot.Snapshot.SandboxID,
-		StartedAt:       lastSnapshot.Snapshot.SandboxStartedAt.Time,
-		CpuCount:        cpuCount,
-		MemoryMB:        memoryMB,
-		DiskSizeMB:      diskSizeMB,
-		EndAt:           info.GetEndTime(),
+		TemplateID:      snapshot.EnvID,
+		SandboxID:       snapshot.SandboxID,
+		StartedAt:       snapshot.SandboxStartedAt.Time,
+		CpuCount:        int32(build.Vcpu),
+		MemoryMB:        int32(build.RamMb),
+		DiskSizeMB:      envBuildDiskSizeMB(build),
+		EndAt:           snapshot.CreatedAt.Time,
 		State:           api.Paused,
-		EnvdVersion:     lastSnapshot.EnvBuild.EnvdVersion,
-		EnvdAccessToken: sbxAccessToken,
+		EnvdVersion:     build.EnvdVersion,
+		EnvdAccessToken: envdAccessToken,
 	}
 
-	if lastSnapshot.Snapshot.Metadata != nil {
-		metadata := api.SandboxMetadata(lastSnapshot.Snapshot.Metadata)
+	if snapshot.Metadata != nil {
+		metadata := api.SandboxMetadata(snapshot.Metadata)
 		sandbox.Metadata = &metadata
 	}
 
-	c.JSON(http.StatusOK, sandbox)
+	return sandbox
 }

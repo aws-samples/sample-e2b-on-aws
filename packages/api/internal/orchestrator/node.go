@@ -188,6 +188,7 @@ func (o *Orchestrator) GetNodeDetail(nodeID string) *api.NodeDetail {
 				Alias:      sbx.Instance.Alias,
 				ClientID:   nodeID,
 				CpuCount:   api.CPUCount(sbx.VCpu),
+				DiskSizeMB: sbx.TotalDiskSizeMB,
 				MemoryMB:   api.MemoryMB(sbx.RamMB),
 				EndAt:      sbx.GetEndTime(),
 				Metadata:   metadata,
