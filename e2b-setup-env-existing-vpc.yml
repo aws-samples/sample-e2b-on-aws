@@ -1520,7 +1520,7 @@ Outputs:
     Description: Cluster-specific OTEL customer exporter endpoint
     Value: !Ref OtelCustomerEndpoint
     Export:
-      Name: !Sub "${AWS::StackName}-otel_customer_endpoint"
+      Name: !Sub "${AWS::StackName}-OTELCUSTOMERENDPOINT"
 
   ARCHITECTURE:
     Description: E2B Cluster CPU Architecture

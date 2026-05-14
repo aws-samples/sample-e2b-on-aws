@@ -33,6 +33,12 @@ setup_environment() {
     echo "$key=${CFN_OUTPUTS[$key]}" >> /opt/config.properties
   done
 
+  # Keep the CloudFormation export name alphanumeric-only, but normalize it
+  # back to the lowercase config key expected by Terraform/Nomad bootstrap.
+  if [[ -n "${CFN_OUTPUTS[OTELCUSTOMERENDPOINT]:-}" ]]; then
+    echo "otel_customer_endpoint=${CFN_OUTPUTS[OTELCUSTOMERENDPOINT]}" >> /opt/config.properties
+  fi
+
   SUBNET1=$(grep "^CFNPRIVATESUBNET1=" /opt/config.properties | cut -d= -f2)
   SUBNET2=$(grep "^CFNPRIVATESUBNET2=" /opt/config.properties | cut -d= -f2)
   AZ1=$(aws ec2 describe-subnets --subnet-ids $SUBNET1 --query 'Subnets[*].[AvailabilityZone]' --output text)
