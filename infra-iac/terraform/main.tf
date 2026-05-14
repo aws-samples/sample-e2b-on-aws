@@ -1714,3 +1714,405 @@ resource "aws_autoscaling_group" "build" {
     }
   }
 }
+
+# =========================================================
+# NETWORK ACLs — Tier-level isolation (Public / Private / Data)
+# =========================================================
+
+data "aws_cloudformation_stack" "e2b" {
+  name = var.prefix
+}
+
+locals {
+  data_subnet_ids = [
+    data.aws_cloudformation_stack.e2b.outputs["CFNDATASUBNET1"],
+    data.aws_cloudformation_stack.e2b.outputs["CFNDATASUBNET2"],
+  ]
+}
+
+data "aws_subnet" "data" {
+  for_each = toset(local.data_subnet_ids)
+  id       = each.value
+}
+
+data "aws_subnet" "public" {
+  for_each = toset(var.VPC.public_subnets)
+  id       = each.value
+}
+
+data "aws_subnet" "private" {
+  for_each = toset(var.VPC.private_subnets)
+  id       = each.value
+}
+
+locals {
+  data_subnet_cidrs    = [for id in local.data_subnet_ids : data.aws_subnet.data[id].cidr_block]
+  public_subnet_cidrs  = [for id in var.VPC.public_subnets : data.aws_subnet.public[id].cidr_block]
+  private_subnet_cidrs = [for id in var.VPC.private_subnets : data.aws_subnet.private[id].cidr_block]
+  rfc1918_deny         = ["10.0.0.0/8", "172.16.0.0/12"]
+}
+
+# ---------------------------------------------------------
+# PUBLIC NACL
+# ---------------------------------------------------------
+resource "aws_network_acl" "public" {
+  vpc_id     = var.VPC.id
+  subnet_ids = var.VPC.public_subnets
+
+  ingress {
+    rule_no    = 100
+    protocol   = "tcp"
+    action     = "allow"
+    cidr_block = "0.0.0.0/0"
+    from_port  = 80
+    to_port    = 80
+  }
+  ingress {
+    rule_no    = 110
+    protocol   = "tcp"
+    action     = "allow"
+    cidr_block = "0.0.0.0/0"
+    from_port  = 443
+    to_port    = 443
+  }
+  ingress {
+    rule_no    = 120
+    protocol   = "tcp"
+    action     = "allow"
+    cidr_block = "0.0.0.0/0"
+    from_port  = 1024
+    to_port    = 65535
+  }
+  dynamic "ingress" {
+    for_each = local.private_subnet_cidrs
+    content {
+      rule_no    = 130 + index(local.private_subnet_cidrs, ingress.value)
+      protocol   = "-1"
+      action     = "allow"
+      cidr_block = ingress.value
+      from_port  = 0
+      to_port    = 0
+    }
+  }
+  ingress {
+    rule_no    = 32766
+    protocol   = "-1"
+    action     = "deny"
+    cidr_block = "0.0.0.0/0"
+    from_port  = 0
+    to_port    = 0
+  }
+
+  dynamic "egress" {
+    for_each = local.private_subnet_cidrs
+    content {
+      rule_no    = 100 + index(local.private_subnet_cidrs, egress.value)
+      protocol   = "-1"
+      action     = "allow"
+      cidr_block = egress.value
+      from_port  = 0
+      to_port    = 0
+    }
+  }
+  egress {
+    rule_no    = 110
+    protocol   = "tcp"
+    action     = "allow"
+    cidr_block = "0.0.0.0/0"
+    from_port  = 80
+    to_port    = 80
+  }
+  egress {
+    rule_no    = 111
+    protocol   = "tcp"
+    action     = "allow"
+    cidr_block = "0.0.0.0/0"
+    from_port  = 443
+    to_port    = 443
+  }
+  egress {
+    rule_no    = 120
+    protocol   = "tcp"
+    action     = "allow"
+    cidr_block = "0.0.0.0/0"
+    from_port  = 1024
+    to_port    = 65535
+  }
+  dynamic "egress" {
+    for_each = local.rfc1918_deny
+    content {
+      rule_no    = 200 + index(local.rfc1918_deny, egress.value)
+      protocol   = "-1"
+      action     = "deny"
+      cidr_block = egress.value
+      from_port  = 0
+      to_port    = 0
+    }
+  }
+  egress {
+    rule_no    = 32766
+    protocol   = "-1"
+    action     = "deny"
+    cidr_block = "0.0.0.0/0"
+    from_port  = 0
+    to_port    = 0
+  }
+
+  tags = merge(local.common_tags, { Name = "${var.prefix}-nacl-public" })
+}
+
+# ---------------------------------------------------------
+# PRIVATE NACL
+# ---------------------------------------------------------
+resource "aws_network_acl" "private" {
+  vpc_id     = var.VPC.id
+  subnet_ids = var.VPC.private_subnets
+
+  dynamic "ingress" {
+    for_each = local.private_subnet_cidrs
+    content {
+      rule_no    = 100 + index(local.private_subnet_cidrs, ingress.value)
+      protocol   = "-1"
+      action     = "allow"
+      cidr_block = ingress.value
+      from_port  = 0
+      to_port    = 0
+    }
+  }
+  dynamic "ingress" {
+    for_each = local.public_subnet_cidrs
+    content {
+      rule_no    = 110 + index(local.public_subnet_cidrs, ingress.value)
+      protocol   = "-1"
+      action     = "allow"
+      cidr_block = ingress.value
+      from_port  = 0
+      to_port    = 0
+    }
+  }
+  dynamic "ingress" {
+    for_each = local.data_subnet_cidrs
+    content {
+      rule_no    = 120 + index(local.data_subnet_cidrs, ingress.value)
+      protocol   = "tcp"
+      action     = "allow"
+      cidr_block = ingress.value
+      from_port  = 1024
+      to_port    = 65535
+    }
+  }
+  ingress {
+    rule_no    = 130
+    protocol   = "tcp"
+    action     = "allow"
+    cidr_block = "0.0.0.0/0"
+    from_port  = 1024
+    to_port    = 65535
+  }
+  ingress {
+    rule_no    = 131
+    protocol   = "udp"
+    action     = "allow"
+    cidr_block = "0.0.0.0/0"
+    from_port  = 1024
+    to_port    = 65535
+  }
+  ingress {
+    rule_no    = 32766
+    protocol   = "-1"
+    action     = "deny"
+    cidr_block = "0.0.0.0/0"
+    from_port  = 0
+    to_port    = 0
+  }
+
+  dynamic "egress" {
+    for_each = local.private_subnet_cidrs
+    content {
+      rule_no    = 100 + index(local.private_subnet_cidrs, egress.value)
+      protocol   = "-1"
+      action     = "allow"
+      cidr_block = egress.value
+      from_port  = 0
+      to_port    = 0
+    }
+  }
+  dynamic "egress" {
+    for_each = local.data_subnet_cidrs
+    content {
+      rule_no    = 110 + index(local.data_subnet_cidrs, egress.value)
+      protocol   = "-1"
+      action     = "allow"
+      cidr_block = egress.value
+      from_port  = 0
+      to_port    = 0
+    }
+  }
+  egress {
+    rule_no    = 120
+    protocol   = "tcp"
+    action     = "allow"
+    cidr_block = "0.0.0.0/0"
+    from_port  = 443
+    to_port    = 443
+  }
+  egress {
+    rule_no    = 121
+    protocol   = "tcp"
+    action     = "allow"
+    cidr_block = "0.0.0.0/0"
+    from_port  = 80
+    to_port    = 80
+  }
+  egress {
+    rule_no    = 130
+    protocol   = "udp"
+    action     = "allow"
+    cidr_block = "0.0.0.0/0"
+    from_port  = 53
+    to_port    = 53
+  }
+  egress {
+    rule_no    = 131
+    protocol   = "tcp"
+    action     = "allow"
+    cidr_block = "0.0.0.0/0"
+    from_port  = 53
+    to_port    = 53
+  }
+  egress {
+    rule_no    = 132
+    protocol   = "udp"
+    action     = "allow"
+    cidr_block = "0.0.0.0/0"
+    from_port  = 123
+    to_port    = 123
+  }
+  dynamic "egress" {
+    for_each = local.public_subnet_cidrs
+    content {
+      rule_no    = 140 + index(local.public_subnet_cidrs, egress.value)
+      protocol   = "tcp"
+      action     = "allow"
+      cidr_block = egress.value
+      from_port  = 1024
+      to_port    = 65535
+    }
+  }
+  dynamic "egress" {
+    for_each = local.rfc1918_deny
+    content {
+      rule_no    = 200 + index(local.rfc1918_deny, egress.value)
+      protocol   = "-1"
+      action     = "deny"
+      cidr_block = egress.value
+      from_port  = 0
+      to_port    = 0
+    }
+  }
+  egress {
+    rule_no    = 32766
+    protocol   = "-1"
+    action     = "deny"
+    cidr_block = "0.0.0.0/0"
+    from_port  = 0
+    to_port    = 0
+  }
+
+  tags = merge(local.common_tags, { Name = "${var.prefix}-nacl-private" })
+}
+
+# ---------------------------------------------------------
+# DATA NACL
+# ---------------------------------------------------------
+resource "aws_network_acl" "data" {
+  vpc_id     = var.VPC.id
+  subnet_ids = local.data_subnet_ids
+
+  dynamic "ingress" {
+    for_each = local.public_subnet_cidrs
+    content {
+      rule_no    = 90 + index(local.public_subnet_cidrs, ingress.value)
+      protocol   = "-1"
+      action     = "deny"
+      cidr_block = ingress.value
+      from_port  = 0
+      to_port    = 0
+    }
+  }
+  dynamic "ingress" {
+    for_each = local.private_subnet_cidrs
+    content {
+      rule_no    = 100 + index(local.private_subnet_cidrs, ingress.value)
+      protocol   = "-1"
+      action     = "allow"
+      cidr_block = ingress.value
+      from_port  = 0
+      to_port    = 0
+    }
+  }
+  dynamic "ingress" {
+    for_each = local.data_subnet_cidrs
+    content {
+      rule_no    = 110 + index(local.data_subnet_cidrs, ingress.value)
+      protocol   = "-1"
+      action     = "allow"
+      cidr_block = ingress.value
+      from_port  = 0
+      to_port    = 0
+    }
+  }
+  ingress {
+    rule_no    = 32766
+    protocol   = "-1"
+    action     = "deny"
+    cidr_block = "0.0.0.0/0"
+    from_port  = 0
+    to_port    = 0
+  }
+
+  dynamic "egress" {
+    for_each = local.private_subnet_cidrs
+    content {
+      rule_no    = 100 + index(local.private_subnet_cidrs, egress.value)
+      protocol   = "tcp"
+      action     = "allow"
+      cidr_block = egress.value
+      from_port  = 1024
+      to_port    = 65535
+    }
+  }
+  dynamic "egress" {
+    for_each = local.data_subnet_cidrs
+    content {
+      rule_no    = 110 + index(local.data_subnet_cidrs, egress.value)
+      protocol   = "-1"
+      action     = "allow"
+      cidr_block = egress.value
+      from_port  = 0
+      to_port    = 0
+    }
+  }
+  dynamic "egress" {
+    for_each = local.rfc1918_deny
+    content {
+      rule_no    = 200 + index(local.rfc1918_deny, egress.value)
+      protocol   = "-1"
+      action     = "deny"
+      cidr_block = egress.value
+      from_port  = 0
+      to_port    = 0
+    }
+  }
+  egress {
+    rule_no    = 32766
+    protocol   = "-1"
+    action     = "deny"
+    cidr_block = "0.0.0.0/0"
+    from_port  = 0
+    to_port    = 0
+  }
+
+  tags = merge(local.common_tags, { Name = "${var.prefix}-nacl-data" })
+}
+
