@@ -229,7 +229,10 @@ vm.max_map_count=1048576
 net.ipv4.ip_local_reserved_ports = 44313,50001
 
 EOF
-sudo sysctl -p
+# The base AMI can carry legacy per-interface sysctl keys (for example ens5)
+# that may not exist on newly launched instances. Ignore those stale-key errors
+# so bootstrap can continue applying the settings we add here.
+sudo sysctl -e -p
 
 echo "Disabling inotify for NBD devices"
 # https://lore.kernel.org/lkml/20220422054224.19527-1-matthew.ruffell@canonical.com/
