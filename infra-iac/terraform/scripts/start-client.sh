@@ -1,9 +1,5 @@
 #!/usr/bin/env bash
 
-# This script is meant to be run in the User Data of each EC2 Instance while it's booting. The script uses the
-# run-nomad and run-consul scripts to configure and start Nomad and Consul in client mode. Note that this script
-# assumes it's running in an AMI built from the Packer template in examples/nomad-consul-ami/nomad-consul.json.
-
 echo "gatewaydevops" > /var/lib/teleport/team
 chown root:root /var/lib/teleport/team
 chmod 0644 /var/lib/teleport/team
@@ -12,9 +8,7 @@ systemctl start teleport
 
 set -euo pipefail
 
-# Set timestamp format
 PS4='[\D{%Y-%m-%d %H:%M:%S}] '
-# Enable command tracing
 set -x
 
   while sudo fuser /var/lib/apt/lists/lock >/dev/null 2>&1 || \
@@ -26,11 +20,8 @@ set -x
 sudo apt-get -o DPkg::Lock::Timeout=300 update
 sudo apt-get -o DPkg::Lock::Timeout=300 install -y amazon-ecr-credential-helper nvme-cli
 
-# Send the log output from this script to user-data.log, syslog, and the console
-# Inspired by https://alestic.com/2010/12/ec2-user-data-output/
 exec > >(tee /var/log/user-data.log | logger -t user-data -s 2>/dev/console) 2>&1
 
-# Add cache disk for orchestrator and swapfile
 MOUNT_POINT="/orchestrator"
 
 INSTANCE_TYPE="${INSTANCE_TYPE}"
@@ -43,9 +34,6 @@ export AWS_AVAILABILITY_ZONE=$(aws ec2 describe-instances \
     --output text --region "${AWS_REGION}")
 echo "Availability Zone: $AWS_AVAILABILITY_ZONE"
 
-
-
-# Use case statement to check if multi-disk LVM is supported
 USE_LVM=false
 case "$INSTANCE_TYPE" in
     m5d.metal|r5d.metal|m5dn.metal|r5dn.metal|i3.metal|i3en.metal)
@@ -57,21 +45,16 @@ echo "USE_LVM=$USE_LVM"
 if [[ "$USE_LVM" == "true" ]]; then
     echo "Instance type $INSTANCE_TYPE supports multiple local NVMe disks, using LVM..."
 
-    # Install LVM2 tools (if not already installed)
     if ! command -v pvcreate &>/dev/null; then
         apt-get -o DPkg::Lock::Timeout=300 update && apt-get -o DPkg::Lock::Timeout=300 install -y lvm2
     fi
 
-    # Find all local NVMe instance store devices (excluding EBS volumes)
     NVME_DEVICES=()
     for dev in /dev/nvme*n1; do
         if [[ -b "$dev" ]]; then
-            # Check if it is instance store (not EBS)
-            # EBS volume serial numbers typically start with "vol"
             SERIAL=$(nvme id-ctrl "$dev" 2>/dev/null | grep -i "sn" | awk '{print $3}')
 
             if [[ ! "$SERIAL" =~ ^vol ]]; then
-                # Ensure it is not the root volume
                 ROOT_DEV=$(df / | tail -1 | awk '{print $1}' | sed 's/p[0-9]*$//' | sed 's/[0-9]*$//')
                 if [[ "$dev" != "$ROOT_DEV" ]]; then
                     NVME_DEVICES+=("$dev")
@@ -90,39 +73,32 @@ if [[ "$USE_LVM" == "true" ]]; then
         VG_NAME="vg_orchestrator"
         LV_NAME="lv_orchestrator"
 
-        # Clean up any existing old configuration
         if vgdisplay $VG_NAME &>/dev/null; then
             echo "Removing existing volume group $VG_NAME..."
             lvremove -f /dev/$VG_NAME/$LV_NAME 2>/dev/null || true
             vgremove -f $VG_NAME 2>/dev/null || true
         fi
 
-        # Clean up old signatures on devices
         for dev in "$${NVME_DEVICES[@]}"; do
             wipefs -a "$dev" 2>/dev/null || true
             pvremove -f "$dev" 2>/dev/null || true
         done
 
-        # Step 1: Create physical volumes (PV)
         echo "Creating physical volumes..."
         for dev in "$${NVME_DEVICES[@]}"; do
             pvcreate -f "$dev"
             echo "  Created PV on $dev"
         done
 
-        # Step 2: Create volume group (VG)
         echo "Creating volume group $VG_NAME..."
         vgcreate $VG_NAME "$${NVME_DEVICES[@]}"
 
-        # Step 3: Create logical volume (LV) - use 100% free space, striped for better performance
         echo "Creating logical volume $LV_NAME with striping..."
         lvcreate -l 100%FREE -i $NVME_COUNT -I 256K -n $LV_NAME $VG_NAME
 
-        # Set DISK variable to LVM device
         DISK="/dev/$VG_NAME/$LV_NAME"
         echo "LVM logical volume created: $DISK"
 
-        # Display LVM configuration info
         echo "=== LVM Configuration ==="
         pvs
         vgs
@@ -139,7 +115,6 @@ if [[ "$USE_LVM" == "true" ]]; then
 
 else
     echo "Instance type $INSTANCE_TYPE uses single disk mode..."
-    # Dynamically detect data disk: find EBS device that is not the root volume
     ROOT_DEV=$(lsblk -no PKNAME $(findmnt -n -o SOURCE /) | head -1)
     echo "Root device: /dev/$ROOT_DEV"
 
@@ -147,12 +122,10 @@ else
     for dev in /dev/nvme*n1; do
         if [[ -b "$dev" ]]; then
             DEV_NAME=$(basename "$dev")
-            # Skip root volume
             if [[ "$DEV_NAME" == "$ROOT_DEV" ]]; then
                 echo "Skipping root device: $dev"
                 continue
             fi
-            # Confirm it is an EBS volume (serial number starts with vol)
             SERIAL=$(nvme id-ctrl "$dev" 2>/dev/null | grep -i "sn" | awk '{print $3}')
             if [[ "$SERIAL" =~ ^vol ]]; then
                 DISK="$dev"
@@ -171,16 +144,9 @@ fi
 
 echo "Using disk: $DISK"
 
-# Ensure device is not mounted
 sudo umount "$DISK" 2>/dev/null || true
-
-# Step 1: Format the disk with XFS and standard block size
 sudo mkfs.xfs -f -b size=4096 $DISK
-
-# Step 2: Create the mount point
 sudo mkdir -p $MOUNT_POINT
-
-# Step 3: Mount the disk
 sudo mount -o noatime $DISK $MOUNT_POINT
 
 sudo mkdir -p /orchestrator/sandbox
@@ -201,8 +167,6 @@ echo "$SWAPFILE none swap sw 0 0" | sudo tee -a /etc/fstab
 sudo sysctl vm.swappiness=10
 sudo sysctl vm.vfs_cache_pressure=50
 
-# Add tmpfs for snapshotting
-# TODO: Parametrize this
 sudo mkdir -p /mnt/snapshot-cache
 sudo mount -t tmpfs -o size=65G tmpfs /mnt/snapshot-cache
 
@@ -210,34 +174,23 @@ ulimit -n 1048576
 export GOMAXPROCS='nproc'
 
 sudo tee -a /etc/sysctl.conf <<EOF
-# Increase the maximum number of socket connections
 net.core.somaxconn = 65535
 
-# Increase the maximum number of backlogged connections
 net.core.netdev_max_backlog = 65535
 
-# Increase maximum number of TCP sockets
 net.ipv4.tcp_max_syn_backlog = 65535
 
-# Allow forwarding traffic from sandbox namespaces to the host uplink
 net.ipv4.ip_forward = 1
 
-# Increase the maximum number of memory map areas
 vm.max_map_count=1048576
 
-# Reserve static service ports from being used as ephemeral ports
 net.ipv4.ip_local_reserved_ports = 44313,50001
 
 EOF
-# The base AMI can carry legacy per-interface sysctl keys (for example ens5)
-# that may not exist on newly launched instances. Ignore those stale-key errors
-# so bootstrap can continue applying the settings we add here.
 sudo sysctl -e -p
 
 echo "Disabling inotify for NBD devices"
-# https://lore.kernel.org/lkml/20220422054224.19527-1-matthew.ruffell@canonical.com/
 cat <<EOH >/etc/udev/rules.d/97-nbd-device.rules
-# Disable inotify watching of change events for NBD devices
 ACTION=="add|change", KERNEL=="nbd*", OPTIONS:="nowatch"
 EOH
 
@@ -305,10 +258,8 @@ fi
 
 echo "=== $(date -Is) prepend-never-task-rules done ==="
 
-# Create the directory for the fc mounts
 mkdir -p /fc-vm
 
-# Create the mount points for S3 buckets
 envd_dir="/fc-envd"
 mkdir -p $envd_dir
 
@@ -323,7 +274,6 @@ mount-s3 ${FC_ENV_PIPELINE_BUCKET_NAME} $envd_dir --read-only --allow-other --fi
 mount-s3 ${FC_KERNELS_BUCKET_NAME} $kernels_dir --read-only --allow-other --cache /tmp/mp_cache_kernels
 mount-s3 ${FC_VERSIONS_BUCKET_NAME} $fc_versions_dir --read-only --allow-other --file-mode 0755 --cache /tmp/mp_cache_versions
 
-# These variables are passed in via Terraform template interpolation
 aws s3 cp "s3://${SCRIPTS_BUCKET}/run-consul-${RUN_CONSUL_FILE_HASH}.sh" /opt/consul/bin/run-consul.sh
 aws s3 cp "s3://${SCRIPTS_BUCKET}/run-nomad-${RUN_NOMAD_FILE_HASH}.sh" /opt/nomad/bin/run-nomad.sh
 
@@ -331,7 +281,6 @@ chmod +x /opt/consul/bin/run-consul.sh /opt/nomad/bin/run-nomad.sh
 
 mkdir -p /root/docker
 touch /root/docker/config.json
-# export ECR_AUTH_TOKEN=$(aws ecr get-authorization-token --output text --query 'authorizationData[].authorizationToken')
 cat <<EOF >/root/docker/config.json
 {
     "auths": {
@@ -352,14 +301,9 @@ Domains=~consul
 EOF
 systemctl restart systemd-resolved
 
-# Set up huge pages
-# We are not enabling Transparent Huge Pages for now, as they are not swappable and may result in slowdowns + we are not using swap right now.
-# The THP are by default set to madvise
-# We are allocating the hugepages at the start when the memory is not fragmented yet
 echo "[Setting up huge pages]"
 sudo mkdir -p /mnt/hugepages
 mount -t hugetlbfs none /mnt/hugepages
-# Increase proactive compaction to reduce memory fragmentation for using overcomitted huge pages
 
 available_ram=$(grep MemTotal /proc/meminfo | awk '{print $2}') # in KiB
 available_ram=$(($available_ram / 1024))                        # in MiB
@@ -411,7 +355,6 @@ hugepage_size_in_mib=2
 echo "- Huge page size: $hugepage_size_in_mib MiB"
 hugepages=$(($hugepages_ram / $hugepage_size_in_mib))
 
-# This percentage will be permanently allocated for huge pages and in monitoring it will be shown as used.
 base_hugepages_percentage=20
 base_hugepages=$(($hugepages * $base_hugepages_percentage / 100))
 base_hugepages=$(remove_decimal $base_hugepages)
@@ -424,7 +367,6 @@ overcommitment_hugepages=$(remove_decimal $overcommitment_hugepages)
 echo "- Allocating $overcommitment_hugepages huge pages ($overcommitment_hugepages_percentage%) for overcommitment"
 echo $overcommitment_hugepages >/proc/sys/vm/nr_overcommit_hugepages
 
-# Retrieve secrets at runtime from AWS Secrets Manager (trace off to protect secrets)
 set +x
 get_secret() {
   aws secretsmanager get-secret-value --secret-id "$1" --region "${AWS_REGION}" --query SecretString --output text
