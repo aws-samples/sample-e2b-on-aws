@@ -10,6 +10,7 @@ import (
 
 	"github.com/e2b-dev/infra/packages/envd/internal/logs"
 	"github.com/e2b-dev/infra/packages/envd/internal/permissions"
+	"github.com/e2b-dev/infra/packages/shared/pkg/pii"
 )
 
 func (a *API) GetFiles(w http.ResponseWriter, r *http.Request, params GetFilesParams) {
@@ -39,7 +40,7 @@ func (a *API) GetFiles(w http.ResponseWriter, r *http.Request, params GetFilesPa
 			Str("method", r.Method+" "+r.URL.Path).
 			Str(string(logs.OperationIDKey), operationID).
 			Str("path", path).
-			Str("username", params.Username)
+			Str("username", pii.Tag(params.Username))
 
 		if errMsg != nil {
 			l = l.Int("error_code", errorCode)

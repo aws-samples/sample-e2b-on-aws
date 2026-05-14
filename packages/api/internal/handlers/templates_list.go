@@ -10,6 +10,7 @@ import (
 	"github.com/e2b-dev/infra/packages/api/internal/api"
 	"github.com/e2b-dev/infra/packages/api/internal/auth"
 	"github.com/e2b-dev/infra/packages/db/queries"
+	"github.com/e2b-dev/infra/packages/shared/pkg/pii"
 	"github.com/e2b-dev/infra/packages/shared/pkg/telemetry"
 )
 
@@ -71,7 +72,7 @@ func (a *APIStore) GetTemplates(c *gin.Context, params api.GetTemplatesParams) {
 	}
 
 	telemetry.SetAttributes(ctx,
-		attribute.String("user.id", userID.String()),
+		attribute.String("user.id", pii.Tag(userID.String())),
 		telemetry.WithTeamID(team.ID.String()),
 	)
 

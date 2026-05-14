@@ -19,6 +19,7 @@ import (
 	"github.com/e2b-dev/infra/packages/shared/pkg/models"
 	"github.com/e2b-dev/infra/packages/shared/pkg/models/env"
 	"github.com/e2b-dev/infra/packages/shared/pkg/models/envbuild"
+	"github.com/e2b-dev/infra/packages/shared/pkg/pii"
 	"github.com/e2b-dev/infra/packages/shared/pkg/telemetry"
 	"github.com/e2b-dev/infra/packages/shared/pkg/utils"
 )
@@ -59,7 +60,7 @@ func (a *APIStore) PostTemplatesTemplateIDBuildsBuildID(c *gin.Context, template
 	}
 
 	zap.L().Info("successfully got user and team info",
-		zap.String("userID", userID.String()),
+		zap.String("userID", pii.Tag(userID.String())),
 		zap.Int("teamsCount", len(teams)))
 
 	telemetry.ReportEvent(ctx, "started environment build")
@@ -92,7 +93,7 @@ func (a *APIStore) PostTemplatesTemplateIDBuildsBuildID(c *gin.Context, template
 	var team *queries.Team
 	// Check if the user has access to the template
 	zap.L().Info("starting to check user access permissions",
-		zap.String("userID", userID.String()),
+		zap.String("userID", pii.Tag(userID.String())),
 		zap.String("templateTeamID", envDB.TeamID.String()))
 	for _, t := range teams {
 		if t.Team.ID == envDB.TeamID {
@@ -103,7 +104,7 @@ func (a *APIStore) PostTemplatesTemplateIDBuildsBuildID(c *gin.Context, template
 
 	if team == nil {
 		zap.L().Warn("user does not have access to template",
-			zap.String("userID", userID.String()),
+			zap.String("userID", pii.Tag(userID.String())),
 			zap.String("templateID", templateID),
 			zap.String("templateTeamID", envDB.TeamID.String()))
 		a.sendAPIStoreError(c, http.StatusForbidden, "User does not have access to the template")
@@ -114,12 +115,12 @@ func (a *APIStore) PostTemplatesTemplateIDBuildsBuildID(c *gin.Context, template
 	}
 
 	zap.L().Info("user has access to template",
-		zap.String("userID", userID.String()),
+		zap.String("userID", pii.Tag(userID.String())),
 		zap.String("teamID", team.ID.String()),
 		zap.String("templateID", templateID))
 
 	telemetry.SetAttributes(ctx,
-		attribute.String("user.id", userID.String()),
+		attribute.String("user.id", pii.Tag(userID.String())),
 		telemetry.WithTeamID(team.ID.String()),
 		telemetry.WithTemplateID(templateID),
 	)
@@ -307,7 +308,7 @@ func (a *APIStore) PostTemplatesTemplateIDBuildsBuildID(c *gin.Context, template
 	}()
 
 	a.posthog.CreateAnalyticsUserEvent(userID.String(), team.ID.String(), "built environment", posthog.NewProperties().
-		Set("user_id", userID).
+		Set("user_id", pii.Tag(userID.String())).
 		Set("environment", templateID).
 		Set("build_id", buildID).
 		Set("duration", time.Since(startTime).String()).

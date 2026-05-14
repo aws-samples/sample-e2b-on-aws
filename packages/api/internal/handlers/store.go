@@ -34,6 +34,7 @@ import (
 	"github.com/e2b-dev/infra/packages/shared/pkg/db"
 	"github.com/e2b-dev/infra/packages/shared/pkg/env"
 	"github.com/e2b-dev/infra/packages/shared/pkg/models"
+	"github.com/e2b-dev/infra/packages/shared/pkg/pii"
 	"github.com/e2b-dev/infra/packages/shared/pkg/storage"
 	"github.com/e2b-dev/infra/packages/shared/pkg/telemetry"
 )
@@ -356,7 +357,7 @@ func getJWTClaims(secrets []string, token string) (*supabaseClaims, error) {
 
 	for _, secret := range secrets {
 		if len(secret) < minSupabaseJWTSecretLength {
-			zap.L().Warn("jwt secret is too short and will be ignored", zap.Int("min_length", minSupabaseJWTSecretLength), zap.String("secret_start", secret[:min(3, len(secret))]))
+			zap.L().Warn("jwt secret is too short and will be ignored", zap.Int("min_length", minSupabaseJWTSecretLength), zap.String("secret_start", pii.Tag(secret[:min(3, len(secret))])))
 
 			continue
 		}

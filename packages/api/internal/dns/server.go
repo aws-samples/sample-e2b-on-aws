@@ -16,6 +16,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/e2b-dev/infra/packages/shared/pkg/logger"
+	"github.com/e2b-dev/infra/packages/shared/pkg/pii"
 	"github.com/e2b-dev/infra/packages/shared/pkg/smap"
 )
 
@@ -105,7 +106,7 @@ func (d *DNS) Get(ctx context.Context, sandboxID string) net.IP {
 	addr := net.ParseIP(res)
 	if addr == nil {
 		if res != "" {
-			zap.L().Error("malformed address in cache", zap.Bool("local", d.local != nil), zap.String("addr", res))
+			zap.L().Error("malformed address in cache", zap.Bool("local", d.local != nil), zap.String("addr", pii.Tag(res)))
 		}
 
 		addr = net.ParseIP(defaultRoutingIP)

@@ -20,6 +20,7 @@ import (
 	"github.com/e2b-dev/infra/packages/shared/pkg/models/env"
 	"github.com/e2b-dev/infra/packages/shared/pkg/models/envalias"
 	"github.com/e2b-dev/infra/packages/shared/pkg/models/envbuild"
+	"github.com/e2b-dev/infra/packages/shared/pkg/pii"
 	"github.com/e2b-dev/infra/packages/shared/pkg/schema"
 	"github.com/e2b-dev/infra/packages/shared/pkg/telemetry"
 )
@@ -144,7 +145,7 @@ func (a *APIStore) TemplateRequestBuild(c *gin.Context, templateID api.TemplateI
 	}
 
 	telemetry.SetAttributes(ctx,
-		attribute.String("user.id", userID.String()),
+		attribute.String("user.id", pii.Tag(userID.String())),
 		attribute.String("env.team.id", team.ID.String()),
 		attribute.String("env.team.name", team.Name),
 		telemetry.WithTemplateID(templateID),

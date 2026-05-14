@@ -17,6 +17,7 @@ import (
 	"github.com/e2b-dev/infra/packages/shared/pkg/models"
 	"github.com/e2b-dev/infra/packages/shared/pkg/models/env"
 	"github.com/e2b-dev/infra/packages/shared/pkg/models/envalias"
+	"github.com/e2b-dev/infra/packages/shared/pkg/pii"
 	"github.com/e2b-dev/infra/packages/shared/pkg/telemetry"
 )
 
@@ -84,7 +85,7 @@ func (a *APIStore) PatchTemplatesTemplateID(c *gin.Context, aliasOrTemplateID ap
 	}
 
 	if team == nil {
-		telemetry.ReportError(ctx, "user doesn't have access to the sandbox template", fmt.Errorf("user '%s' doesn't have access to the sandbox template '%s'", userID, cleanedAliasOrEnvID))
+		telemetry.ReportError(ctx, "user doesn't have access to the sandbox template", fmt.Errorf("user '%s' doesn't have access to the sandbox template '%s'", pii.Tag(userID.String()), cleanedAliasOrEnvID))
 
 		a.sendAPIStoreError(c, http.StatusForbidden, fmt.Sprintf("You (%s) don't have access to sandbox template '%s'", userID, cleanedAliasOrEnvID))
 
@@ -106,7 +107,7 @@ func (a *APIStore) PatchTemplatesTemplateID(c *gin.Context, aliasOrTemplateID ap
 	}
 
 	telemetry.SetAttributes(ctx,
-		attribute.String("user.id", userID.String()),
+		attribute.String("user.id", pii.Tag(userID.String())),
 		attribute.String("env.team.id", team.ID.String()),
 		attribute.String("env.team.name", team.Name),
 		telemetry.WithTemplateID(template.ID),
