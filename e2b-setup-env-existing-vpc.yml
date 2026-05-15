@@ -1315,7 +1315,7 @@ Resources:
               mkdir -p /opt/infra/ && cd /opt/infra/
               rm -rf sample-e2b-on-aws
               git clone https://github.com/aws-samples/sample-e2b-on-aws.git && cd sample-e2b-on-aws
-              git checkout ecb1e13efc36842954bd3b0463c822dce64e43ba
+              git checkout 6ccd55b09825ebe770db661515964f1a43ba96b2
             - !Sub |
               # Initialize Configuration
               touch /tmp/e2b.log
