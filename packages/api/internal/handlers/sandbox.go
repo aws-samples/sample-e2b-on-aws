@@ -11,7 +11,9 @@ import (
 
 	"github.com/e2b-dev/infra/packages/api/internal/api"
 	authcache "github.com/e2b-dev/infra/packages/api/internal/cache/auth"
+	resumetiming "github.com/e2b-dev/infra/packages/api/internal/timing"
 	"github.com/e2b-dev/infra/packages/db/queries"
+	"github.com/e2b-dev/infra/packages/shared/pkg/logger"
 	sbxlogger "github.com/e2b-dev/infra/packages/shared/pkg/logger/sandbox"
 	"github.com/e2b-dev/infra/packages/shared/pkg/telemetry"
 )
@@ -34,9 +36,19 @@ func (a *APIStore) startSandbox(
 ) (*api.Sandbox, *api.APIError) {
 	startTime := time.Now()
 	endTime := startTime.Add(timeout)
+	resumetiming.Log("api_start_sandbox_start",
+		logger.WithSandboxID(sandboxID),
+		zap.Bool("is_resume", isResume),
+		zap.String("base_template_id", baseTemplateID),
+		zap.String("template_id", *build.EnvID),
+		zap.Duration("timeout", timeout),
+		zap.Bool("auto_pause", autoPause),
+		zap.Bool("has_preferred_client_id", clientID != nil),
+	)
 
 	// Unique ID for the execution (from start/resume to stop/pause)
 	executionID := uuid.New().String()
+	createStart := time.Now()
 	sandbox, instanceErr := a.orchestrator.CreateSandbox(
 		ctx,
 		sandboxID,
@@ -54,6 +66,13 @@ func (a *APIStore) startSandbox(
 		baseTemplateID,
 		autoPause,
 		envdAccessToken,
+	)
+	resumetiming.Log("api_start_sandbox_orchestrator_create_done",
+		logger.WithSandboxID(sandboxID),
+		zap.Bool("is_resume", isResume),
+		zap.String("execution_id", executionID),
+		zap.Duration("duration", time.Since(createStart)),
+		zap.Bool("ok", instanceErr == nil),
 	)
 	if instanceErr != nil {
 		telemetry.ReportCriticalError(ctx, "error when creating instance", instanceErr.Err)

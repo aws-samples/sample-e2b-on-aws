@@ -16,6 +16,7 @@ import (
 	"github.com/e2b-dev/infra/packages/api/internal/auth"
 	authcache "github.com/e2b-dev/infra/packages/api/internal/cache/auth"
 	"github.com/e2b-dev/infra/packages/api/internal/cache/instance"
+	resumetiming "github.com/e2b-dev/infra/packages/api/internal/timing"
 	"github.com/e2b-dev/infra/packages/api/internal/utils"
 	"github.com/e2b-dev/infra/packages/db/queries"
 	"github.com/e2b-dev/infra/packages/shared/pkg/logger"
@@ -32,7 +33,24 @@ func getSandboxIDClient(sandboxID string) (string, bool) {
 	return parts[1], true
 }
 
+func resolveResumeClientID(requestedClientID string, pausedNodeID, snapshotOriginNodeID *string) *string {
+	if pausedNodeID != nil && *pausedNodeID != "" {
+		return pausedNodeID
+	}
+
+	if snapshotOriginNodeID != nil && *snapshotOriginNodeID != "" {
+		return snapshotOriginNodeID
+	}
+
+	if requestedClientID != "" {
+		return &requestedClientID
+	}
+
+	return nil
+}
+
 func (a *APIStore) PostSandboxesSandboxIDResume(c *gin.Context, sandboxID api.SandboxID) {
+	handlerStart := time.Now()
 	ctx := c.Request.Context()
 
 	// Get team from context, use TeamContextKey
@@ -42,9 +60,20 @@ func (a *APIStore) PostSandboxesSandboxIDResume(c *gin.Context, sandboxID api.Sa
 	traceID := span.SpanContext().TraceID().String()
 	c.Set("traceID", traceID)
 
+	resumetiming.Log("api_resume_request_received",
+		logger.WithSandboxID(string(sandboxID)),
+		zap.String("trace_id", traceID),
+	)
+
 	telemetry.ReportEvent(ctx, "Parsed body")
 
+	parseStart := time.Now()
 	body, err := utils.ParseBody[api.PostSandboxesSandboxIDResumeJSONRequestBody](ctx, c)
+	resumetiming.Log("api_resume_body_parsed",
+		logger.WithSandboxID(string(sandboxID)),
+		zap.Duration("duration", time.Since(parseStart)),
+		zap.Error(err),
+	)
 	if err != nil {
 		a.sendAPIStoreError(c, http.StatusBadRequest, fmt.Sprintf("Error when parsing request: %s", err))
 
@@ -69,10 +98,20 @@ func (a *APIStore) PostSandboxesSandboxIDResume(c *gin.Context, sandboxID api.Sa
 		autoPause = *body.AutoPause
 	}
 
-	clientID, _ := getSandboxIDClient(sandboxID)
+	requestedClientID, _ := getSandboxIDClient(sandboxID)
 	sandboxID = utils.ShortID(sandboxID)
+	resumetiming.Log("api_resume_short_id_resolved",
+		logger.WithSandboxID(sandboxID),
+		zap.String("requested_client_id", requestedClientID),
+	)
 
+	cacheLookupStart := time.Now()
 	sbxCache, err := a.orchestrator.GetSandbox(sandboxID)
+	resumetiming.Log("api_resume_running_cache_lookup_done",
+		logger.WithSandboxID(sandboxID),
+		zap.Duration("duration", time.Since(cacheLookupStart)),
+		zap.Error(err),
+	)
 	if err == nil {
 		zap.L().Debug("Sandbox is already running",
 			logger.WithSandboxID(sandboxID),
@@ -87,19 +126,32 @@ func (a *APIStore) PostSandboxesSandboxIDResume(c *gin.Context, sandboxID api.Sa
 	}
 
 	// Wait for any pausing for this sandbox in progress.
+	waitPauseStart := time.Now()
 	pausedOnNode, err := a.orchestrator.WaitForPause(ctx, sandboxID)
+	resumetiming.Log("api_resume_wait_for_pause_done",
+		logger.WithSandboxID(sandboxID),
+		zap.Duration("duration", time.Since(waitPauseStart)),
+		zap.Error(err),
+	)
 	if err != nil && !errors.Is(err, instance.ErrPausingInstanceNotFound) {
 		a.sendAPIStoreError(c, http.StatusInternalServerError, fmt.Sprintf("Error while pausing sandbox %s: %s", sandboxID, err))
 
 		return
 	}
 
+	var pausedNodeID *string
 	if err == nil {
 		// If the pausing was in progress, prefer to restore on the node where the pausing happened.
-		clientID = pausedOnNode.ID
+		pausedNodeID = &pausedOnNode.ID
 	}
 
+	lastSnapshotStart := time.Now()
 	lastSnapshot, err := a.sqlcDB.GetLastSnapshot(ctx, queries.GetLastSnapshotParams{SandboxID: sandboxID, TeamID: teamInfo.Team.ID})
+	resumetiming.Log("api_resume_last_snapshot_lookup_done",
+		logger.WithSandboxID(sandboxID),
+		zap.Duration("duration", time.Since(lastSnapshotStart)),
+		zap.Error(err),
+	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			zap.L().Debug("Snapshot not found", logger.WithSandboxID(sandboxID))
@@ -128,7 +180,13 @@ func (a *APIStore) PostSandboxesSandboxIDResume(c *gin.Context, sandboxID api.Sa
 
 	var envdAccessToken *string = nil
 	if snap.EnvSecure {
+		tokenStart := time.Now()
 		accessToken, tokenErr := a.getEnvdAccessToken(build.EnvdVersion, sandboxID)
+		resumetiming.Log("api_resume_envd_token_done",
+			logger.WithSandboxID(sandboxID),
+			zap.Duration("duration", time.Since(tokenStart)),
+			zap.Bool("ok", tokenErr == nil),
+		)
 		if tokenErr != nil {
 			zap.L().Error("Secure envd access token error", zap.Error(tokenErr.Err), logger.WithTemplateID(*build.EnvID), logger.WithBuildID(build.ID.String()))
 			a.sendAPIStoreError(c, tokenErr.Code, tokenErr.ClientMsg)
@@ -138,11 +196,16 @@ func (a *APIStore) PostSandboxesSandboxIDResume(c *gin.Context, sandboxID api.Sa
 		envdAccessToken = &accessToken
 	}
 
-	var clientIDPtr *string
-	if clientID != "" {
-		clientIDPtr = &clientID
-	}
+	clientIDPtr := resolveResumeClientID(requestedClientID, pausedNodeID, snap.OriginNodeID)
+	resumetiming.Log("api_resume_preferred_node_resolved",
+		logger.WithSandboxID(sandboxID),
+		zap.String("requested_client_id", requestedClientID),
+		zap.Stringp("paused_node_id", pausedNodeID),
+		zap.Stringp("snapshot_origin_node_id", snap.OriginNodeID),
+		zap.Stringp("preferred_client_id", clientIDPtr),
+	)
 
+	startSandboxStart := time.Now()
 	sbx, createErr := a.startSandbox(
 		ctx,
 		snap.SandboxID,
@@ -158,6 +221,12 @@ func (a *APIStore) PostSandboxesSandboxIDResume(c *gin.Context, sandboxID api.Sa
 		snap.BaseEnvID,
 		autoPause,
 		envdAccessToken,
+	)
+	resumetiming.Log("api_resume_start_sandbox_done",
+		logger.WithSandboxID(sandboxID),
+		zap.Duration("duration", time.Since(startSandboxStart)),
+		zap.Duration("handler_duration", time.Since(handlerStart)),
+		zap.Bool("ok", createErr == nil),
 	)
 
 	if createErr != nil {

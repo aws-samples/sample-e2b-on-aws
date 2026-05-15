@@ -17,6 +17,7 @@ import (
 	authcache "github.com/e2b-dev/infra/packages/api/internal/cache/auth"
 	"github.com/e2b-dev/infra/packages/api/internal/cache/instance"
 	"github.com/e2b-dev/infra/packages/api/internal/sandbox"
+	resumetiming "github.com/e2b-dev/infra/packages/api/internal/timing"
 	"github.com/e2b-dev/infra/packages/api/internal/utils"
 	"github.com/e2b-dev/infra/packages/db/queries"
 	"github.com/e2b-dev/infra/packages/shared/pkg/grpc/orchestrator"
@@ -53,9 +54,26 @@ func (o *Orchestrator) CreateSandbox(
 ) (*api.Sandbox, *api.APIError) {
 	childCtx, childSpan := o.tracer.Start(ctx, "create-sandbox")
 	defer childSpan.End()
+	createStart := time.Now()
+	resumetiming.Log("api_orchestrator_create_start",
+		logger.WithSandboxID(sandboxID),
+		zap.Bool("is_resume", isResume),
+		zap.String("template_id", *build.EnvID),
+		zap.String("base_template_id", baseTemplateID),
+		zap.Duration("timeout", timeout),
+		zap.Bool("has_preferred_client_id", clientID != nil),
+		zap.Stringp("preferred_client_id", clientID),
+		zap.Bool("auto_pause", autoPause),
+	)
 
 	// Check if team has reached max instances
+	reserveStart := time.Now()
 	releaseTeamSandboxReservation, err := o.instanceCache.Reserve(sandboxID, team.Team.ID, team.Tier.ConcurrentInstances)
+	resumetiming.Log("api_orchestrator_reserve_done",
+		logger.WithSandboxID(sandboxID),
+		zap.Duration("duration", time.Since(reserveStart)),
+		zap.Error(err),
+	)
 	if err != nil {
 		var limitErr *instance.ErrSandboxLimitExceeded
 		var alreadyErr *instance.ErrAlreadyBeingStarted
@@ -132,13 +150,21 @@ func (o *Orchestrator) CreateSandbox(
 
 	var node *Node
 
-	if isResume && clientID != nil {
+	nodeAffinityRequested := isResume && clientID != nil
+	if nodeAffinityRequested {
 		telemetry.ReportEvent(childCtx, "Placing sandbox on the node where the snapshot was taken")
 
+		preferredNodeStart := time.Now()
 		node, _ = o.nodes.Get(*clientID)
 		if node != nil && node.Status() != api.NodeStatusReady {
 			node = nil
 		}
+		resumetiming.Log("api_orchestrator_preferred_node_lookup_done",
+			logger.WithSandboxID(sandboxID),
+			zap.String("preferred_client_id", *clientID),
+			zap.Bool("found_ready_node", node != nil),
+			zap.Duration("duration", time.Since(preferredNodeStart)),
+		)
 	}
 
 	attempt := 1
@@ -164,7 +190,14 @@ func (o *Orchestrator) CreateSandbox(
 		}
 
 		if node == nil {
+			nodeLookupStart := time.Now()
 			node, err = o.getLeastBusyNode(childCtx, nodesExcluded)
+			resumetiming.Log("api_orchestrator_node_lookup_done",
+				logger.WithSandboxID(sandboxID),
+				zap.Int("attempt", attempt),
+				zap.Duration("duration", time.Since(nodeLookupStart)),
+				zap.Error(err),
+			)
 			if err != nil {
 				telemetry.ReportError(childCtx, "failed to get least busy node", err)
 
@@ -175,6 +208,17 @@ func (o *Orchestrator) CreateSandbox(
 				}
 			}
 		}
+		resumetiming.Log("api_orchestrator_node_selected",
+			logger.WithSandboxID(sandboxID),
+			zap.Int("attempt", attempt),
+			zap.String("node_id", node.Info.ID),
+			zap.String("node_ip", node.Info.IPAddress),
+			zap.String("orchestrator_address", node.Info.OrchestratorAddress),
+			zap.Bool("is_resume", isResume),
+			zap.Bool("node_affinity_requested", nodeAffinityRequested),
+			zap.Bool("node_affinity_success", nodeAffinityRequested && node.Info.ID == *clientID),
+			zap.Stringp("preferred_client_id", clientID),
+		)
 
 		// To creating a lot of sandboxes at once on the same node
 		node.sbxsInProgress.Insert(sandboxID, &sbxInProgress{
@@ -182,7 +226,16 @@ func (o *Orchestrator) CreateSandbox(
 			CPUs:      build.Vcpu,
 		})
 
+		grpcCreateStart := time.Now()
 		_, err = node.Client.Sandbox.Create(childCtx, sbxRequest)
+		resumetiming.Log("api_orchestrator_grpc_create_done",
+			logger.WithSandboxID(sandboxID),
+			zap.Int("attempt", attempt),
+			zap.String("node_id", node.Info.ID),
+			zap.Bool("was_preferred_node", nodeAffinityRequested && node.Info.ID == *clientID),
+			zap.Duration("duration", time.Since(grpcCreateStart)),
+			zap.Error(err),
+		)
 		// The request is done, we will either add it to the cache or remove it from the node
 		if err == nil {
 			// The sandbox was created successfully
@@ -207,6 +260,10 @@ func (o *Orchestrator) CreateSandbox(
 	defer node.sbxsInProgress.Remove(sandboxID)
 
 	telemetry.SetAttributes(childCtx, attribute.String("node.id", node.Info.ID))
+	telemetry.SetAttributes(childCtx,
+		attribute.Bool("node_affinity_requested", nodeAffinityRequested),
+		attribute.Bool("node_affinity_success", nodeAffinityRequested && node.Info.ID == *clientID),
+	)
 	telemetry.ReportEvent(childCtx, "Created sandbox")
 
 	sbx := api.Sandbox{
@@ -244,7 +301,15 @@ func (o *Orchestrator) CreateSandbox(
 		baseTemplateID,
 	)
 
+	cacheAddStart := time.Now()
 	cacheErr := o.instanceCache.Add(childCtx, instanceInfo, true)
+	resumetiming.Log("api_orchestrator_cache_add_done",
+		logger.WithSandboxID(sandboxID),
+		zap.String("node_id", node.Info.ID),
+		zap.Duration("duration", time.Since(cacheAddStart)),
+		zap.Duration("total_duration", time.Since(createStart)),
+		zap.Error(cacheErr),
+	)
 	if cacheErr != nil {
 		telemetry.ReportError(ctx, "error when adding instance to cache", cacheErr)
 
@@ -259,6 +324,14 @@ func (o *Orchestrator) CreateSandbox(
 			Err:       fmt.Errorf("error when adding instance to cache: %w", cacheErr),
 		}
 	}
+
+	resumetiming.Log("api_orchestrator_create_done",
+		logger.WithSandboxID(sandboxID),
+		zap.String("node_id", node.Info.ID),
+		zap.Bool("node_affinity_requested", nodeAffinityRequested),
+		zap.Bool("node_affinity_success", nodeAffinityRequested && node.Info.ID == *clientID),
+		zap.Duration("total_duration", time.Since(createStart)),
+	)
 
 	return &sbx, nil
 }

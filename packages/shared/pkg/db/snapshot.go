@@ -26,6 +26,7 @@ type SnapshotInfo struct {
 	FirecrackerVersion string
 	EnvdVersion        string
 	EnvdSecured        bool
+	OriginNodeID       *string
 }
 
 // Check if there exists snapshot with the ID, if yes then return a new
@@ -83,6 +84,7 @@ func (db *DB) NewSnapshotBuild(
 			SetMetadata(snapshotConfig.Metadata).
 			SetSandboxStartedAt(snapshotConfig.SandboxStartedAt).
 			SetEnvSecure(snapshotConfig.EnvdSecured).
+			SetNillableOriginNodeID(snapshotConfig.OriginNodeID).
 			Exec(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create snapshot '%s': %w", snapshotConfig.SandboxID, err)
@@ -95,6 +97,7 @@ func (db *DB) NewSnapshotBuild(
 			UpdateOne(s).
 			SetMetadata(snapshotConfig.Metadata).
 			SetSandboxStartedAt(snapshotConfig.SandboxStartedAt).
+			SetNillableOriginNodeID(snapshotConfig.OriginNodeID).
 			Exec(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("failed to update snapshot '%s': %w", snapshotConfig.SandboxID, err)

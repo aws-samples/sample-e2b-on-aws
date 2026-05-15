@@ -84,6 +84,7 @@ type Snapshot struct {
 	BaseEnvID        string
 	SandboxStartedAt pgtype.Timestamptz
 	EnvSecure        bool
+	OriginNodeID     *string
 }
 
 type Team struct {

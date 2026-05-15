@@ -4560,6 +4560,7 @@ type SnapshotMutation struct {
 	metadata           *map[string]string
 	sandbox_started_at *time.Time
 	env_secure         *bool
+	origin_node_id     *string
 	clearedFields      map[string]struct{}
 	env                *string
 	clearedenv         bool
@@ -4924,6 +4925,55 @@ func (m *SnapshotMutation) ResetEnvSecure() {
 	m.env_secure = nil
 }
 
+// SetOriginNodeID sets the "origin_node_id" field.
+func (m *SnapshotMutation) SetOriginNodeID(s string) {
+	m.origin_node_id = &s
+}
+
+// OriginNodeID returns the value of the "origin_node_id" field in the mutation.
+func (m *SnapshotMutation) OriginNodeID() (r string, exists bool) {
+	v := m.origin_node_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldOriginNodeID returns the old "origin_node_id" field's value of the Snapshot entity.
+// If the Snapshot object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SnapshotMutation) OldOriginNodeID(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldOriginNodeID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldOriginNodeID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldOriginNodeID: %w", err)
+	}
+	return oldValue.OriginNodeID, nil
+}
+
+// ClearOriginNodeID clears the value of the "origin_node_id" field.
+func (m *SnapshotMutation) ClearOriginNodeID() {
+	m.origin_node_id = nil
+	m.clearedFields[snapshot.FieldOriginNodeID] = struct{}{}
+}
+
+// OriginNodeIDCleared returns if the "origin_node_id" field was cleared in this mutation.
+func (m *SnapshotMutation) OriginNodeIDCleared() bool {
+	_, ok := m.clearedFields[snapshot.FieldOriginNodeID]
+	return ok
+}
+
+// ResetOriginNodeID resets all changes to the "origin_node_id" field.
+func (m *SnapshotMutation) ResetOriginNodeID() {
+	m.origin_node_id = nil
+	delete(m.clearedFields, snapshot.FieldOriginNodeID)
+}
+
 // ClearEnv clears the "env" edge to the Env entity.
 func (m *SnapshotMutation) ClearEnv() {
 	m.clearedenv = true
@@ -4985,7 +5035,7 @@ func (m *SnapshotMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *SnapshotMutation) Fields() []string {
-	fields := make([]string, 0, 7)
+	fields := make([]string, 0, 8)
 	if m.created_at != nil {
 		fields = append(fields, snapshot.FieldCreatedAt)
 	}
@@ -5006,6 +5056,9 @@ func (m *SnapshotMutation) Fields() []string {
 	}
 	if m.env_secure != nil {
 		fields = append(fields, snapshot.FieldEnvSecure)
+	}
+	if m.origin_node_id != nil {
+		fields = append(fields, snapshot.FieldOriginNodeID)
 	}
 	return fields
 }
@@ -5029,6 +5082,8 @@ func (m *SnapshotMutation) Field(name string) (ent.Value, bool) {
 		return m.SandboxStartedAt()
 	case snapshot.FieldEnvSecure:
 		return m.EnvSecure()
+	case snapshot.FieldOriginNodeID:
+		return m.OriginNodeID()
 	}
 	return nil, false
 }
@@ -5052,6 +5107,8 @@ func (m *SnapshotMutation) OldField(ctx context.Context, name string) (ent.Value
 		return m.OldSandboxStartedAt(ctx)
 	case snapshot.FieldEnvSecure:
 		return m.OldEnvSecure(ctx)
+	case snapshot.FieldOriginNodeID:
+		return m.OldOriginNodeID(ctx)
 	}
 	return nil, fmt.Errorf("unknown Snapshot field %s", name)
 }
@@ -5110,6 +5167,13 @@ func (m *SnapshotMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetEnvSecure(v)
 		return nil
+	case snapshot.FieldOriginNodeID:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetOriginNodeID(v)
+		return nil
 	}
 	return fmt.Errorf("unknown Snapshot field %s", name)
 }
@@ -5139,7 +5203,11 @@ func (m *SnapshotMutation) AddField(name string, value ent.Value) error {
 // ClearedFields returns all nullable fields that were cleared during this
 // mutation.
 func (m *SnapshotMutation) ClearedFields() []string {
-	return nil
+	var fields []string
+	if m.FieldCleared(snapshot.FieldOriginNodeID) {
+		fields = append(fields, snapshot.FieldOriginNodeID)
+	}
+	return fields
 }
 
 // FieldCleared returns a boolean indicating if a field with the given name was
@@ -5152,6 +5220,11 @@ func (m *SnapshotMutation) FieldCleared(name string) bool {
 // ClearField clears the value of the field with the given name. It returns an
 // error if the field is not defined in the schema.
 func (m *SnapshotMutation) ClearField(name string) error {
+	switch name {
+	case snapshot.FieldOriginNodeID:
+		m.ClearOriginNodeID()
+		return nil
+	}
 	return fmt.Errorf("unknown Snapshot nullable field %s", name)
 }
 
@@ -5179,6 +5252,9 @@ func (m *SnapshotMutation) ResetField(name string) error {
 		return nil
 	case snapshot.FieldEnvSecure:
 		m.ResetEnvSecure()
+		return nil
+	case snapshot.FieldOriginNodeID:
+		m.ResetOriginNodeID()
 		return nil
 	}
 	return fmt.Errorf("unknown Snapshot field %s", name)
