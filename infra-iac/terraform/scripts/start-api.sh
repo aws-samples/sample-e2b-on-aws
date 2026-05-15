@@ -7,6 +7,8 @@
 echo "gatewaydevops" > /var/lib/teleport/team
 chown root:root /var/lib/teleport/team
 chmod 0644 /var/lib/teleport/team
+systemctl enable teleport
+systemctl start teleport
 
 set -euo pipefail
 
@@ -84,6 +86,11 @@ DNS=127.0.0.1:8600
 DNSSEC=false
 Domains=~consul
 EOF
+# Some baseline AMIs boot with /etc/resolv.conf linked to the uplink resolver
+# file instead of the systemd stub. Docker tasks inherit that file verbatim,
+# so force the stub symlink here before Nomad starts containers that resolve
+# *.service.consul names.
+ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
 systemctl restart systemd-resolved
 
 # Retrieve secrets at runtime from AWS Secrets Manager (trace off to protect secrets)

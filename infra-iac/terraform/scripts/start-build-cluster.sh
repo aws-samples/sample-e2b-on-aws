@@ -91,6 +91,11 @@ DNS=127.0.0.1:8600
 DNSSEC=false
 Domains=~consul
 EOF
+# Some baseline AMIs boot with /etc/resolv.conf linked to the uplink resolver
+# file instead of the systemd stub. Docker tasks inherit that file verbatim,
+# so force the stub symlink here before Nomad starts containers that resolve
+# *.service.consul names.
+ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
 systemctl restart systemd-resolved
 
 # Set up huge pages
