@@ -1783,6 +1783,14 @@ resource "aws_network_acl" "public" {
     from_port  = 1024
     to_port    = 65535
   }
+  ingress {
+    rule_no    = 125
+    protocol   = "udp"
+    action     = "allow"
+    cidr_block = "0.0.0.0/0"
+    from_port  = 1024
+    to_port    = 65535
+  }
   dynamic "ingress" {
     for_each = local.private_subnet_cidrs
     content {
@@ -1829,6 +1837,14 @@ resource "aws_network_acl" "public" {
     cidr_block = "0.0.0.0/0"
     from_port  = 443
     to_port    = 443
+  }
+  egress {
+    rule_no    = 112
+    protocol   = "udp"
+    action     = "allow"
+    cidr_block = "0.0.0.0/0"
+    from_port  = 53
+    to_port    = 53
   }
   egress {
     rule_no    = 120
