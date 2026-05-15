@@ -238,6 +238,11 @@ processors:
     attributes:
       - action: delete
         key: service.instance.id
+  resource/customer_enrich:
+    attributes:
+      - key: cluster
+        value: "${otel_resource_cluster}"
+        action: upsert
   filter/logs_severity:
     error_mode: ignore
     logs:
@@ -289,11 +294,11 @@ service:
       exporters: [otlphttp/customer]
     logs:
       receivers: [otlp]
-      processors: [filter/logs_severity, batch]
+      processors: [filter/logs_severity, resource/customer_enrich, batch]
       exporters: [otlphttp/customer]
     logs/sandbox:
       receivers: [otlp/sandbox]
-      processors: [batch]
+      processors: [resource/customer_enrich, batch]
       exporters: [otlphttp/customer]
 EOF
 

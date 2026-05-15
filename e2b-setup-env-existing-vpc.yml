@@ -69,6 +69,12 @@ Parameters:
     Type: String
     Description: Cluster-specific OTEL customer exporter endpoint that will be propagated to config.properties
 
+  OtelResourceCluster:
+    Type: String
+    Description: Cluster identifier added as an OTEL resource attribute, for example dg01 or us01
+    AllowedPattern: "^[A-Za-z0-9_.:-]+$"
+    ConstraintDescription: Use only letters, numbers, underscore, dot, colon, or hyphen.
+
   # Architecture Configuration - Choose CPU architecture
   Architecture:
     Description: "Choose between x86_64 (Intel/AMD compatible) and arm64 (AWS
@@ -1529,6 +1535,12 @@ Outputs:
     Value: !Ref OtelCustomerEndpoint
     Export:
       Name: !Sub "${AWS::StackName}-OTELCUSTOMERENDPOINT"
+
+  OTELRESOURCECLUSTER:
+    Description: Cluster identifier added as an OTEL resource attribute
+    Value: !Ref OtelResourceCluster
+    Export:
+      Name: !Sub "${AWS::StackName}-OTELRESOURCECLUSTER"
 
   ARCHITECTURE:
     Description: E2B Cluster CPU Architecture

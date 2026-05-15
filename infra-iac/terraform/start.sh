@@ -125,6 +125,10 @@ if ! grep -q '^otel_customer_endpoint=' "$CONFIG_FILE"; then
     echo "Error: otel_customer_endpoint is missing from $CONFIG_FILE" >&2
     exit 1
 fi
+if ! grep -q '^otel_resource_cluster=' "$CONFIG_FILE"; then
+    echo "Error: otel_resource_cluster is missing from $CONFIG_FILE" >&2
+    exit 1
+fi
 
 # Extract AWSREGION value from the config file
 AWSREGION=$(grep "^AWSREGION=" "$CONFIG_FILE" | cut -d'=' -f2)

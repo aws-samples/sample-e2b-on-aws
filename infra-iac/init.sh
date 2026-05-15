@@ -38,6 +38,9 @@ setup_environment() {
   if [[ -n "${CFN_OUTPUTS[OTELCUSTOMERENDPOINT]:-}" ]]; then
     echo "otel_customer_endpoint=${CFN_OUTPUTS[OTELCUSTOMERENDPOINT]}" >> /opt/config.properties
   fi
+  if [[ -n "${CFN_OUTPUTS[OTELRESOURCECLUSTER]:-}" ]]; then
+    echo "otel_resource_cluster=${CFN_OUTPUTS[OTELRESOURCECLUSTER]}" >> /opt/config.properties
+  fi
 
   SUBNET1=$(grep "^CFNPRIVATESUBNET1=" /opt/config.properties | cut -d= -f2)
   SUBNET2=$(grep "^CFNPRIVATESUBNET2=" /opt/config.properties | cut -d= -f2)
