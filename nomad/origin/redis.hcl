@@ -35,6 +35,7 @@ job "redis" {
 
       config {
         network_mode = "host"
+        dns_servers  = ["127.0.0.53"]
         image        = "redis:7.4.2-alpine"
         ports        = ["redis"]
         args = []

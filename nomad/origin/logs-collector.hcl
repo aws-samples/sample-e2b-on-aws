@@ -38,6 +38,7 @@ job "logs-collector" {
 
       config {
         network_mode = "host"
+        dns_servers  = ["127.0.0.53"]
         image        = "timberio/vector:0.44.0-alpine"
         auth_soft_fail = true
         ports = [

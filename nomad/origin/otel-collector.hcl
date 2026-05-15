@@ -49,6 +49,7 @@ job "otel-collector" {
 
       config {
         network_mode = "host"
+        dns_servers  = ["127.0.0.53"]
         image        = "otel/opentelemetry-collector-contrib:0.130.0"
         auth_soft_fail = true
         volumes = [

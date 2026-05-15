@@ -6,8 +6,6 @@
 echo "gatewaydevops" > /var/lib/teleport/team
 chown root:root /var/lib/teleport/team
 chmod 0644 /var/lib/teleport/team
-systemctl enable teleport
-systemctl start teleport
 
 set -e
 

@@ -93,6 +93,7 @@ EOH
 
       config {
         network_mode = "host"
+        dns_servers  = ["127.0.0.53"]
         image        = "${account_id}.dkr.ecr.${AWSREGION}.amazonaws.com/e2b-orchestration/api:${IMAGE_TAG}"
         ports        = ["api"]
         args         = [
