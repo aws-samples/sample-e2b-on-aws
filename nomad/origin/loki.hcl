@@ -30,7 +30,6 @@ job "loki" {
 
       config {
         network_mode = "host"
-        dns_servers  = ["127.0.0.53"]
         image = "grafana/loki:2.9.8"
         auth_soft_fail = true
         args = [
