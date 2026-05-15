@@ -278,19 +278,19 @@ service:
   pipelines:
     metrics:
       receivers: [otlp]
-      processors: [filter/otlp, resourcedetection, transform/set-name, batch]
+      processors: [filter/otlp, resourcedetection, resource/customer_enrich, transform/set-name, batch]
       exporters: [otlphttp/customer]
     metrics/prometheus:
       receivers: [prometheus]
-      processors: [filter/prometheus, metricstransform, resourcedetection, transform/set-name, batch]
+      processors: [filter/prometheus, metricstransform, resourcedetection, resource/customer_enrich, transform/set-name, batch]
       exporters: [otlphttp/customer]
     metrics/rpc_only:
       receivers: [otlp]
-      processors: [filter/rpc_duration_only, resource/remove_instance, resourcedetection, transform/set-name, batch]
+      processors: [filter/rpc_duration_only, resource/remove_instance, resourcedetection, resource/customer_enrich, transform/set-name, batch]
       exporters: [otlphttp/customer]
     traces:
       receivers: [otlp]
-      processors: [batch]
+      processors: [resource/customer_enrich, batch]
       exporters: [otlphttp/customer]
     logs:
       receivers: [otlp]
