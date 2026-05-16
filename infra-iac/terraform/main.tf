@@ -968,7 +968,10 @@ resource "aws_launch_template" "client" {
     security_groups             = [aws_security_group.client_sg.id]
   }
 
-  user_data = base64encode(templatefile("${path.module}/scripts/start-client.sh", {
+  # The client bootstrap script is materially larger than the other node roles.
+  # Gzip it before base64 so the launch template stays below the EC2 16 KB
+  # user-data limit without having to split the script across more artifacts.
+  user_data = base64gzip(templatefile("${path.module}/scripts/start-client.sh", {
     CLUSTER_TAG_NAME             = "client-cluster"
     SCRIPTS_BUCKET               = aws_s3_bucket.setup_bucket.bucket
     FC_KERNELS_BUCKET_NAME       = aws_s3_bucket.fc_kernels_bucket.bucket
@@ -2131,4 +2134,3 @@ resource "aws_network_acl" "data" {
 
   tags = merge(local.common_tags, { Name = "${var.prefix}-nacl-data" })
 }
-
