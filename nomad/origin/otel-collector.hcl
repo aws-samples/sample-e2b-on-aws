@@ -141,6 +141,12 @@ receivers:
             - targets: ['localhost:4646']
           params:
             format: ['prometheus']
+        - job_name: e2b-hugepages
+          scrape_interval: 15s
+          scrape_timeout: 5s
+          metrics_path: /metrics
+          static_configs:
+            - targets: ['127.0.0.1:9108']
 
 processors:
   batch:
@@ -171,6 +177,7 @@ processors:
       include:
         match_type: strict
         metric_names:
+          - "up"
           - "nomad_client_host_cpu_total_percent"
           - "nomad_client_host_cpu_idle"
           - "nomad_client_host_disk_available"
@@ -181,6 +188,45 @@ processors:
           - "nomad_client_allocs_memory_allocated"
           - "nomad_client_allocs_cpu_total_percent"
           - "nomad_client_allocs_cpu_allocated"
+          - "e2b_host_hugepage_size_bytes"
+          - "e2b_host_hugetlb_bytes"
+          - "e2b_host_mem_available_bytes"
+          - "e2b_host_hugepages_total"
+          - "e2b_host_hugepages_free"
+          - "e2b_host_hugepages_reserved"
+          - "e2b_host_hugepages_surplus"
+          - "e2b_host_hugepages_persistent_configured"
+          - "e2b_host_hugepages_overcommit_configured"
+          - "e2b_host_hugepages_total_bytes"
+          - "e2b_host_hugepages_free_bytes"
+          - "e2b_host_hugepages_reserved_bytes"
+          - "e2b_host_hugepages_surplus_bytes"
+          - "e2b_host_hugepages_free_ratio"
+          - "e2b_host_hugepages_reserved_ratio"
+          - "e2b_host_vmstat_pgfault_total"
+          - "e2b_host_vmstat_pgfault"
+          - "e2b_host_vmstat_pgmajfault_total"
+          - "e2b_host_vmstat_pgmajfault"
+          - "e2b_host_hugetlb_buddy_alloc_success_total"
+          - "e2b_host_hugetlb_buddy_alloc_success"
+          - "e2b_host_hugetlb_buddy_alloc_fail_total"
+          - "e2b_host_hugetlb_buddy_alloc_fail"
+          - "e2b_host_memory_pressure_some_avg10"
+          - "e2b_host_memory_pressure_some_avg60"
+          - "e2b_host_memory_pressure_some_avg300"
+          - "e2b_host_memory_pressure_some_total"
+          - "e2b_host_memory_pressure_some"
+          - "e2b_host_memory_pressure_full_avg10"
+          - "e2b_host_memory_pressure_full_avg60"
+          - "e2b_host_memory_pressure_full_avg300"
+          - "e2b_host_memory_pressure_full_total"
+          - "e2b_host_memory_pressure_full"
+          - "e2b_host_hugepages_free_sandbox_slots"
+          - "e2b_host_hugepages_total_sandbox_slots"
+          - "e2b_host_hugepages_reserved_sandbox_slots"
+          - "e2b_host_numa_hugepages_total"
+          - "e2b_host_numa_hugepages_free"
+          - "e2b_host_numa_hugepages_surplus"
 
 
   metricstransform:

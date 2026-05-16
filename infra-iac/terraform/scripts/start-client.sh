@@ -16,7 +16,7 @@ set -x
   done
 
 sudo apt-get -o DPkg::Lock::Timeout=300 update
-sudo apt-get -o DPkg::Lock::Timeout=300 install -y amazon-ecr-credential-helper nvme-cli rsync
+sudo apt-get -o DPkg::Lock::Timeout=300 install -y amazon-ecr-credential-helper nvme-cli python3 rsync
 
 exec > >(tee /var/log/user-data.log | logger -t user-data -s 2>/dev/console) 2>&1
 
@@ -358,17 +358,233 @@ hugepage_size_in_mib=2
 echo "- Huge page size: $hugepage_size_in_mib MiB"
 hugepages=$(($hugepages_ram / $hugepage_size_in_mib))
 
-base_hugepages_percentage=20
+base_hugepages_percentage=75
 base_hugepages=$(($hugepages * $base_hugepages_percentage / 100))
 base_hugepages=$(remove_decimal $base_hugepages)
-echo "- Allocating $base_hugepages huge pages ($base_hugepages_percentage%) for base usage"
+echo "- Allocating $base_hugepages huge pages ($base_hugepages_percentage%) for persistent base usage"
 echo $base_hugepages >/proc/sys/vm/nr_hugepages
 
 overcommitment_hugepages_percentage=$((100 - $base_hugepages_percentage))
 overcommitment_hugepages=$(($hugepages * $overcommitment_hugepages_percentage / 100))
 overcommitment_hugepages=$(remove_decimal $overcommitment_hugepages)
-echo "- Allocating $overcommitment_hugepages huge pages ($overcommitment_hugepages_percentage%) for overcommitment"
+echo "- Allowing $overcommitment_hugepages huge pages ($overcommitment_hugepages_percentage%) for burst overcommitment"
 echo $overcommitment_hugepages >/proc/sys/vm/nr_overcommit_hugepages
+
+echo "- HugePages state after configuration:"
+grep -E 'HugePages|Hugepagesize|Hugetlb' /proc/meminfo || true
+echo "- /proc/sys/vm/nr_hugepages=$(cat /proc/sys/vm/nr_hugepages)"
+echo "- /proc/sys/vm/nr_overcommit_hugepages=$(cat /proc/sys/vm/nr_overcommit_hugepages)"
+
+echo "[Installing HugePages metrics exporter]"
+hugepages_metrics_exporter=/opt/e2b/bin/hugepages-metrics-exporter.py
+hugepages_metrics_port=9108
+mkdir -p /opt/e2b/bin
+cat >$hugepages_metrics_exporter <<'PY'
+#!/usr/bin/env python3
+import argparse
+import glob
+import os
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+SANDBOX_MEMORY_MIB = 4096
+
+
+def read_int(path):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return int(f.read().strip())
+    except (FileNotFoundError, PermissionError, ValueError):
+        return None
+
+
+def parse_meminfo():
+    values = {}
+    try:
+        with open("/proc/meminfo", "r", encoding="utf-8") as f:
+            for line in f:
+                key, raw_value = line.split(":", 1)
+                parts = raw_value.strip().split()
+                if parts:
+                    values[key] = int(parts[0])
+    except (FileNotFoundError, PermissionError, ValueError):
+        pass
+    return values
+
+
+def parse_vmstat():
+    values = {}
+    try:
+        with open("/proc/vmstat", "r", encoding="utf-8") as f:
+            for line in f:
+                parts = line.strip().split()
+                if len(parts) == 2:
+                    values[parts[0]] = int(parts[1])
+    except (FileNotFoundError, PermissionError, ValueError):
+        pass
+    return values
+
+
+def parse_pressure(path):
+    values = {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                parts = line.strip().split()
+                if not parts:
+                    continue
+                pressure_type = parts[0]
+                for item in parts[1:]:
+                    key, value = item.split("=", 1)
+                    values[(pressure_type, key)] = float(value)
+    except (FileNotFoundError, PermissionError, ValueError):
+        pass
+    return values
+
+
+def label_string(labels):
+    if not labels:
+        return ""
+    pairs = []
+    for key, value in sorted(labels.items()):
+        escaped = str(value).replace("\\", "\\\\").replace('"', '\\"')
+        pairs.append(f'{key}="{escaped}"')
+    return "{" + ",".join(pairs) + "}"
+
+
+def metric(lines, name, value, help_text, labels=None, metric_type="gauge"):
+    if value is None:
+        return
+    if isinstance(value, float):
+        value_text = f"{value:.6f}"
+    else:
+        value_text = str(value)
+    if not any(line.startswith(f"# HELP {name} ") for line in lines):
+        lines.append(f"# HELP {name} {help_text}")
+        lines.append(f"# TYPE {name} {metric_type}")
+    lines.append(f"{name}{label_string(labels)} {value_text}")
+
+
+def collect_metrics():
+    meminfo = parse_meminfo()
+    vmstat = parse_vmstat()
+    memory_pressure = parse_pressure("/proc/pressure/memory")
+    hugepage_size_kib = meminfo.get("Hugepagesize", 2048)
+    hugepage_size_bytes = hugepage_size_kib * 1024
+
+    total = meminfo.get("HugePages_Total")
+    free = meminfo.get("HugePages_Free")
+    reserved = meminfo.get("HugePages_Rsvd")
+    surplus = meminfo.get("HugePages_Surp")
+    hugetlb_kib = meminfo.get("Hugetlb")
+    mem_available_kib = meminfo.get("MemAvailable")
+    overcommit = read_int("/proc/sys/vm/nr_overcommit_hugepages")
+    persistent = read_int("/proc/sys/vm/nr_hugepages")
+
+    pages_per_sandbox = None
+    if hugepage_size_kib > 0:
+        pages_per_sandbox = (SANDBOX_MEMORY_MIB * 1024) // hugepage_size_kib
+
+    lines = []
+    metric(lines, "e2b_host_hugepage_size_bytes", hugepage_size_bytes, "HugeTLB hugepage size in bytes.")
+    metric(lines, "e2b_host_hugetlb_bytes", None if hugetlb_kib is None else hugetlb_kib * 1024, "Total HugeTLB memory reported by /proc/meminfo in bytes.")
+    metric(lines, "e2b_host_mem_available_bytes", None if mem_available_kib is None else mem_available_kib * 1024, "Host MemAvailable reported by /proc/meminfo in bytes.")
+
+    metric(lines, "e2b_host_hugepages_total", total, "Total persistent HugeTLB pages.")
+    metric(lines, "e2b_host_hugepages_free", free, "Free HugeTLB pages.")
+    metric(lines, "e2b_host_hugepages_reserved", reserved, "Reserved HugeTLB pages.")
+    metric(lines, "e2b_host_hugepages_surplus", surplus, "Surplus HugeTLB pages.")
+    metric(lines, "e2b_host_hugepages_persistent_configured", persistent, "Configured persistent HugeTLB pages from /proc/sys/vm/nr_hugepages.")
+    metric(lines, "e2b_host_hugepages_overcommit_configured", overcommit, "Configured HugeTLB overcommit page allowance from /proc/sys/vm/nr_overcommit_hugepages.")
+
+    metric(lines, "e2b_host_hugepages_total_bytes", None if total is None else total * hugepage_size_bytes, "Total persistent HugeTLB pages converted to bytes.")
+    metric(lines, "e2b_host_hugepages_free_bytes", None if free is None else free * hugepage_size_bytes, "Free HugeTLB pages converted to bytes.")
+    metric(lines, "e2b_host_hugepages_reserved_bytes", None if reserved is None else reserved * hugepage_size_bytes, "Reserved HugeTLB pages converted to bytes.")
+    metric(lines, "e2b_host_hugepages_surplus_bytes", None if surplus is None else surplus * hugepage_size_bytes, "Surplus HugeTLB pages converted to bytes.")
+
+    metric(lines, "e2b_host_vmstat_pgfault_total", vmstat.get("pgfault"), "Host page fault counter from /proc/vmstat.", metric_type="counter")
+    metric(lines, "e2b_host_vmstat_pgmajfault_total", vmstat.get("pgmajfault"), "Host major page fault counter from /proc/vmstat.", metric_type="counter")
+    metric(lines, "e2b_host_hugetlb_buddy_alloc_success_total", vmstat.get("htlb_buddy_alloc_success"), "HugeTLB buddy allocator success counter from /proc/vmstat.", metric_type="counter")
+    metric(lines, "e2b_host_hugetlb_buddy_alloc_fail_total", vmstat.get("htlb_buddy_alloc_fail"), "HugeTLB buddy allocator failure counter from /proc/vmstat.", metric_type="counter")
+
+    metric(lines, "e2b_host_memory_pressure_some_avg10", memory_pressure.get(("some", "avg10")), "Memory PSI some avg10 from /proc/pressure/memory.")
+    metric(lines, "e2b_host_memory_pressure_some_avg60", memory_pressure.get(("some", "avg60")), "Memory PSI some avg60 from /proc/pressure/memory.")
+    metric(lines, "e2b_host_memory_pressure_some_avg300", memory_pressure.get(("some", "avg300")), "Memory PSI some avg300 from /proc/pressure/memory.")
+    metric(lines, "e2b_host_memory_pressure_some_total", memory_pressure.get(("some", "total")), "Memory PSI some total stall time from /proc/pressure/memory.", metric_type="counter")
+    metric(lines, "e2b_host_memory_pressure_full_avg10", memory_pressure.get(("full", "avg10")), "Memory PSI full avg10 from /proc/pressure/memory.")
+    metric(lines, "e2b_host_memory_pressure_full_avg60", memory_pressure.get(("full", "avg60")), "Memory PSI full avg60 from /proc/pressure/memory.")
+    metric(lines, "e2b_host_memory_pressure_full_avg300", memory_pressure.get(("full", "avg300")), "Memory PSI full avg300 from /proc/pressure/memory.")
+    metric(lines, "e2b_host_memory_pressure_full_total", memory_pressure.get(("full", "total")), "Memory PSI full total stall time from /proc/pressure/memory.", metric_type="counter")
+
+    if total and total > 0:
+        metric(lines, "e2b_host_hugepages_free_ratio", None if free is None else free / total, "Free HugeTLB pages divided by total persistent pages.")
+        metric(lines, "e2b_host_hugepages_reserved_ratio", None if reserved is None else reserved / total, "Reserved HugeTLB pages divided by total persistent pages.")
+
+    if pages_per_sandbox and pages_per_sandbox > 0:
+        labels = {"sandbox_memory_mib": SANDBOX_MEMORY_MIB}
+        metric(lines, "e2b_host_hugepages_free_sandbox_slots", None if free is None else free // pages_per_sandbox, "Approximate number of 4GiB sandboxes that can be backed by currently free HugeTLB pages.", labels)
+        metric(lines, "e2b_host_hugepages_total_sandbox_slots", None if total is None else total // pages_per_sandbox, "Approximate number of 4GiB sandboxes that can be backed by total persistent HugeTLB pages.", labels)
+        metric(lines, "e2b_host_hugepages_reserved_sandbox_slots", None if reserved is None else reserved // pages_per_sandbox, "Approximate number of 4GiB sandboxes represented by currently reserved HugeTLB pages.", labels)
+
+    hugepage_dir_name = f"hugepages-{hugepage_size_kib}kB"
+    for node_path in sorted(glob.glob("/sys/devices/system/node/node[0-9]*")):
+        node_name = os.path.basename(node_path)
+        node = node_name[4:] if node_name.startswith("node") else node_name
+        hugepage_path = os.path.join(node_path, "hugepages", hugepage_dir_name)
+        labels = {"numa_node": node}
+        metric(lines, "e2b_host_numa_hugepages_total", read_int(os.path.join(hugepage_path, "nr_hugepages")), "NUMA-node HugeTLB total pages.", labels)
+        metric(lines, "e2b_host_numa_hugepages_free", read_int(os.path.join(hugepage_path, "free_hugepages")), "NUMA-node HugeTLB free pages.", labels)
+        metric(lines, "e2b_host_numa_hugepages_surplus", read_int(os.path.join(hugepage_path, "surplus_hugepages")), "NUMA-node HugeTLB surplus pages.", labels)
+
+    return "\n".join(lines) + "\n"
+
+
+class MetricsHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path not in ("/", "/metrics"):
+            self.send_response(404)
+            self.end_headers()
+            return
+        body = collect_metrics().encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, fmt, *args):
+        return
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--listen", default="127.0.0.1")
+    parser.add_argument("--port", type=int, default=9108)
+    args = parser.parse_args()
+    server = ThreadingHTTPServer((args.listen, args.port), MetricsHandler)
+    server.serve_forever()
+
+
+if __name__ == "__main__":
+    main()
+PY
+chmod 0755 $hugepages_metrics_exporter
+cat >/etc/systemd/system/e2b-hugepages-metrics.service <<EOF
+[Unit]
+Description=E2B HugePages metrics exporter
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 $hugepages_metrics_exporter --listen 127.0.0.1 --port $hugepages_metrics_port
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+systemctl daemon-reload
+systemctl enable --now e2b-hugepages-metrics.service
+echo "- HugePages metrics exporter listening on 127.0.0.1:$hugepages_metrics_port"
 
 set +x
 get_secret() {
