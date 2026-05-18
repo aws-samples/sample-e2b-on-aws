@@ -1370,10 +1370,6 @@ Resources:
                     echo "========================================" >> /tmp/e2b.log
                     bash nomad/deploy.sh >> /tmp/e2b.log 2>&1
                     echo "========================================" >> /tmp/e2b.log
-                    echo "Start to execute create_template.sh" >> /tmp/e2b.log
-                    echo "========================================" >> /tmp/e2b.log
-                    bash packages/create_template.sh >> /tmp/e2b.log 2>&1
-                    echo "========================================" >> /tmp/e2b.log
                     echo "E2B Deploy Done!" >> /tmp/e2b.log
                     echo "========================================" >> /tmp/e2b.log
 
