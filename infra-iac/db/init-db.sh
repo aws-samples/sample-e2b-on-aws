@@ -97,6 +97,21 @@ if [ $? -ne 0 ]; then
 fi
 echo "Table structure created successfully!"
 
+# Step 1.1: Apply compatibility fixes for fields added after the bootstrap schema snapshot.
+PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" <<'SQL'
+ALTER TABLE IF EXISTS public.snapshots
+    ADD COLUMN IF NOT EXISTS origin_node_id TEXT NULL;
+
+ALTER TABLE IF EXISTS public.env_builds
+    ALTER COLUMN firecracker_version SET DEFAULT 'v1.12.1_210cbac',
+    ALTER COLUMN kernel_version SET DEFAULT 'vmlinux-6.1.158';
+SQL
+if [ $? -ne 0 ]; then
+    echo "Error: Bootstrap compatibility schema update failed"
+    exit 1
+fi
+echo "Bootstrap compatibility schema update completed successfully!"
+
 # Step 2: Check if database contains data
 TEAM_COUNT=$(PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -t -c "SELECT COUNT(*) FROM teams;" 2>/dev/null || echo "0")
 TEAM_COUNT=$(echo $TEAM_COUNT | tr -d ' ')
