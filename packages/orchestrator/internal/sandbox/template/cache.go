@@ -17,9 +17,9 @@ import (
 // How long to keep the template in the cache since the last access.
 // Should be longer than the maximum possible sandbox lifetime.
 const (
-	templateExpiration = time.Hour * 25
+	templateExpiration = time.Hour * 72
 
-	buildCacheTTL           = time.Hour * 25
+	buildCacheTTL           = time.Hour * 72
 	buildCacheDelayEviction = time.Second * 60
 
 	// buildCacheMaxUsedPercentage the maximum percentage of the cache disk storage
