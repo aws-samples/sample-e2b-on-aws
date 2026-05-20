@@ -743,7 +743,7 @@ Resources:
     Properties:
       InstanceType: !If
         - IsX64
-        - c6i.xlarge
+        - c7i.xlarge
         - c7g.xlarge
       KeyName: !Ref KeyName
       MetadataOptions:
@@ -967,13 +967,15 @@ Outputs:
   # S3 bucket outputs
   CFNE2BBUCKET:
     Description: Unified E2B S3 bucket name
-    Value: !If [HasExternalE2BBucket, !Ref ExistingE2BBucketName, !Ref E2BBucket]
+    Value:
+      !If [HasExternalE2BBucket, !Ref ExistingE2BBucketName, !Ref E2BBucket]
     Export:
       Name: !Sub "${AWS::StackName}-CFNE2BBUCKET"
 
   CFNLOKIBUCKET:
     Description: Loki log storage S3 bucket name
-    Value: !If [HasExternalLokiBucket, !Ref ExistingLokiBucketName, !Ref LokiBucket]
+    Value:
+      !If [HasExternalLokiBucket, !Ref ExistingLokiBucketName, !Ref LokiBucket]
     Export:
       Name: !Sub "${AWS::StackName}-CFNLOKIBUCKET"
 

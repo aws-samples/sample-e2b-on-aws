@@ -852,7 +852,7 @@ Resources:
     Properties:
       InstanceType: !If
         - IsX64
-        - c6i.xlarge
+        - c7i.xlarge
         - c7g.xlarge
       KeyName: !Ref KeyName
       MetadataOptions:
