@@ -217,7 +217,7 @@ func (tm *TemplateManager) DeleteBuilds(ctx context.Context, builds []DeleteBuil
 	return nil
 }
 
-func (tm *TemplateManager) CreateTemplate(t trace.Tracer, ctx context.Context, templateID string, buildID uuid.UUID, kernelVersion, firecrackerVersion, startCommand string, vCpuCount, diskSizeMB, memoryMB int64, readyCommand string, clusterID *uuid.UUID, clusterNodeID *string) error {
+func (tm *TemplateManager) CreateTemplate(t trace.Tracer, ctx context.Context, templateID string, buildID uuid.UUID, kernelVersion, firecrackerVersion, startCommand string, vCpuCount, diskSizeMB, memoryMB int64, readyCommand string, fromImage string, steps []*templatemanagergrpc.TemplateStep, clusterID *uuid.UUID, clusterNodeID *string) error {
 	ctx, span := t.Start(ctx, "create-template",
 		trace.WithAttributes(
 			telemetry.WithTemplateID(templateID),
@@ -271,6 +271,8 @@ func (tm *TemplateManager) CreateTemplate(t trace.Tracer, ctx context.Context, t
 				HugePages:          features.HasHugePages(),
 				StartCommand:       startCommand,
 				ReadyCommand:       readyCommand,
+				FromImage:          fromImage,
+				Steps:              steps,
 			},
 		},
 	)

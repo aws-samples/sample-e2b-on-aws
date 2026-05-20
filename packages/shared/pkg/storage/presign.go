@@ -23,11 +23,10 @@ type S3PresignService struct {
 	client        *s3.Client
 	presignClient *s3.PresignClient
 	bucketName    string
-	keyPrefix     string
 }
 
 // NewS3PresignService creates a new S3PresignService using the default AWS config.
-func NewS3PresignService(ctx context.Context, bucketName string, keyPrefix string) (*S3PresignService, error) {
+func NewS3PresignService(ctx context.Context, bucketName string) (*S3PresignService, error) {
 	cfg, err := config.LoadDefaultConfig(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load AWS config: %w", err)
@@ -40,7 +39,6 @@ func NewS3PresignService(ctx context.Context, bucketName string, keyPrefix strin
 		client:        client,
 		presignClient: presignClient,
 		bucketName:    bucketName,
-		keyPrefix:     keyPrefix,
 	}, nil
 }
 
@@ -50,10 +48,9 @@ func (s *S3PresignService) GeneratePutURL(ctx context.Context, key string, expir
 		expiry = defaultPresignExpiry
 	}
 
-	fullKey := s.keyPrefix + key
 	req, err := s.presignClient.PresignPutObject(ctx, &s3.PutObjectInput{
 		Bucket: &s.bucketName,
-		Key:    &fullKey,
+		Key:    &key,
 	}, s3.WithPresignExpires(expiry))
 	if err != nil {
 		return "", fmt.Errorf("failed to generate presigned PUT URL for key '%s': %w", key, err)
@@ -64,10 +61,9 @@ func (s *S3PresignService) GeneratePutURL(ctx context.Context, key string, expir
 
 // ObjectExists checks whether an object exists in S3 at the given key.
 func (s *S3PresignService) ObjectExists(ctx context.Context, key string) (bool, error) {
-	fullKey := s.keyPrefix + key
 	_, err := s.client.HeadObject(ctx, &s3.HeadObjectInput{
 		Bucket: &s.bucketName,
-		Key:    &fullKey,
+		Key:    &key,
 	})
 	if err != nil {
 		var notFound *types.NotFound
@@ -87,10 +83,9 @@ func (s *S3PresignService) ObjectExists(ctx context.Context, key string) (bool, 
 
 // DownloadToFile downloads an object from S3 to a local file path.
 func (s *S3PresignService) DownloadToFile(ctx context.Context, key string, destPath string) error {
-	fullKey := s.keyPrefix + key
 	resp, err := s.client.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: &s.bucketName,
-		Key:    &fullKey,
+		Key:    &key,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to download object '%s': %w", key, err)
@@ -112,10 +107,9 @@ func (s *S3PresignService) DownloadToFile(ctx context.Context, key string, destP
 
 // DeleteObject deletes an object from S3.
 func (s *S3PresignService) DeleteObject(ctx context.Context, key string) error {
-	fullKey := s.keyPrefix + key
 	_, err := s.client.DeleteObject(ctx, &s3.DeleteObjectInput{
 		Bucket: &s.bucketName,
-		Key:    &fullKey,
+		Key:    &key,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to delete object '%s': %w", key, err)

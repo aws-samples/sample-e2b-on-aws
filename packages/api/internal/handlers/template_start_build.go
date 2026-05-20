@@ -214,6 +214,7 @@ func (a *APIStore) PostTemplatesTemplateIDBuildsBuildID(c *gin.Context, template
 		build.FreeDiskSizeMB,
 		build.RAMMB,
 		readyCmd,
+		"", nil, // v1 handler: no fromImage or steps
 		team.ClusterID,
 		build.ClusterNodeID,
 	)
