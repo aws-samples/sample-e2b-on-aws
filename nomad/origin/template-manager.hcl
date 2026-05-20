@@ -45,6 +45,7 @@ job "template-manager" {
         TEMPLATE_AWS_BUCKET_NAME     = "${BUCKET_E2B}"
         TEMPLATE_BUCKET_NAME         = "${BUCKET_E2B}"
         TEMPLATE_BUCKET_PREFIX       = "fc-templates/"
+        BUILD_CONTEXT_BUCKET_NAME    = "${BUCKET_E2B}"
         OTEL_COLLECTOR_GRPC_ENDPOINT = "localhost:4317"
         ORCHESTRATOR_SERVICES        = "template-manager"
       }
