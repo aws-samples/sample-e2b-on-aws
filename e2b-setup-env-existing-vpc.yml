@@ -450,6 +450,7 @@ Resources:
                   - ec2:DescribeNetworkInterfaces
                   - ec2:DescribeAccountAttributes
                   - ec2:DescribeInternetGateways
+                  - ec2:DescribeInstanceTypes
                   - ec2:DetachVolume
                   - ec2:GetPasswordData
                   - ec2:ModifyImageAttribute
