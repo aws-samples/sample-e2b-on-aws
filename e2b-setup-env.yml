@@ -13,6 +13,8 @@ Metadata:
           default: VPC Configuration
         Parameters:
           - VpcBlock
+          - AvailabilityZone1
+          - AvailabilityZone2
           - PublicSubnet1Block
           - PublicSubnet2Block
           - PrivateSubnet1Block
@@ -30,11 +32,6 @@ Metadata:
           default: Architecture Configuration
         Parameters:
           - Architecture
-      - Label:
-          default: Availability Zone Configuration
-        Parameters:
-          - AvailabilityZone1
-          - AvailabilityZone2
       - Label:
           default: Client Cluster Configuration
         Parameters:
@@ -88,15 +85,6 @@ Parameters:
     Type: String
     Default: ""
 
-  # Availability Zone Configuration - Select AZs that support your instance type
-  AvailabilityZone1:
-    Type: AWS::EC2::AvailabilityZone::Name
-    Description: "First availability zone for subnets (e.g. us-east-1b). Must support the chosen instance type."
-
-  AvailabilityZone2:
-    Type: AWS::EC2::AvailabilityZone::Name
-    Description: "Second availability zone for subnets (e.g. us-east-1c). Must support the chosen instance type."
-
   # Domain Configuration - Settings for SSL certificate and DNS
   BaseDomain:
     Type: String
@@ -111,6 +99,15 @@ Parameters:
     Type: String
     Default: 10.0.0.0/16
     Description: The CIDR range for the VPC. Must be a valid private (RFC 1918) CIDR range with sufficient IP addresses for all components.
+
+  # Availability Zone Configuration - Select AZs that support your instance type
+  AvailabilityZone1:
+    Type: AWS::EC2::AvailabilityZone::Name
+    Description: "First availability zone for subnets (e.g. us-east-1b). Must support the chosen instance type."
+
+  AvailabilityZone2:
+    Type: AWS::EC2::AvailabilityZone::Name
+    Description: "Second availability zone for subnets (e.g. us-east-1c). Must support the chosen instance type."
 
   # Public Subnets - Network segments with internet access for load balancers and bastion hosts
   PublicSubnet1Block:
