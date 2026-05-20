@@ -3,6 +3,7 @@ package template
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/jellydator/ttlcache/v3"
@@ -48,6 +49,10 @@ func NewCache(ctx context.Context) (*Cache, error) {
 	})
 
 	go cache.Start()
+
+	if err := os.RemoveAll(build.DefaultCachePath); err != nil {
+		return nil, fmt.Errorf("failed to remove old build cache directory: %w", err)
+	}
 
 	buildStore, err := build.NewDiffStore(
 		ctx,

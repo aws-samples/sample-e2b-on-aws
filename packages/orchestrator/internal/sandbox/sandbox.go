@@ -33,7 +33,7 @@ import (
 	"github.com/e2b-dev/infra/packages/shared/pkg/utils"
 )
 
-var defaultEnvdTimeout = utils.Must(time.ParseDuration(env.GetEnv("ENVD_TIMEOUT", "10s")))
+var defaultEnvdTimeout = utils.Must(time.ParseDuration(env.GetEnv("ENVD_TIMEOUT", "30s")))
 
 var httpClient = http.Client{
 	Timeout: 10 * time.Second,
@@ -465,6 +465,10 @@ func (s *Sandbox) Close(ctx context.Context, tracer trace.Tracer) error {
 	if fcStopErr != nil {
 		errs = append(errs, fmt.Errorf("failed to stop FC: %w", fcStopErr))
 	}
+
+	// Wait for FC process to fully exit before cleaning up NBD and COW files.
+	// SIGTERM→10s→SIGKILL in Stop() guarantees the process will exit.
+	<-s.process.Exited()
 
 	uffdStopErr := s.Resources.memory.Stop()
 	if uffdStopErr != nil {

@@ -1,9 +1,15 @@
 syntax = "proto3";
 
 import "google/protobuf/empty.proto";
+import "google/protobuf/timestamp.proto";
 
 option go_package = "https://github.com/e2b-dev/infra/template-manager";
 
+message TemplateStep {
+  string type = 1;
+  repeated string args = 2;
+  optional string filesHash = 3;
+}
 
 message TemplateConfig {
   string templateID = 1;
@@ -19,6 +25,9 @@ message TemplateConfig {
   bool hugePages = 9;
 
   string readyCommand = 10;
+
+  string fromImage = 11;
+  repeated TemplateStep steps = 12;
 }
 
 message TemplateCreateRequest {
@@ -47,10 +56,31 @@ enum TemplateBuildState {
   Completed = 2;
 }
 
+enum LogLevel {
+  Debug = 0;
+  Info = 1;
+  Warn = 2;
+  Error = 3;
+}
+
+message TemplateBuildLogEntry {
+  google.protobuf.Timestamp timestamp = 1;
+  string message = 2;
+  LogLevel level = 3;
+  map<string, string> fields = 4;
+}
+
+message TemplateBuildStatusReason {
+  string message = 1;
+  optional string step = 2;
+}
+
 // Logs from template build
 message TemplateBuildStatusResponse {
   TemplateBuildState status = 1;
   TemplateBuildMetadata metadata = 2;
+  repeated TemplateBuildLogEntry logEntries = 3;
+  optional TemplateBuildStatusReason reason = 4;
 }
 
 enum HealthState {

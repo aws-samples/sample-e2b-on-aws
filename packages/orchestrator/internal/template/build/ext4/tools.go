@@ -79,6 +79,10 @@ func Unmount(ctx context.Context, tracer trace.Tracer, rootfsPath string) error 
 	ctx, unmountSpan := tracer.Start(ctx, "unmount-ext4")
 	defer unmountSpan.End()
 
+	// Force flush pending writes before unmount to avoid ext4 bitmap inconsistencies
+	// when the underlying file is read directly (e.g. by resize2fs/e2fsck) after unmount.
+	unix.Sync()
+
 	cmd := exec.CommandContext(ctx, "umount", rootfsPath)
 
 	unmountStdoutWriter := telemetry.NewEventWriter(ctx, "stdout")
