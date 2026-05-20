@@ -77,7 +77,6 @@ job "api" {
         # This is here just because it is required in some part of our code which is transitively imported
         TEMPLATE_BUCKET_NAME          = "skip"
         BUILD_CONTEXT_BUCKET_NAME     = "${BUCKET_E2B}"
-        BUILD_CONTEXT_BUCKET_PREFIX   = "docker-contexts/"
       }
 
       config {
@@ -87,9 +86,7 @@ job "api" {
         args         = [
           "--port", "50001",
         ]
-        volumes = [
-          "/var/run/docker.sock:/var/run/docker.sock",
-        ]
+        volumes = []
       }
     }
   }

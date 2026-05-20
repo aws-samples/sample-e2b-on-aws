@@ -520,10 +520,10 @@ func (a *APIStore) PostV2TemplatesTemplateIDBuildsBuildID(c *gin.Context) {
 		zap.String("templateID", templateID),
 		zap.String("buildID", buildIDStr))
 
-	// Return HTTP 202 immediately — CopyImage + CreateTemplate run in background
+	// Return HTTP 202 immediately — CreateTemplate runs in background
 	c.Status(http.StatusAccepted)
 
-	// Background goroutine: CopyImage → CreateTemplate → SetStatus → BuildStatusSync
+	// Background goroutine: CreateTemplate → SetStatus → BuildStatusSync
 	go func() {
 		// Panic recovery - prevent silent goroutine death
 		defer func() {
