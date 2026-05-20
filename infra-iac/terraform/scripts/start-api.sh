@@ -68,6 +68,7 @@ DNS=127.0.0.1:8600
 DNSSEC=false
 Domains=~consul
 EOF
+ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
 systemctl restart systemd-resolved
 
 # These variables are passed in via Terraform template interpolation
