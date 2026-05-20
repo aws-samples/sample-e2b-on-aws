@@ -5,10 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"time"
 
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 
+	"github.com/e2b-dev/infra/packages/orchestrator/internal/sandbox/lifecycle"
 	"github.com/e2b-dev/infra/packages/shared/pkg/storage/header"
 	"github.com/e2b-dev/infra/packages/shared/pkg/utils"
 )
@@ -18,13 +21,17 @@ const (
 	ChunkSize = 4 * 1024 * 1024 // 4 MB
 )
 
+var chunkerTimingDebug = os.Getenv("E2B_UFFD_TIMING_DEBUG") == "true" || os.Getenv("E2B_UFFD_TIMING_DEBUG") == "1"
+
 type Chunker struct {
 	ctx context.Context
 
 	base  io.ReaderAt
 	cache *Cache
 
-	size int64
+	size      int64
+	blockSize int64
+	stats     *FetchStats
 
 	// TODO: Optimize this so we don't need to keep the fetchers in memory.
 	fetchers *utils.WaitMap
@@ -43,11 +50,13 @@ func NewChunker(
 	}
 
 	chunker := &Chunker{
-		ctx:      ctx,
-		size:     size,
-		base:     base,
-		cache:    cache,
-		fetchers: utils.NewWaitMap(),
+		ctx:       ctx,
+		size:      size,
+		blockSize: blockSize,
+		base:      base,
+		cache:     cache,
+		fetchers:  utils.NewWaitMap(),
+		stats:     &FetchStats{},
 	}
 
 	return chunker, nil
@@ -83,6 +92,7 @@ func (c *Chunker) WriteTo(w io.Writer) (int64, error) {
 func (c *Chunker) Slice(off, length int64) ([]byte, error) {
 	b, err := c.cache.Slice(off, length)
 	if err == nil {
+		c.stats.RecordCacheHit()
 		return b, nil
 	}
 
@@ -90,6 +100,8 @@ func (c *Chunker) Slice(off, length int64) ([]byte, error) {
 		return nil, fmt.Errorf("failed read from cache at offset %d: %w", off, err)
 	}
 
+	c.stats.RecordCacheMiss()
+	missStart := time.Now()
 	chunkErr := c.fetchToCache(off, length)
 	if chunkErr != nil {
 		return nil, fmt.Errorf("failed to ensure data at %d-%d: %w", off, off+length, chunkErr)
@@ -98,6 +110,14 @@ func (c *Chunker) Slice(off, length int64) ([]byte, error) {
 	b, cacheErr := c.cache.Slice(off, length)
 	if cacheErr != nil {
 		return nil, fmt.Errorf("failed to read from cache after ensuring data at %d-%d: %w", off, off+length, cacheErr)
+	}
+
+	if chunkerTimingDebug {
+		zap.L().Info("uffd timing chunker cache miss",
+			zap.Int64("offset", off),
+			zap.Int64("length", length),
+			zap.Duration("miss_duration", time.Since(missStart)),
+		)
 	}
 
 	return b, nil
@@ -131,16 +151,34 @@ func (c *Chunker) fetchToCache(off, length int64) error {
 				default:
 				}
 
+				fetchStart := time.Now()
 				b := make([]byte, ChunkSize)
 
-				_, err := c.base.ReadAt(b, fetchOff)
+				readStart := time.Now()
+				n, err := c.base.ReadAt(b, fetchOff)
+				readDuration := time.Since(readStart)
 				if err != nil && !errors.Is(err, io.EOF) {
 					return fmt.Errorf("failed to read chunk from base %d: %w", fetchOff, err)
 				}
 
+				writeStart := time.Now()
 				_, cacheErr := c.cache.WriteAtWithoutLock(b, fetchOff)
+				writeDuration := time.Since(writeStart)
 				if cacheErr != nil {
 					return fmt.Errorf("failed to write chunk %d to cache: %w", fetchOff, cacheErr)
+				}
+				c.stats.RecordFetch(n, time.Since(fetchStart), readDuration, writeDuration)
+
+				if chunkerTimingDebug {
+					zap.L().Info("uffd timing chunker fetch",
+						zap.Int64("fetch_offset", fetchOff),
+						zap.Int64("chunk_size", ChunkSize),
+						zap.Int("read_bytes", n),
+						zap.Bool("read_eof", errors.Is(err, io.EOF)),
+						zap.Duration("base_read_duration", readDuration),
+						zap.Duration("cache_write_duration", writeDuration),
+						zap.Duration("fetch_duration", time.Since(fetchStart)),
+					)
 				}
 
 				return nil
@@ -156,6 +194,10 @@ func (c *Chunker) fetchToCache(off, length int64) error {
 	}
 
 	return nil
+}
+
+func (c *Chunker) FetchStats(sourceKind string) lifecycle.StorageStats {
+	return c.stats.Snapshot(c.blockSize, sourceKind)
 }
 
 func (c *Chunker) Close() error {

@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 	"time"
+
+	"github.com/e2b-dev/infra/packages/envd/internal/timing"
 )
 
 const (
@@ -101,27 +103,46 @@ func (w *HTTPExporter) doMmdsRequest(ctx context.Context, token string) (*opts, 
 }
 
 func (w *HTTPExporter) waitForMMDS(ctx context.Context) {
+	waitStart := time.Now()
+	if timing.Enabled {
+		fmt.Printf("[envd-timing] event=mmds_wait_start since_start=%s\n", timing.SinceStart())
+	}
+
 	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
+	attempts := 0
 
 	for {
 		select {
 		case <-ctx.Done():
+			if timing.Enabled {
+				fmt.Printf("[envd-timing] event=mmds_wait_context_done attempts=%d duration=%s since_start=%s\n", attempts, time.Since(waitStart), timing.SinceStart())
+			}
 			return
 		case <-ticker.C:
+			attempts++
 			token, err := w.getMMDSToken(ctx)
 			if err != nil {
+				if timing.Enabled && (attempts == 1 || attempts%20 == 0) {
+					fmt.Printf("[envd-timing] event=mmds_token_error attempts=%d duration=%s since_start=%s err=%q\n", attempts, time.Since(waitStart), timing.SinceStart(), err.Error())
+				}
 				fmt.Printf("error getting mmds token: %v\n", err)
 				continue
 			}
 
 			mmdsOpts, err := w.doMmdsRequest(ctx, token)
 			if err != nil {
+				if timing.Enabled && (attempts == 1 || attempts%20 == 0) {
+					fmt.Printf("[envd-timing] event=mmds_opts_error attempts=%d duration=%s since_start=%s err=%q\n", attempts, time.Since(waitStart), timing.SinceStart(), err.Error())
+				}
 				fmt.Printf("error getting mmds opts: %v\n", err)
 				continue
 			}
 
 			if mmdsOpts.Address != "" {
+				if timing.Enabled {
+					fmt.Printf("[envd-timing] event=mmds_wait_done attempts=%d duration=%s since_start=%s\n", attempts, time.Since(waitStart), timing.SinceStart())
+				}
 				return
 			}
 		}

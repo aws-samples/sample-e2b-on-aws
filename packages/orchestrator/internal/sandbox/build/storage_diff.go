@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 
 	"github.com/e2b-dev/infra/packages/orchestrator/internal/sandbox/block"
+	"github.com/e2b-dev/infra/packages/orchestrator/internal/sandbox/lifecycle"
 	"github.com/e2b-dev/infra/packages/shared/pkg/id"
 	storage "github.com/e2b-dev/infra/packages/shared/pkg/storage"
 	"github.com/e2b-dev/infra/packages/shared/pkg/utils"
@@ -21,6 +22,7 @@ type StorageDiff struct {
 	cachePath   string
 	cacheKey    DiffStoreKey
 	storagePath string
+	sourceKind  string
 	blockSize   int64
 	persistence storage.StorageProvider
 }
@@ -40,6 +42,7 @@ func newStorageDiff(
 
 	return &StorageDiff{
 		storagePath: storagePath,
+		sourceKind:  storageSourceKind(persistence),
 		cachePath:   cachePath,
 		chunker:     utils.NewSetOnce[*block.Chunker](),
 		blockSize:   blockSize,
@@ -123,4 +126,13 @@ func (b *StorageDiff) FileSize() (int64, error) {
 	}
 
 	return c.FileSize()
+}
+
+func (b *StorageDiff) FetchStats() lifecycle.StorageStats {
+	c, err := b.chunker.Wait()
+	if err != nil {
+		return lifecycle.StorageStats{SourceKind: b.sourceKind}
+	}
+
+	return c.FetchStats(b.sourceKind)
 }

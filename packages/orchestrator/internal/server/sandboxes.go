@@ -18,6 +18,7 @@ import (
 	"github.com/e2b-dev/infra/packages/orchestrator/internal/config"
 	"github.com/e2b-dev/infra/packages/orchestrator/internal/sandbox"
 	"github.com/e2b-dev/infra/packages/orchestrator/internal/sandbox/build"
+	"github.com/e2b-dev/infra/packages/orchestrator/internal/sandbox/lifecycle"
 	featureflags "github.com/e2b-dev/infra/packages/shared/pkg/feature-flags"
 	"github.com/e2b-dev/infra/packages/shared/pkg/grpc/orchestrator"
 	"github.com/e2b-dev/infra/packages/shared/pkg/logger"
@@ -31,6 +32,9 @@ const (
 )
 
 func (s *server) Create(ctxConn context.Context, req *orchestrator.SandboxCreateRequest) (*orchestrator.SandboxCreateResponse, error) {
+	handlerStart := time.Now()
+	operation := lifecycle.Operation(req.Sandbox.Snapshot)
+	stageTimings := lifecycle.NewStageTimings()
 	ctx, cancel := context.WithTimeoutCause(ctxConn, requestTimeout, fmt.Errorf("request timed out"))
 	defer cancel()
 
@@ -44,6 +48,16 @@ func (s *server) Create(ctxConn context.Context, req *orchestrator.SandboxCreate
 		attribute.String("client.id", s.info.ClientId),
 		attribute.String("envd.version", req.Sandbox.EnvdVersion),
 	)
+	logResumeTiming("orchestrator_create_request_received",
+		logger.WithSandboxID(req.Sandbox.SandboxId),
+		zap.String("operation", operation),
+		zap.String("client_id", s.info.ClientId),
+		zap.String("template_id", req.Sandbox.TemplateId),
+		zap.String("base_template_id", req.Sandbox.BaseTemplateId),
+		zap.Bool("snapshot", req.Sandbox.Snapshot),
+		zap.Time("request_start_time", req.StartTime.AsTime()),
+		zap.Time("request_end_time", req.EndTime.AsTime()),
+	)
 
 	// TODO: Temporary workaround, remove API changes deployed
 	if req.Sandbox.GetExecutionId() == "" {
@@ -56,6 +70,7 @@ func (s *server) Create(ctxConn context.Context, req *orchestrator.SandboxCreate
 		zap.L().Error("soft failing during metrics write feature flag receive", zap.Error(flagErr))
 	}
 
+	resumeStart := time.Now()
 	sbx, cleanup, err := sandbox.ResumeSandbox(
 		childCtx,
 		s.tracer,
@@ -70,6 +85,15 @@ func (s *server) Create(ctxConn context.Context, req *orchestrator.SandboxCreate
 		config.AllowSandboxInternet,
 		metricsWriteFlag,
 	)
+	resumeDuration := stageTimings.Record(childCtx, operation, "orchestrator_resume_sandbox", resumeStart, err)
+	logResumeTiming("orchestrator_resume_sandbox_done",
+		logger.WithSandboxID(req.Sandbox.SandboxId),
+		zap.String("operation", operation),
+		zap.String("client_id", s.info.ClientId),
+		zap.Duration("duration", resumeDuration),
+		zap.Duration("handler_duration", time.Since(handlerStart)),
+		zap.Error(err),
+	)
 	if err != nil {
 		zap.L().Error("failed to create sandbox, cleaning up", zap.Error(err))
 		cleanupErr := cleanup.Run(ctx)
@@ -80,7 +104,16 @@ func (s *server) Create(ctxConn context.Context, req *orchestrator.SandboxCreate
 		return nil, status.Errorf(codes.Internal, "failed to cleanup sandbox: %s", err)
 	}
 
+	cacheInsertStart := time.Now()
 	s.sandboxes.Insert(req.Sandbox.SandboxId, sbx)
+	cacheInsertDuration := stageTimings.Record(childCtx, operation, "orchestrator_cache_insert", cacheInsertStart, nil)
+	logResumeTiming("orchestrator_cache_insert_done",
+		logger.WithSandboxID(req.Sandbox.SandboxId),
+		zap.String("operation", operation),
+		zap.String("client_id", s.info.ClientId),
+		zap.Duration("duration", cacheInsertDuration),
+		zap.Duration("handler_duration", time.Since(handlerStart)),
+	)
 	go func() {
 		ctx, childSpan := s.tracer.Start(context.Background(), "sandbox-create-stop")
 		defer childSpan.End()
@@ -115,6 +148,23 @@ func (s *server) Create(ctxConn context.Context, req *orchestrator.SandboxCreate
 
 		sbxlogger.E(sbx).Info("Sandbox killed")
 	}()
+
+	logResumeTiming("orchestrator_create_response_ready",
+		logger.WithSandboxID(req.Sandbox.SandboxId),
+		zap.String("operation", operation),
+		zap.String("client_id", s.info.ClientId),
+		zap.Duration("handler_duration", time.Since(handlerStart)),
+	)
+
+	fields := []zap.Field{
+		logger.WithSandboxID(req.Sandbox.SandboxId),
+		zap.String("operation", operation),
+		zap.String("client_id", s.info.ClientId),
+		zap.Bool("snapshot", req.Sandbox.Snapshot),
+		zap.Duration("handler_duration", time.Since(handlerStart)),
+	}
+	fields = append(fields, stageTimings.ZapFields()...)
+	zap.L().Info("orchestrator sandbox handler summary", fields...)
 
 	return &orchestrator.SandboxCreateResponse{
 		ClientId: s.info.ClientId,

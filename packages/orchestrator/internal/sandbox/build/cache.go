@@ -4,12 +4,15 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/jellydator/ttlcache/v3"
 	"go.uber.org/zap"
 	"golang.org/x/sys/unix"
+
+	"github.com/e2b-dev/infra/packages/orchestrator/internal/sandbox/lifecycle"
 )
 
 const (
@@ -114,6 +117,26 @@ func (s *DiffStore) Add(d Diff) {
 
 func (s *DiffStore) Has(d Diff) bool {
 	return s.cache.Has(d.CacheKey())
+}
+
+func (s *DiffStore) FetchStats(fileType DiffType) lifecycle.StorageStats {
+	var stats lifecycle.StorageStats
+	suffix := "/" + string(fileType)
+
+	for _, item := range s.cache.Items() {
+		if !strings.HasSuffix(string(item.Key()), suffix) {
+			continue
+		}
+
+		provider, ok := item.Value().(fetchStatsProvider)
+		if !ok {
+			continue
+		}
+
+		stats = stats.Add(provider.FetchStats())
+	}
+
+	return stats
 }
 
 func (s *DiffStore) startDiskSpaceEviction(threshold float64) {

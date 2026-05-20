@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/e2b-dev/infra/packages/orchestrator/internal/sandbox/build"
+	"github.com/e2b-dev/infra/packages/orchestrator/internal/sandbox/lifecycle"
 	"github.com/e2b-dev/infra/packages/shared/pkg/storage"
 	"github.com/e2b-dev/infra/packages/shared/pkg/storage/header"
 )
@@ -115,6 +116,10 @@ func (d *Storage) Slice(off, length int64) ([]byte, error) {
 
 func (d *Storage) Header() *header.Header {
 	return d.header
+}
+
+func (d *Storage) FetchStats() lifecycle.StorageStats {
+	return d.source.FetchStats()
 }
 
 func (d *Storage) Close() error {

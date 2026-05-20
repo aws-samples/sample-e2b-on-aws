@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	filesystemRpc "github.com/e2b-dev/infra/packages/envd/internal/services/filesystem"
 	processRpc "github.com/e2b-dev/infra/packages/envd/internal/services/process"
 	processSpec "github.com/e2b-dev/infra/packages/envd/internal/services/spec/process"
+	"github.com/e2b-dev/infra/packages/envd/internal/timing"
 	"github.com/e2b-dev/infra/packages/envd/internal/utils"
 )
 
@@ -129,6 +131,9 @@ func withCORS(h http.Handler) http.Handler {
 
 func main() {
 	parseFlags()
+	if timing.Enabled {
+		log.Printf("[envd-timing] event=main_after_parse_flags since_start=%s", timing.SinceStart())
+	}
 
 	if versionFlag {
 		fmt.Printf("%s\n", Version)
@@ -148,18 +153,47 @@ func main() {
 	m := chi.NewRouter()
 
 	envLogger := l.With().Str("logger", "envd").Logger()
+	if timing.Enabled {
+		envLogger.Info().
+			Str("event_type", "envd_timing").
+			Str("timing_event", "logger_ready").
+			Dur("since_start", timing.SinceStart()).
+			Msg("envd timing")
+	}
+
 	fsLogger := l.With().Str("logger", "filesystem").Logger()
 	filesystemRpc.Handle(m, &fsLogger)
+	if timing.Enabled {
+		envLogger.Info().
+			Str("event_type", "envd_timing").
+			Str("timing_event", "filesystem_handler_ready").
+			Dur("since_start", timing.SinceStart()).
+			Msg("envd timing")
+	}
 
 	envVars := utils.NewMap[string, string]()
 	envVars.Store("E2B_SANDBOX", "true")
 
 	processLogger := l.With().Str("logger", "process").Logger()
 	processService := processRpc.Handle(m, &processLogger, envVars)
+	if timing.Enabled {
+		envLogger.Info().
+			Str("event_type", "envd_timing").
+			Str("timing_event", "process_handler_ready").
+			Dur("since_start", timing.SinceStart()).
+			Msg("envd timing")
+	}
 
 	service := api.New(&envLogger, envVars)
 	handler := api.HandlerFromMux(service, m)
 	middleware := authn.NewMiddleware(permissions.AuthenticateUsername)
+	if timing.Enabled {
+		envLogger.Info().
+			Str("event_type", "envd_timing").
+			Str("timing_event", "api_handler_ready").
+			Dur("since_start", timing.SinceStart()).
+			Msg("envd timing")
+	}
 
 	s := &http.Server{
 		Handler: withCORS(
@@ -194,7 +228,22 @@ func main() {
 		}
 	}
 
-	err := s.ListenAndServe()
+	listenStart := time.Now()
+	listener, err := net.Listen("tcp", s.Addr)
+	if err != nil {
+		log.Fatalf("error starting listener: %v", err)
+	}
+	if timing.Enabled {
+		envLogger.Info().
+			Str("event_type", "envd_timing").
+			Str("timing_event", "http_listen_ready").
+			Str("address", s.Addr).
+			Dur("listen_duration", time.Since(listenStart)).
+			Dur("since_start", timing.SinceStart()).
+			Msg("envd timing")
+	}
+
+	err = s.Serve(listener)
 	if err != nil {
 		log.Fatalf("error starting server: %v", err)
 	}

@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
+	"github.com/e2b-dev/infra/packages/orchestrator/internal/sandbox/lifecycle"
 	"github.com/e2b-dev/infra/packages/shared/pkg/storage"
 	"github.com/e2b-dev/infra/packages/shared/pkg/storage/header"
 )
@@ -133,4 +134,8 @@ func (b *File) getBuild(buildID *uuid.UUID) (Diff, error) {
 	}
 
 	return source, nil
+}
+
+func (b *File) FetchStats() lifecycle.StorageStats {
+	return b.store.FetchStats(b.fileType)
 }

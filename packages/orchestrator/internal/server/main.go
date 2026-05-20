@@ -12,6 +12,7 @@ import (
 	"github.com/e2b-dev/infra/packages/orchestrator/internal/grpcserver"
 	"github.com/e2b-dev/infra/packages/orchestrator/internal/proxy"
 	"github.com/e2b-dev/infra/packages/orchestrator/internal/sandbox"
+	"github.com/e2b-dev/infra/packages/orchestrator/internal/sandbox/lifecycle"
 	"github.com/e2b-dev/infra/packages/orchestrator/internal/sandbox/nbd"
 	"github.com/e2b-dev/infra/packages/orchestrator/internal/sandbox/network"
 	"github.com/e2b-dev/infra/packages/orchestrator/internal/sandbox/template"
@@ -64,6 +65,7 @@ func New(
 	featureFlags *featureflags.Client,
 ) (*Service, error) {
 	srv := &Service{info: info}
+	lifecycle.Init(tel.MeterProvider)
 
 	templateCache, err := template.NewCache(ctx)
 	if err != nil {

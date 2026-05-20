@@ -14,6 +14,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/e2b-dev/infra/packages/orchestrator/internal/sandbox/block"
+	"github.com/e2b-dev/infra/packages/orchestrator/internal/sandbox/lifecycle"
 	"github.com/e2b-dev/infra/packages/shared/pkg/logger"
 )
 
@@ -44,6 +45,7 @@ type Uffd struct {
 	lis *net.UnixListener
 
 	memfile    *block.TrackedSliceDevice
+	stats      *uffdTimingStats
 	socketPath string
 }
 
@@ -53,6 +55,10 @@ func (u *Uffd) Disable() error {
 
 func (u *Uffd) Dirty() *bitset.BitSet {
 	return u.memfile.Dirty()
+}
+
+func (u *Uffd) Stats() lifecycle.UffdStats {
+	return u.stats.snapshot()
 }
 
 func New(memfile block.ReadonlyDevice, socketPath string, blockSize int64) (*Uffd, error) {
@@ -72,6 +78,7 @@ func New(memfile block.ReadonlyDevice, socketPath string, blockSize int64) (*Uff
 		exitReader: pRead,
 		exitWriter: pWrite,
 		memfile:    trackedMemfile,
+		stats:      &uffdTimingStats{},
 		socketPath: socketPath,
 		stopFn: sync.OnceValue(func() error {
 			_, writeErr := pWrite.Write([]byte{0})
@@ -189,6 +196,7 @@ func (u *Uffd) handle(sandboxId string) (err error) {
 		u.exitReader.Fd(),
 		u.Stop,
 		sandboxId,
+		u.stats,
 	)
 	if err != nil {
 		return fmt.Errorf("failed handling uffd: %w", err)

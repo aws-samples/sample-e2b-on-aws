@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"time"
 
@@ -20,6 +21,16 @@ const (
 	awsWriteTimeout     = 120 * time.Second
 	awsReadTimeout      = 15 * time.Second
 )
+
+var storageTimingDebug = os.Getenv("E2B_STORAGE_TIMING_DEBUG") == "true" || os.Getenv("E2B_STORAGE_TIMING_DEBUG") == "1"
+
+func logStorageTiming(format string, args ...any) {
+	if !storageTimingDebug {
+		return
+	}
+
+	log.Printf("[e2b-storage-timing] "+format, args...)
+}
 
 type AWSBucketStorageProvider struct {
 	client     *s3.Client
@@ -153,12 +164,26 @@ func (a *AWSBucketStorageObjectProvider) ReadFrom(src io.Reader) (int64, error) 
 }
 
 func (a *AWSBucketStorageObjectProvider) ReadAt(buff []byte, off int64) (n int, err error) {
+	totalStart := time.Now()
 	ctx, cancel := context.WithTimeout(a.ctx, awsReadTimeout)
 	defer cancel()
 
 	readRange := aws.String(fmt.Sprintf("bytes=%d-%d", off, off+int64(len(buff))-1))
+	getObjectStart := time.Now()
 	resp, err := a.client.GetObject(ctx, &s3.GetObjectInput{Bucket: &a.bucketName, Key: &a.path, Range: readRange})
+	getObjectDuration := time.Since(getObjectStart)
 	if err != nil {
+		logStorageTiming(
+			"s3_readat bucket=%s key=%s offset=%d length=%d get_object_duration=%s total_duration=%s err=%q",
+			a.bucketName,
+			a.path,
+			off,
+			len(buff),
+			getObjectDuration,
+			time.Since(totalStart),
+			err.Error(),
+		)
+
 		var nsk *types.NoSuchKey
 		if errors.As(err, &nsk) {
 			return 0, ErrorObjectNotExist
@@ -171,10 +196,25 @@ func (a *AWSBucketStorageObjectProvider) ReadAt(buff []byte, off int64) (n int, 
 
 	// When the object is smaller than requested range there will be unexpected EOF,
 	// but backend expects to return EOF in this case.
+	bodyReadStart := time.Now()
 	n, err = io.ReadFull(resp.Body, buff)
+	bodyReadDuration := time.Since(bodyReadStart)
 	if errors.Is(err, io.ErrUnexpectedEOF) {
 		err = io.EOF
 	}
+	logStorageTiming(
+		"s3_readat bucket=%s key=%s offset=%d length=%d bytes=%d get_object_duration=%s body_read_duration=%s total_duration=%s err=%v",
+		a.bucketName,
+		a.path,
+		off,
+		len(buff),
+		n,
+		getObjectDuration,
+		bodyReadDuration,
+		time.Since(totalStart),
+		err,
+	)
+
 	return n, err
 }
 

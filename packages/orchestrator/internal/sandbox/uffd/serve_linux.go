@@ -6,7 +6,10 @@ package uffd
 import (
 	"errors"
 	"fmt"
+	"os"
+	"sync/atomic"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"github.com/loopholelabs/userfaultfd-go/pkg/constants"
@@ -15,10 +18,100 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/e2b-dev/infra/packages/orchestrator/internal/sandbox/block"
+	"github.com/e2b-dev/infra/packages/orchestrator/internal/sandbox/lifecycle"
 	"github.com/e2b-dev/infra/packages/shared/pkg/logger"
 )
 
 var ErrUnexpectedEventType = errors.New("unexpected event type")
+
+var uffdTimingDebug = os.Getenv("E2B_UFFD_TIMING_DEBUG") == "true" || os.Getenv("E2B_UFFD_TIMING_DEBUG") == "1"
+
+const uffdSlowFaultThreshold = 100 * time.Millisecond
+
+type uffdTimingStats struct {
+	faults     atomic.Uint64
+	slowFaults atomic.Uint64
+
+	sliceNanos atomic.Uint64
+	copyNanos  atomic.Uint64
+	totalNanos atomic.Uint64
+
+	maxSliceNanos atomic.Uint64
+	maxCopyNanos  atomic.Uint64
+	maxTotalNanos atomic.Uint64
+}
+
+func setMaxDurationNanos(value *atomic.Uint64, candidate time.Duration) {
+	nanos := uint64(candidate.Nanoseconds())
+	for {
+		current := value.Load()
+		if nanos <= current || value.CompareAndSwap(current, nanos) {
+			return
+		}
+	}
+}
+
+func (s *uffdTimingStats) nextFault() uint64 {
+	return s.faults.Add(1)
+}
+
+func (s *uffdTimingStats) record(sliceDuration, copyDuration, totalDuration time.Duration) {
+	s.sliceNanos.Add(uint64(sliceDuration.Nanoseconds()))
+	s.copyNanos.Add(uint64(copyDuration.Nanoseconds()))
+	s.totalNanos.Add(uint64(totalDuration.Nanoseconds()))
+
+	setMaxDurationNanos(&s.maxSliceNanos, sliceDuration)
+	setMaxDurationNanos(&s.maxCopyNanos, copyDuration)
+	setMaxDurationNanos(&s.maxTotalNanos, totalDuration)
+
+	if sliceDuration >= uffdSlowFaultThreshold || totalDuration >= uffdSlowFaultThreshold {
+		s.slowFaults.Add(1)
+	}
+}
+
+func (s *uffdTimingStats) logSummary(sandboxID string) {
+	faults := s.faults.Load()
+	if faults == 0 {
+		zap.L().Info("uffd timing summary",
+			logger.WithSandboxID(sandboxID),
+			zap.Uint64("fault_count", faults),
+		)
+
+		return
+	}
+
+	zap.L().Info("uffd timing summary",
+		logger.WithSandboxID(sandboxID),
+		zap.Uint64("fault_count", faults),
+		zap.Uint64("slow_fault_count", s.slowFaults.Load()),
+		zap.Duration("slice_total", time.Duration(s.sliceNanos.Load())),
+		zap.Duration("copy_total", time.Duration(s.copyNanos.Load())),
+		zap.Duration("fault_total", time.Duration(s.totalNanos.Load())),
+		zap.Duration("slice_avg", time.Duration(s.sliceNanos.Load()/faults)),
+		zap.Duration("copy_avg", time.Duration(s.copyNanos.Load()/faults)),
+		zap.Duration("fault_avg", time.Duration(s.totalNanos.Load()/faults)),
+		zap.Duration("slice_max", time.Duration(s.maxSliceNanos.Load())),
+		zap.Duration("copy_max", time.Duration(s.maxCopyNanos.Load())),
+		zap.Duration("fault_max", time.Duration(s.maxTotalNanos.Load())),
+	)
+}
+
+func (s *uffdTimingStats) snapshot() lifecycle.UffdStats {
+	if s == nil {
+		return lifecycle.UffdStats{}
+	}
+
+	return lifecycle.UffdStats{
+		Faults:        s.faults.Load(),
+		SlowFaults:    s.slowFaults.Load(),
+		SliceNanos:    s.sliceNanos.Load(),
+		CopyNanos:     s.copyNanos.Load(),
+		FaultNanos:    s.totalNanos.Load(),
+		MaxSliceNanos: s.maxSliceNanos.Load(),
+		MaxCopyNanos:  s.maxCopyNanos.Load(),
+		MaxFaultNanos: s.maxTotalNanos.Load(),
+	}
+}
 
 type GuestRegionUffdMapping struct {
 	BaseHostVirtAddr uintptr `json:"base_host_virt_addr"`
@@ -47,6 +140,7 @@ func Serve(
 	fd uintptr,
 	stop func() error,
 	sandboxId string,
+	timingStats *uffdTimingStats,
 ) error {
 	pollFds := []unix.PollFd{
 		{Fd: int32(uffd), Events: unix.POLLIN},
@@ -54,6 +148,12 @@ func Serve(
 	}
 
 	var eg errgroup.Group
+	if timingStats == nil {
+		timingStats = &uffdTimingStats{}
+	}
+	if uffdTimingDebug {
+		defer timingStats.logSummary(sandboxId)
+	}
 
 outerLoop:
 	for {
@@ -154,6 +254,7 @@ outerLoop:
 
 		offset := int64(mapping.Offset + uintptr(addr) - mapping.BaseHostVirtAddr)
 		pagesize := int64(mapping.PageSize)
+		faultNumber := timingStats.nextFault()
 
 		eg.Go(func() error {
 			defer func() {
@@ -163,7 +264,10 @@ outerLoop:
 				}
 			}()
 
+			faultStart := time.Now()
+			sliceStart := faultStart
 			b, err := src.Slice(offset, pagesize)
+			sliceDuration := time.Since(sliceStart)
 			if err != nil {
 
 				stop()
@@ -181,6 +285,7 @@ outerLoop:
 				0,
 			)
 
+			copyStart := time.Now()
 			if _, _, errno := syscall.Syscall(
 				syscall.SYS_IOCTL,
 				uintptr(uffd),
@@ -199,6 +304,23 @@ outerLoop:
 				zap.L().Error("UFFD serve uffdio copy error", logger.WithSandboxID(sandboxId), zap.Error(err))
 
 				return fmt.Errorf("failed uffdio copy %w", errno)
+			}
+			copyDuration := time.Since(copyStart)
+			faultDuration := time.Since(faultStart)
+			timingStats.record(sliceDuration, copyDuration, faultDuration)
+
+			if uffdTimingDebug {
+				if sliceDuration >= uffdSlowFaultThreshold || faultDuration >= uffdSlowFaultThreshold || faultNumber%100 == 0 {
+					zap.L().Info("uffd timing page fault",
+						logger.WithSandboxID(sandboxId),
+						zap.Uint64("fault_number", faultNumber),
+						zap.Int64("offset", offset),
+						zap.Int64("page_size", pagesize),
+						zap.Duration("slice_duration", sliceDuration),
+						zap.Duration("copy_duration", copyDuration),
+						zap.Duration("fault_duration", faultDuration),
+					)
+				}
 			}
 
 			return nil

@@ -19,6 +19,7 @@ import (
 	"github.com/e2b-dev/infra/packages/orchestrator/internal/sandbox/block"
 	"github.com/e2b-dev/infra/packages/orchestrator/internal/sandbox/build"
 	"github.com/e2b-dev/infra/packages/orchestrator/internal/sandbox/fc"
+	"github.com/e2b-dev/infra/packages/orchestrator/internal/sandbox/lifecycle"
 	"github.com/e2b-dev/infra/packages/orchestrator/internal/sandbox/nbd"
 	"github.com/e2b-dev/infra/packages/orchestrator/internal/sandbox/network"
 	"github.com/e2b-dev/infra/packages/orchestrator/internal/sandbox/rootfs"
@@ -26,6 +27,7 @@ import (
 	"github.com/e2b-dev/infra/packages/orchestrator/internal/sandbox/uffd"
 	"github.com/e2b-dev/infra/packages/shared/pkg/env"
 	"github.com/e2b-dev/infra/packages/shared/pkg/grpc/orchestrator"
+	"github.com/e2b-dev/infra/packages/shared/pkg/logger"
 	sbxlogger "github.com/e2b-dev/infra/packages/shared/pkg/logger/sandbox"
 	"github.com/e2b-dev/infra/packages/shared/pkg/storage"
 	"github.com/e2b-dev/infra/packages/shared/pkg/storage/header"
@@ -64,6 +66,45 @@ type Sandbox struct {
 	template template.Template
 
 	Checks *Checks
+}
+
+type fetchStatsProvider interface {
+	FetchStats() lifecycle.StorageStats
+}
+
+func fetchStats(device block.ReadonlyDevice) lifecycle.StorageStats {
+	provider, ok := device.(fetchStatsProvider)
+	if !ok {
+		return lifecycle.StorageStats{}
+	}
+
+	return provider.FetchStats()
+}
+
+func logStorageDownloadSummary(ctx context.Context, operation, phase, dataKind, sandboxID string, stats lifecycle.StorageStats) {
+	lifecycle.RecordStorageDownload(ctx, operation, phase, dataKind, stats)
+	if stats.DownloadChunks == 0 && stats.DownloadBytes == 0 && stats.CacheMisses == 0 {
+		return
+	}
+
+	zap.L().Info("storage download summary",
+		logger.WithSandboxID(sandboxID),
+		zap.String("operation", operation),
+		zap.String("phase", phase),
+		zap.String("data_kind", dataKind),
+		zap.String("storage_provider", stats.SourceKind),
+		zap.Uint64("cache_hit_count", stats.CacheHits),
+		zap.Uint64("cache_miss_count", stats.CacheMisses),
+		zap.Uint64("s3_download_chunks", stats.DownloadChunks),
+		zap.Uint64("s3_download_bytes", stats.DownloadBytes),
+		zap.Uint64("s3_download_pages_equivalent", stats.DownloadPages),
+		zap.Duration("s3_download_total", stats.FetchDuration()),
+		zap.Duration("s3_get_object_total", stats.BaseReadDuration()),
+		zap.Duration("cache_write_total", stats.CacheWriteDuration()),
+		zap.Duration("s3_download_max", time.Duration(stats.MaxFetchNanos)),
+		zap.Duration("s3_get_object_max", time.Duration(stats.MaxBaseReadNanos)),
+		zap.Duration("cache_write_max", time.Duration(stats.MaxCacheWriteNanos)),
+	)
 }
 
 func (m *Metadata) LoggerMetadata() sbxlogger.SandboxMetadata {
@@ -241,17 +282,61 @@ func ResumeSandbox(
 	devicePool *nbd.DevicePool,
 	allowInternet,
 	useClickhouseMetrics bool,
-) (*Sandbox, *Cleanup, error) {
+) (sbx *Sandbox, cleanup *Cleanup, e error) {
+	resumeStart := time.Now()
+	operation := lifecycle.Operation(config.Snapshot)
+	stageTimings := lifecycle.NewStageTimings()
+
 	childCtx, childSpan := tracer.Start(ctx, "new-sandbox")
 	defer childSpan.End()
+	defer func() {
+		totalDuration := time.Since(resumeStart)
+		lifecycle.RecordLifecycle(childCtx, operation, totalDuration, e)
 
-	cleanup := NewCleanup()
+		result := lifecycle.ResultOK
+		if e != nil {
+			result = lifecycle.ResultError
+		}
 
+		fields := []zap.Field{
+			logger.WithSandboxID(config.SandboxId),
+			zap.String("operation", operation),
+			zap.String("result", result),
+			zap.String("template_id", config.TemplateId),
+			zap.String("base_template_id", baseTemplateID),
+			zap.String("build_id", config.BuildId),
+			zap.String("trace_id", traceID),
+			zap.Bool("snapshot", config.Snapshot),
+			zap.Duration("total_duration", totalDuration),
+			zap.Error(e),
+		}
+		fields = append(fields, stageTimings.ZapFields()...)
+		zap.L().Info("sandbox lifecycle summary", fields...)
+	}()
+
+	logResumeTiming("sandbox_resume_start",
+		logger.WithSandboxID(config.SandboxId),
+		zap.String("operation", operation),
+		zap.String("template_id", config.TemplateId),
+		zap.String("base_template_id", baseTemplateID),
+		zap.String("build_id", config.BuildId),
+		zap.String("trace_id", traceID),
+	)
+
+	cleanup = NewCleanup()
+
+	templateStart := time.Now()
 	t, err := templateCache.GetTemplate(
 		config.TemplateId,
 		config.BuildId,
 		config.KernelVersion,
 		config.FirecrackerVersion,
+	)
+	templateDuration := stageTimings.Record(childCtx, operation, "template_get", templateStart, err)
+	logResumeTiming("sandbox_resume_template_get_done",
+		logger.WithSandboxID(config.SandboxId),
+		zap.Duration("duration", templateDuration),
+		zap.Error(err),
 	)
 	if err != nil {
 		return nil, cleanup, fmt.Errorf("failed to get template snapshot data: %w", err)
@@ -273,11 +358,19 @@ func ResumeSandbox(
 		return nil
 	})
 
+	rootfsStart := time.Now()
 	readonlyRootfs, err := t.Rootfs()
+	rootfsDuration := stageTimings.Record(childCtx, operation, "rootfs_open", rootfsStart, err)
+	logResumeTiming("sandbox_resume_rootfs_open_done",
+		logger.WithSandboxID(config.SandboxId),
+		zap.Duration("duration", rootfsDuration),
+		zap.Error(err),
+	)
 	if err != nil {
 		return nil, cleanup, fmt.Errorf("failed to get rootfs: %w", err)
 	}
 
+	rootfsOverlayStart := time.Now()
 	rootfsOverlay, err := createRootfsOverlay(
 		childCtx,
 		tracer,
@@ -285,6 +378,12 @@ func ResumeSandbox(
 		cleanup,
 		readonlyRootfs,
 		sandboxFiles.SandboxCacheRootfsPath(),
+	)
+	rootfsOverlayDuration := stageTimings.Record(childCtx, operation, "rootfs_overlay", rootfsOverlayStart, err)
+	logResumeTiming("sandbox_resume_rootfs_overlay_done",
+		logger.WithSandboxID(config.SandboxId),
+		zap.Duration("duration", rootfsOverlayDuration),
+		zap.Error(err),
 	)
 	if err != nil {
 		return nil, cleanup, fmt.Errorf("failed to create rootfs overlay: %w", err)
@@ -297,13 +396,21 @@ func ResumeSandbox(
 		}
 	}()
 
+	memfileStart := time.Now()
 	memfile, err := t.Memfile()
+	memfileDuration := stageTimings.Record(childCtx, operation, "memfile_open", memfileStart, err)
+	logResumeTiming("sandbox_resume_memfile_open_done",
+		logger.WithSandboxID(config.SandboxId),
+		zap.Duration("duration", memfileDuration),
+		zap.Error(err),
+	)
 	if err != nil {
 		return nil, cleanup, fmt.Errorf("failed to get memfile: %w", err)
 	}
 
 	fcUffdPath := sandboxFiles.SandboxUffdSocketPath()
 
+	serveMemoryStart := time.Now()
 	fcUffd, err := serveMemory(
 		childCtx,
 		tracer,
@@ -311,6 +418,13 @@ func ResumeSandbox(
 		memfile,
 		fcUffdPath,
 		config.SandboxId,
+	)
+	serveMemoryDuration := stageTimings.Record(childCtx, operation, "serve_memory", serveMemoryStart, err)
+	logResumeTiming("sandbox_resume_serve_memory_done",
+		logger.WithSandboxID(config.SandboxId),
+		zap.String("uffd_socket_path", fcUffdPath),
+		zap.Duration("duration", serveMemoryDuration),
+		zap.Error(err),
 	)
 	if err != nil {
 		return nil, cleanup, fmt.Errorf("failed to serve memory: %w", err)
@@ -328,14 +442,29 @@ func ResumeSandbox(
 	}()
 
 	// / ==== END of resources initialization ====
+	rootfsPathStart := time.Now()
 	rootfsPath, err := rootfsOverlay.Path()
+	rootfsPathDuration := stageTimings.Record(childCtx, operation, "rootfs_path", rootfsPathStart, err)
+	logResumeTiming("sandbox_resume_rootfs_path_done",
+		logger.WithSandboxID(config.SandboxId),
+		zap.Duration("duration", rootfsPathDuration),
+		zap.Error(err),
+	)
 	if err != nil {
 		return nil, cleanup, fmt.Errorf("failed to get rootfs path: %w", err)
 	}
+	networkSlotStart := time.Now()
 	ips := <-ipsCh
+	networkSlotDuration := stageTimings.Record(childCtx, operation, "network_slot", networkSlotStart, ips.err)
+	logResumeTiming("sandbox_resume_network_slot_done",
+		logger.WithSandboxID(config.SandboxId),
+		zap.Duration("duration", networkSlotDuration),
+		zap.Error(ips.err),
+	)
 	if ips.err != nil {
 		return nil, cleanup, fmt.Errorf("failed to get network slot: %w", err)
 	}
+	fcNewStart := time.Now()
 	fcHandle, fcErr := fc.NewProcess(
 		uffdStartCtx,
 		tracer,
@@ -345,15 +474,29 @@ func ResumeSandbox(
 		baseTemplateID,
 		readonlyRootfs.Header().Metadata.BaseBuildId.String(),
 	)
+	fcNewDuration := stageTimings.Record(childCtx, operation, "fc_new_process", fcNewStart, fcErr)
+	logResumeTiming("sandbox_resume_fc_new_process_done",
+		logger.WithSandboxID(config.SandboxId),
+		zap.Duration("duration", fcNewDuration),
+		zap.Error(fcErr),
+	)
 	if fcErr != nil {
 		return nil, cleanup, fmt.Errorf("failed to create FC: %w", fcErr)
 	}
 
 	// todo: check if kernel, firecracker, and envd versions exist
+	snapfileStart := time.Now()
 	snapfile, err := t.Snapfile()
+	snapfileDuration := stageTimings.Record(childCtx, operation, "snapfile_open", snapfileStart, err)
+	logResumeTiming("sandbox_resume_snapfile_open_done",
+		logger.WithSandboxID(config.SandboxId),
+		zap.Duration("duration", snapfileDuration),
+		zap.Error(err),
+	)
 	if err != nil {
 		return nil, cleanup, fmt.Errorf("failed to get snapfile: %w", err)
 	}
+	fcResumeStart := time.Now()
 	fcStartErr := fcHandle.Resume(
 		uffdStartCtx,
 		tracer,
@@ -367,6 +510,12 @@ func ResumeSandbox(
 		fcUffdPath,
 		snapfile,
 		fcUffd.Ready(),
+	)
+	fcResumeDuration := stageTimings.Record(childCtx, operation, "fc_resume", fcResumeStart, fcStartErr)
+	logResumeTiming("sandbox_resume_fc_resume_done",
+		logger.WithSandboxID(config.SandboxId),
+		zap.Duration("duration", fcResumeDuration),
+		zap.Error(fcStartErr),
 	)
 	if fcStartErr != nil {
 		return nil, cleanup, fmt.Errorf("failed to start FC: %w", fcStartErr)
@@ -388,7 +537,7 @@ func ResumeSandbox(
 		EndAt:     endAt,
 	}
 
-	sbx := &Sandbox{
+	sbx = &Sandbox{
 		Resources: resources,
 		Metadata:  metadata,
 
@@ -401,7 +550,14 @@ func ResumeSandbox(
 
 	// Part of the sandbox as we need to stop Checks before pausing the sandbox
 	// This is to prevent race condition of reporting unhealthy sandbox
+	checksStart := time.Now()
 	checks, err := NewChecks(ctx, tracer, sbx, useClickhouseMetrics)
+	checksDuration := stageTimings.Record(childCtx, operation, "checks_new", checksStart, err)
+	logResumeTiming("sandbox_resume_checks_new_done",
+		logger.WithSandboxID(config.SandboxId),
+		zap.Duration("duration", checksDuration),
+		zap.Error(err),
+	)
 	if err != nil {
 		return nil, cleanup, fmt.Errorf("failed to create health check: %w", err)
 	}
@@ -412,14 +568,44 @@ func ResumeSandbox(
 		return sbx.Close(ctx, tracer)
 	})
 
+	waitEnvdStart := time.Now()
+	memfileStatsBefore := fetchStats(memfile)
+	rootfsStatsBefore := fetchStats(readonlyRootfs)
+	uffdStatsBefore := fcUffd.Stats()
 	err = sbx.WaitForEnvd(
 		ctx,
 		tracer,
 		defaultEnvdTimeout,
 	)
+	waitEnvdDuration := stageTimings.Record(childCtx, operation, "wait_envd", waitEnvdStart, err)
+
+	uffdStats := fcUffd.Stats().Sub(uffdStatsBefore)
+	lifecycle.RecordUffd(childCtx, operation, "wait_envd", uffdStats)
+	zap.L().Info("uffd lifecycle summary",
+		logger.WithSandboxID(config.SandboxId),
+		zap.String("operation", operation),
+		zap.String("phase", "wait_envd"),
+		zap.Uint64("fault_count", uffdStats.Faults),
+		zap.Uint64("slow_fault_count", uffdStats.SlowFaults),
+		zap.Duration("slice_total", uffdStats.SliceDuration()),
+		zap.Duration("copy_total", uffdStats.CopyDuration()),
+		zap.Duration("fault_total", uffdStats.FaultDuration()),
+		zap.Duration("slice_max", time.Duration(uffdStats.MaxSliceNanos)),
+		zap.Duration("copy_max", time.Duration(uffdStats.MaxCopyNanos)),
+		zap.Duration("fault_max", time.Duration(uffdStats.MaxFaultNanos)),
+	)
+
+	logStorageDownloadSummary(childCtx, operation, "wait_envd", "memfile", config.SandboxId, fetchStats(memfile).Sub(memfileStatsBefore))
+	logStorageDownloadSummary(childCtx, operation, "wait_envd", "rootfs", config.SandboxId, fetchStats(readonlyRootfs).Sub(rootfsStatsBefore))
+
 	if err != nil {
 		return nil, cleanup, fmt.Errorf("failed to wait for sandbox start: %w", err)
 	}
+	logResumeTiming("sandbox_resume_done",
+		logger.WithSandboxID(config.SandboxId),
+		zap.Duration("duration", time.Since(resumeStart)),
+		zap.Duration("wait_envd_duration", waitEnvdDuration),
+	)
 
 	go sbx.Checks.Start()
 
@@ -861,7 +1047,20 @@ func (s *Sandbox) WaitForEnvd(
 	ctx, childSpan := tracer.Start(ctx, "sandbox-wait-for-start")
 	defer childSpan.End()
 
+	waitStart := time.Now()
+	logResumeTiming("wait_envd_start",
+		logger.WithSandboxID(s.Metadata.Config.SandboxId),
+		zap.Duration("timeout", timeout),
+		zap.String("slot_host_ip", s.Slot.HostIPString()),
+	)
+
 	defer func() {
+		logResumeTiming("wait_envd_done",
+			logger.WithSandboxID(s.Metadata.Config.SandboxId),
+			zap.Duration("duration", time.Since(waitStart)),
+			zap.Error(e),
+		)
+
 		if e != nil {
 			return
 		}
@@ -883,7 +1082,9 @@ func (s *Sandbox) WaitForEnvd(
 		}
 	}()
 
-	initErr := s.initEnvd(syncCtx, tracer, s.Metadata.Config.EnvVars, s.Metadata.Config.EnvdAccessToken)
+	operation := lifecycle.Operation(s.Metadata.Config.Snapshot)
+	initStats, initErr := s.initEnvd(syncCtx, tracer, s.Metadata.Config.EnvVars, s.Metadata.Config.EnvdAccessToken)
+	s.recordEnvdInit(syncCtx, operation, initStats, initErr)
 	if initErr != nil {
 		return fmt.Errorf("failed to init new envd: %w", initErr)
 	} else {
