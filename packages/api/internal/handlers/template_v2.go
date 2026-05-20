@@ -18,8 +18,8 @@ import (
 	"github.com/e2b-dev/infra/packages/api/internal/constants"
 	template_manager "github.com/e2b-dev/infra/packages/api/internal/template-manager"
 	"github.com/e2b-dev/infra/packages/api/internal/utils"
-	artifacts_registry "github.com/e2b-dev/infra/packages/shared/pkg/artifacts-registry"
 	"github.com/e2b-dev/infra/packages/shared/pkg/db"
+	templatemanagergrpc "github.com/e2b-dev/infra/packages/shared/pkg/grpc/template-manager"
 	"github.com/e2b-dev/infra/packages/shared/pkg/id"
 	"github.com/e2b-dev/infra/packages/shared/pkg/logger"
 	"github.com/e2b-dev/infra/packages/shared/pkg/models"
@@ -310,33 +310,9 @@ func (a *APIStore) PostV2Templates(c *gin.Context) {
 				return
 			}
 		} else if aliasDB.EnvID != envID {
-			if aliasDB.IsRenamable {
-				// Check if the old env belongs to the same team
-				oldEnv, oldEnvErr := tx.Env.Query().Where(env.ID(aliasDB.EnvID), env.TeamID(team.ID)).Only(ctx)
-				if oldEnvErr != nil || oldEnv == nil {
-					a.sendAPIStoreError(c, http.StatusForbidden, fmt.Sprintf("Alias '%s' already used", alias))
-					telemetry.ReportCriticalError(ctx, "alias already used by another team", oldEnvErr, attribute.String("alias", alias))
-					return
-				}
-				// Same team — re-claim alias to point to the new envID
-				_, delErr := tx.EnvAlias.Delete().Where(envalias.ID(alias)).Exec(ctx)
-				if delErr != nil {
-					a.sendAPIStoreError(c, http.StatusInternalServerError, fmt.Sprintf("Error when deleting old alias: %s", delErr))
-					telemetry.ReportCriticalError(ctx, "error when deleting old alias", delErr, attribute.String("alias", alias))
-					return
-				}
-				createErr := tx.EnvAlias.Create().SetEnvID(envID).SetIsRenamable(true).SetID(alias).Exec(ctx)
-				if createErr != nil {
-					a.sendAPIStoreError(c, http.StatusInternalServerError, fmt.Sprintf("Error when re-claiming alias '%s': %s", alias, createErr))
-					telemetry.ReportCriticalError(ctx, "error when re-claiming alias", createErr, attribute.String("alias", alias))
-					return
-				}
-				telemetry.ReportEvent(ctx, "re-claimed alias from previous build", attribute.String("env.alias", alias), attribute.String("env.old_env_id", aliasDB.EnvID))
-			} else {
-				a.sendAPIStoreError(c, http.StatusForbidden, fmt.Sprintf("Alias '%s' already used", alias))
-				telemetry.ReportCriticalError(ctx, "alias already used", err, attribute.String("alias", alias))
-				return
-			}
+			a.sendAPIStoreError(c, http.StatusForbidden, fmt.Sprintf("Alias '%s' already used", alias))
+			telemetry.ReportCriticalError(ctx, "alias already used", err, attribute.String("alias", alias))
+			return
 		}
 
 		telemetry.ReportEvent(ctx, "inserted alias", attribute.String("env.alias", alias))
@@ -424,57 +400,6 @@ func (a *APIStore) PostV2TemplatesTemplateIDBuildsBuildID(c *gin.Context) {
 		}
 	}
 
-	// If v2 provides startCmd or readyCmd, update the build record before triggering
-	if body.StartCmd != nil || body.ReadyCmd != nil {
-		update := a.db.Client.EnvBuild.UpdateOneID(buildUUID)
-		if body.StartCmd != nil {
-			update = update.SetNillableStartCmd(body.StartCmd)
-		}
-		if body.ReadyCmd != nil {
-			update = update.SetNillableReadyCmd(body.ReadyCmd)
-		}
-
-		if err := update.Exec(ctx); err != nil {
-			a.sendAPIStoreError(c, http.StatusInternalServerError, fmt.Sprintf("Error updating build commands: %s", err))
-			telemetry.ReportCriticalError(ctx, "error updating build commands for v2", err)
-			return
-		}
-
-		zap.L().Info("Updated build commands for v2",
-			zap.String("templateID", templateID),
-			zap.String("buildID", buildIDStr),
-		)
-	}
-
-	// Determine build mode
-	hasSteps := len(body.Steps) > 0
-	hasFromImage := body.FromImage != nil && *body.FromImage != ""
-
-	// Initialize registry early if fromImage is specified (fail-fast)
-	var awsRegistry *artifacts_registry.AWSArtifactsRegistry
-	if hasFromImage {
-		var regErr error
-		awsRegistry, regErr = artifacts_registry.NewAWSArtifactsRegistry(ctx)
-		if regErr != nil {
-			a.sendAPIStoreError(c, http.StatusInternalServerError,
-				fmt.Sprintf("Failed to initialize registry: %s", regErr))
-			telemetry.ReportCriticalError(ctx, "failed to init registry for v2 image copy", regErr)
-			return
-		}
-	}
-
-	// Validate presign service is available when steps with COPY are present
-	if hasSteps && hasFromImage && a.buildContextPresign == nil {
-		// Check if any step has filesHash (COPY steps) - only those need presign
-		for _, step := range body.Steps {
-			if step.FilesHash != "" {
-				a.sendAPIStoreError(c, http.StatusServiceUnavailable, "Build context storage is not configured")
-				telemetry.ReportCriticalError(ctx, "build context storage not configured for steps with files", fmt.Errorf("BUILD_CONTEXT_BUCKET_NAME not set"))
-				return
-			}
-		}
-	}
-
 	// Query template with the specific build
 	envDB, err := a.db.Client.Env.Query().Where(
 		env.ID(templateID),
@@ -494,6 +419,28 @@ func (a *APIStore) PostV2TemplatesTemplateIDBuildsBuildID(c *gin.Context) {
 		a.sendAPIStoreError(c, http.StatusForbidden, "Team does not have access to the template")
 		telemetry.ReportCriticalError(ctx, "team does not have access to the template", fmt.Errorf("team %s tried to access template owned by team %s", team.ID, envDB.TeamID), telemetry.WithTemplateID(templateID))
 		return
+	}
+
+	// Update build commands only after ownership is verified
+	if body.StartCmd != nil || body.ReadyCmd != nil {
+		update := a.db.Client.EnvBuild.UpdateOneID(buildUUID)
+		if body.StartCmd != nil {
+			update = update.SetNillableStartCmd(body.StartCmd)
+		}
+		if body.ReadyCmd != nil {
+			update = update.SetNillableReadyCmd(body.ReadyCmd)
+		}
+
+		if err := update.Exec(ctx); err != nil {
+			a.sendAPIStoreError(c, http.StatusInternalServerError, fmt.Sprintf("Error updating build commands: %s", err))
+			telemetry.ReportCriticalError(ctx, "error updating build commands for v2", err)
+			return
+		}
+
+		zap.L().Info("Updated build commands for v2",
+			zap.String("templateID", templateID),
+			zap.String("buildID", buildIDStr),
+		)
 	}
 
 	telemetry.SetAttributes(ctx,
@@ -605,90 +552,36 @@ func (a *APIStore) PostV2TemplatesTemplateIDBuildsBuildID(c *gin.Context) {
 			zap.String("templateID", templateID),
 			zap.String("buildID", buildIDStr))
 
-		// Step 1: Prepare image - three-way branch
-		if hasSteps && hasFromImage {
-			// New flow: Build Docker image from steps
-			zap.L().Info("Starting Dockerfile build from steps",
-				zap.String("templateID", templateID),
-				zap.String("buildID", buildIDStr),
-				zap.String("fromImage", *body.FromImage),
-				zap.Int("numSteps", len(body.Steps)))
-
-			// Convert TemplateBuildStepV2 to artifacts_registry.TemplateBuildStep
-			arSteps := make([]artifacts_registry.TemplateBuildStep, len(body.Steps))
-			for i, s := range body.Steps {
-				arSteps[i] = artifacts_registry.TemplateBuildStep{
-					Type:      s.Type,
-					Args:      s.Args,
-					FilesHash: s.FilesHash,
-					Force:     s.Force,
-				}
+		// Convert steps to proto format for template-manager
+		var protoSteps []*templatemanagergrpc.TemplateStep
+		for _, s := range body.Steps {
+			step := &templatemanagergrpc.TemplateStep{
+				Type: s.Type,
+				Args: s.Args,
 			}
-
-			// Prepare build context: download COPY files + generate Dockerfile
-			contextDir, cleanup, prepErr := artifacts_registry.PrepareBuildContext(
-				buildContext, a.buildContextPresign, templateID, *body.FromImage, arSteps,
-			)
-			if prepErr != nil {
-				zap.L().Error("Failed to prepare build context",
-					zap.String("templateID", templateID),
-					zap.String("buildID", buildIDStr),
-					zap.Error(prepErr))
-				_ = a.templateManager.SetStatus(buildContext, templateID, buildUUID,
-					envbuild.StatusFailed, fmt.Sprintf("failed to prepare build context: %s", prepErr))
-				a.templateCache.Invalidate(templateID)
-				return
+			if s.FilesHash != "" {
+				step.FilesHash = &s.FilesHash
 			}
-			defer cleanup()
-
-			// Build and push Docker image to ECR
-			if buildImgErr := awsRegistry.BuildAndPushImage(buildContext, contextDir, templateID, buildUUID.String()); buildImgErr != nil {
-				zap.L().Error("Failed to build and push Docker image",
-					zap.String("templateID", templateID),
-					zap.String("buildID", buildIDStr),
-					zap.Error(buildImgErr))
-				_ = a.templateManager.SetStatus(buildContext, templateID, buildUUID,
-					envbuild.StatusFailed, fmt.Sprintf("failed to build Docker image: %s", buildImgErr))
-				a.templateCache.Invalidate(templateID)
-				return
-			}
-
-			zap.L().Info("Completed Docker build from steps",
-				zap.String("templateID", templateID),
-				zap.String("buildID", buildIDStr))
-		} else if hasFromImage && !hasSteps {
-			// Existing flow: CopyImage (directly copy an existing image to ECR)
-			zap.L().Info("Starting image copy for v2 build",
-				zap.String("templateID", templateID),
-				zap.String("buildID", buildIDStr),
-				zap.String("fromImage", *body.FromImage))
-			if copyErr := awsRegistry.CopyImage(buildContext, *body.FromImage, templateID, buildUUID.String()); copyErr != nil {
-				zap.L().Error("Failed to copy image for v2 build",
-					zap.String("templateID", templateID),
-					zap.String("buildID", buildIDStr),
-					zap.String("fromImage", *body.FromImage),
-					zap.Error(copyErr))
-				_ = a.templateManager.SetStatus(buildContext, templateID, buildUUID,
-					envbuild.StatusFailed, fmt.Sprintf("failed to copy image '%s': %s", *body.FromImage, copyErr))
-				a.templateCache.Invalidate(templateID)
-				return
-			}
-			zap.L().Info("Completed image copy for v2 build",
-				zap.String("templateID", templateID),
-				zap.String("buildID", buildIDStr),
-				zap.String("fromImage", *body.FromImage))
+			protoSteps = append(protoSteps, step)
 		}
-		// else: no fromImage, no steps — go directly to CreateTemplate (use default base image)
 
-		// Step 2: Dispatch build to template-manager via gRPC
+		var fromImage string
+		if body.FromImage != nil {
+			fromImage = *body.FromImage
+		}
+
+		// Dispatch build to template-manager via gRPC — steps are executed inside FC VM
 		zap.L().Info("Dispatching build to template-manager (v2)",
 			zap.String("templateID", templateID),
-			zap.String("buildID", buildIDStr))
+			zap.String("buildID", buildIDStr),
+			zap.String("fromImage", fromImage),
+			zap.Int("numSteps", len(protoSteps)))
 		buildErr := a.templateManager.CreateTemplate(
 			a.Tracer, buildContext, templateID, buildUUID,
 			build.KernelVersion, build.FirecrackerVersion,
 			startCmd, build.Vcpu, build.FreeDiskSizeMB, build.RAMMB,
-			readyCmd, team.ClusterID, build.ClusterNodeID,
+			readyCmd, fromImage, protoSteps,
+			team.ClusterID, build.ClusterNodeID,
 		)
 		if buildErr != nil {
 			zap.L().Error("Build dispatch failed (v2)",

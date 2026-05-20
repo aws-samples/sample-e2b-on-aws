@@ -35,33 +35,38 @@ INSTANCE_TYPE=$(curl -s -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" \
 echo "Detected instance type: $INSTANCE_TYPE"
 
 # ============================================================
-# CPU 型号校验（仅 5 系列 metal）：防止 Firecracker 快照跨 CPU 恢复失败
+# CPU 型号校验（仅 x86_64 5 系列 metal）：防止 Firecracker 快照跨 CPU 恢复失败
 # ============================================================
-ACTUAL_CPU=$(grep -m1 "model name" /proc/cpuinfo | cut -d: -f2 | xargs)
-EXPECTED_CPU=""
-case "$INSTANCE_TYPE" in
-    c5.metal|c5d.metal)                    EXPECTED_CPU="8275";;
-    c5n.metal)                             EXPECTED_CPU="8275";;
-    m5.metal|m5d.metal)                    EXPECTED_CPU="8259";;
-    m5n.metal|m5dn.metal)                  EXPECTED_CPU="8259";;
-    r5.metal|r5d.metal)                    EXPECTED_CPU="8259";;
-    r5n.metal|r5dn.metal|r5b.metal)        EXPECTED_CPU="8259";;
-    i3.metal)                              EXPECTED_CPU="E5-2686 v4";;
-    i3en.metal)                            EXPECTED_CPU="8175";;
-    z1d.metal)                             EXPECTED_CPU="8151";;
-    *)                                     EXPECTED_CPU="";;
-esac
+ARCH=$(uname -m)
+if [[ "$ARCH" == "x86_64" ]]; then
+    ACTUAL_CPU=$(grep -m1 "model name" /proc/cpuinfo | cut -d: -f2 | xargs)
+    EXPECTED_CPU=""
+    case "$INSTANCE_TYPE" in
+        c5.metal|c5d.metal)                    EXPECTED_CPU="8275";;
+        c5n.metal)                             EXPECTED_CPU="8275";;
+        m5.metal|m5d.metal)                    EXPECTED_CPU="8259";;
+        m5n.metal|m5dn.metal)                  EXPECTED_CPU="8259";;
+        r5.metal|r5d.metal)                    EXPECTED_CPU="8259";;
+        r5n.metal|r5dn.metal|r5b.metal)        EXPECTED_CPU="8259";;
+        i3.metal)                              EXPECTED_CPU="E5-2686 v4";;
+        i3en.metal)                            EXPECTED_CPU="8175";;
+        z1d.metal)                             EXPECTED_CPU="8151";;
+        *)                                     EXPECTED_CPU="";;
+    esac
 
-if [[ -n "$EXPECTED_CPU" && "$ACTUAL_CPU" != *"$EXPECTED_CPU"* ]]; then
-    echo "ERROR: CPU mismatch! Expected='$EXPECTED_CPU' Actual='$ACTUAL_CPU' Type=$INSTANCE_TYPE"
-    echo "Terminating instance to let ASG launch a replacement..."
-    INSTANCE_ID=$(curl -s -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" http://169.254.169.254/latest/meta-data/instance-id)
-    REGION=$(curl -s -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" http://169.254.169.254/latest/meta-data/placement/region)
-    aws ec2 terminate-instances --instance-ids "$INSTANCE_ID" --region "$REGION"
-    sleep 60
-    exit 1
+    if [[ -n "$EXPECTED_CPU" && "$ACTUAL_CPU" != *"$EXPECTED_CPU"* ]]; then
+        echo "ERROR: CPU mismatch! Expected='$EXPECTED_CPU' Actual='$ACTUAL_CPU' Type=$INSTANCE_TYPE"
+        echo "Terminating instance to let ASG launch a replacement..."
+        INSTANCE_ID=$(curl -s -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" http://169.254.169.254/latest/meta-data/instance-id)
+        REGION=$(curl -s -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" http://169.254.169.254/latest/meta-data/placement/region)
+        aws ec2 terminate-instances --instance-ids "$INSTANCE_ID" --region "$REGION"
+        sleep 60
+        exit 1
+    fi
+    echo "CPU check passed: $ACTUAL_CPU"
+else
+    echo "Skipping CPU model check on $ARCH"
 fi
-echo "CPU check passed: $ACTUAL_CPU"
 
 # 使用 case 语句检查是否支持多盘 LVM
 USE_LVM=false

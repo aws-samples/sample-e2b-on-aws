@@ -97,9 +97,22 @@ func (g *AWSArtifactsRegistry) GetImage(ctx context.Context, templateId string, 
 		return nil, fmt.Errorf("failed to get auth: %w", err)
 	}
 
+	// Try with platform selector first (for multi-arch manifest lists)
 	img, err := remote.Image(ref, remote.WithAuth(auth), remote.WithPlatform(platform))
+	if err == nil {
+		return img, nil
+	}
+
+	// Fall back to direct pull for single-arch manifests (e.g. images pushed by docker CLI)
+	img, err = remote.Image(ref, remote.WithAuth(auth))
 	if err != nil {
 		return nil, fmt.Errorf("error pulling image: %w", err)
+	}
+
+	// Verify architecture matches to avoid silently using wrong-arch images
+	cfg, cfgErr := img.ConfigFile()
+	if cfgErr == nil && cfg.Architecture != platform.Architecture {
+		return nil, fmt.Errorf("image architecture mismatch: want %s, got %s", platform.Architecture, cfg.Architecture)
 	}
 
 	return img, nil

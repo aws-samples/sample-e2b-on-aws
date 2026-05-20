@@ -129,7 +129,6 @@ func (d *Dispatch) Handle() error {
 
 		// Now go through processing complete packets
 		rp := 0
-	process:
 		for {
 			// Check if there is a fatal error from an async read/write to return
 			select {
@@ -168,13 +167,16 @@ func (d *Dispatch) Handle() error {
 					}
 				case NBDCmdWrite:
 					rp += 28
-					if wp-rp < int(request.Length) {
-						rp -= 28
-						break process // We don't have enough data yet... Wait for next read
-					}
 					data := make([]byte, request.Length)
-					copy(data, buffer[rp:rp+int(request.Length)])
-					rp += int(request.Length)
+					dataCopied := copy(data, buffer[rp:wp])
+					rp += dataCopied
+					for dataCopied < int(request.Length) {
+						n, err := d.fp.Read(data[dataCopied:])
+						if err != nil {
+							return err
+						}
+						dataCopied += n
+					}
 					err := d.cmdWrite(request.Handle, request.From, data)
 					if err != nil {
 						return err
