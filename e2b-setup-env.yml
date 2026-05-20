@@ -31,6 +31,11 @@ Metadata:
         Parameters:
           - Architecture
       - Label:
+          default: Availability Zone Configuration
+        Parameters:
+          - AvailabilityZone1
+          - AvailabilityZone2
+      - Label:
           default: Client Cluster Configuration
         Parameters:
           - ClientInstanceType
@@ -82,6 +87,15 @@ Parameters:
     Description: "Instance type for client cluster nodes (must support nested virtualization, e.g. *.metal). Leave empty to use architecture default (x86: c5.metal, arm64: c7g.metal)."
     Type: String
     Default: ""
+
+  # Availability Zone Configuration - Select AZs that support your instance type
+  AvailabilityZone1:
+    Type: AWS::EC2::AvailabilityZone::Name
+    Description: "First availability zone for subnets (e.g. us-east-1b). Must support the chosen instance type."
+
+  AvailabilityZone2:
+    Type: AWS::EC2::AvailabilityZone::Name
+    Description: "Second availability zone for subnets (e.g. us-east-1c). Must support the chosen instance type."
 
   # Domain Configuration - Settings for SSL certificate and DNS
   BaseDomain:
@@ -224,10 +238,7 @@ Resources:
     Metadata:
       Comment: Public subnet in first availability zone for internet-facing resources
     Properties:
-      AvailabilityZone: !Select
-        - "0"
-        - !GetAZs
-          Ref: AWS::Region
+      AvailabilityZone: !Ref AvailabilityZone1
       CidrBlock: !Ref PublicSubnet1Block
       VpcId: !Ref VPC
       MapPublicIpOnLaunch: true
@@ -243,10 +254,7 @@ Resources:
     Metadata:
       Comment: Public subnet in second availability zone for internet-facing resources
     Properties:
-      AvailabilityZone: !Select
-        - "1"
-        - !GetAZs
-          Ref: AWS::Region
+      AvailabilityZone: !Ref AvailabilityZone2
       CidrBlock: !Ref PublicSubnet2Block
       VpcId: !Ref VPC
       MapPublicIpOnLaunch: true
@@ -262,10 +270,7 @@ Resources:
     Metadata:
       Comment: Private subnet in first availability zone for secure resources
     Properties:
-      AvailabilityZone: !Select
-        - "0"
-        - !GetAZs
-          Ref: AWS::Region
+      AvailabilityZone: !Ref AvailabilityZone1
       CidrBlock: !Ref PrivateSubnet1Block
       VpcId: !Ref VPC
       Tags:
@@ -280,10 +285,7 @@ Resources:
     Metadata:
       Comment: Private subnet in second availability zone for secure resources
     Properties:
-      AvailabilityZone: !Select
-        - "1"
-        - !GetAZs
-          Ref: AWS::Region
+      AvailabilityZone: !Ref AvailabilityZone2
       CidrBlock: !Ref PrivateSubnet2Block
       VpcId: !Ref VPC
       Tags:
