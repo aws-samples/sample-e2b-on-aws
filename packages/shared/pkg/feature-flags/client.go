@@ -26,6 +26,8 @@ func NewClient() (*Client, error) {
 	var err error
 
 	if launchDarklyApiKey == "" {
+		LaunchDarklyOfflineStore.Update(LaunchDarklyOfflineStore.Flag(MetricsWriteFlagName).BooleanFlag().FallthroughVariation(true))
+
 		// waitFor has to be 0 for offline store
 		ldClient, err = ldclient.MakeCustomClient("", ldclient.Config{DataSource: LaunchDarklyOfflineStore}, 0)
 		if err != nil {
