@@ -94,7 +94,9 @@ receivers:
 
 processors:
   batch:
-    timeout: 5s
+    timeout: 15s
+    send_batch_size: 1500
+    send_batch_max_size: 2000
 
 
   # keep only metrics that are used
@@ -108,8 +110,10 @@ processors:
           - "template.*"
           - "api.*"
           - "client_proxy.*"
-
-          - "otelcol.*"
+          - "e2b\\.sandbox\\..*"      # per-sandbox cpu/ram gauges
+          - "http\\..*"                  # api HTTP middleware histograms
+          - "rpc\\..*"                   # otelgrpc client/server histograms
+          - "otelcol_.*"                   # collector self-metrics
 
 
   filter/prometheus:
@@ -117,7 +121,7 @@ processors:
       include:
         match_type: strict
         metric_names:
-          - "nomad_client.host_cpu_total_percent"
+          - "nomad_client_host_cpu_total_percent"
           - "nomad_client_host_cpu_idle"
           - "nomad_client_host_disk_available"
           - "nomad_client_host_disk_size"
@@ -186,23 +190,24 @@ processors:
     attributes:
       - action: delete
         key: service.instance.id
-extensions:
-  basicauth/grafana_cloud:
-    # https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/extension/basicauthextension
-    client_auth:
-      username: "${grafana_username}"
-      password: "${grafana_otel_collector_token}"
+  filter/logs_severity:
+    error_mode: ignore
+    logs:
+      log_record:
+        - 'severity_number < SEVERITY_NUMBER_INFO'
 
+extensions:
   health_check:
     endpoint: 0.0.0.0:13133
+
 exporters:
   debug:
     verbosity: detailed
-  otlphttp/grafana_cloud:
-    # https://github.com/open-telemetry/opentelemetry-collector/tree/main/exporter/otlpexporter
-    endpoint: "${grafana_otlp_url}"
-    auth:
-      authenticator: basicauth/grafana_cloud
+  # Customer OTel HTTP endpoint (no auth required)
+  # Use http:// for insecure, https:// for TLS
+  otlphttp/customer:
+    endpoint: "${otel_customer_endpoint}"
+
 service:
   telemetry:
     logs:
@@ -216,39 +221,28 @@ service:
                 insecure: true
                 endpoint: localhost:4317
   extensions:
-    - basicauth/grafana_cloud
     - health_check
   pipelines:
     metrics:
-      receivers:
-        - otlp
+      receivers: [otlp]
       processors: [filter/otlp, resourcedetection, transform/set-name, batch]
-      exporters:
-        - otlphttp/grafana_cloud
+      exporters: [otlphttp/customer]
     metrics/prometheus:
-      receivers:
-        - prometheus
+      receivers: [prometheus]
       processors: [filter/prometheus, metricstransform, resourcedetection, transform/set-name, batch]
-      exporters:
-        - otlphttp/grafana_cloud
+      exporters: [otlphttp/customer]
     metrics/rpc_only:
-      receivers:
-        - otlp
+      receivers: [otlp]
       processors: [filter/rpc_duration_only, resource/remove_instance, resourcedetection, transform/set-name, batch]
-      exporters:
-        - otlphttp/grafana_cloud
+      exporters: [otlphttp/customer]
     traces:
-      receivers:
-        - otlp
+      receivers: [otlp]
       processors: [batch]
-      exporters:
-        - otlphttp/grafana_cloud
+      exporters: [otlphttp/customer]
     logs:
-      receivers:
-        - otlp
-      processors: [batch]
-      exporters:
-        - otlphttp/grafana_cloud
+      receivers: [otlp]
+      processors: [filter/logs_severity, batch]
+      exporters: [otlphttp/customer]
 EOF
 
         destination = "local/config/otel-collector-config.yaml"

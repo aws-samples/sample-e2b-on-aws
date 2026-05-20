@@ -118,33 +118,70 @@ tail -f /tmp/e2b.log
 3. **获取 Token**：执行 `cat /opt/config.properties` 获取 Nomad 管理 Token
 
 <details>
-<summary><strong>📊 配置 E2B 监控（可选）</strong></summary>
+<summary><strong>📊 日志与监控（可选）</strong></summary>
 
-1. 登录 https://grafana.com/（如需注册）
-2. 访问设置页面 `https://grafana.com/orgs/<username>`
-3. 在 Stack 中找到 **Manage your stack** 页面
-4. 找到 **OpenTelemetry** 并点击 **Configure**
-5. 记录以下值：
-   ```
-   Endpoint for sending OTLP signals: xxxx
-   Instance ID: xxxxxxx
-   Password / API Token: xxxxx
-   ```
-6. 导出 Grafana 环境变量：
-   ```bash
-   cat << EOF >> /opt/config.properties
+日志与监控组件由 `nomad/deploy.sh --all` 一次性部署，共三个：
 
-   # Grafana configuration
-   grafana_otel_collector_token=xxx
-   grafana_otlp_url=xxx
-   grafana_username=xxx
-   EOF
-   ```
-7. 部署 OpenTelemetry collector：
-   ```bash
-   bash nomad/deploy.sh otel-collector
-   ```
-8. 打开 Grafana Cloud Dashboard 查看指标、链路追踪和日志
+| 组件 | 类型 | 用途 | 端口 |
+|---|---|---|---|
+| **OTel Collector** | system（全节点） | 通过 OTLP 采集 metrics / traces / application logs | 4317 (gRPC), 4318 (HTTP) |
+| **Logs Collector (Vector)** | system（全节点） | 采集 sandbox 内用户日志，转发到 Loki | 30006 |
+| **Loki** | service（api 节点） | 日志存储与查询，后端 S3 | 3100 |
+
+**架构：**
+
+```
+┌─────────────────────────────┐     ┌──────────────────────┐
+│ Go Services (api/orch/proxy)│     │ Sandbox envd         │
+│  OTel SDK → gRPC :4317      │     │  HTTP → :30006       │
+└──────────┬──────────────────┘     └──────────┬───────────┘
+           │                                    │
+           ▼                                    ▼
+┌──────────────────────┐            ┌──────────────────────┐
+│   OTel Collector      │            │   Vector (logs-coll) │
+│   Metrics/Traces/Logs │            │   Sandbox 用户日志    │
+│   → 客户端点          │            │   → Loki             │
+└──────────────────────┘            └──────────┬───────────┘
+                                               ▼
+                                    ┌──────────────────────┐
+                                    │   Loki               │
+                                    │   存储：S3 桶         │
+                                    └──────────────────────┘
+```
+
+#### 使用客户 OTel 端点部署
+
+配置任意支持 OTLP/HTTP 协议的后端端点（如 Grafana Cloud、Datadog、Honeycomb、或自建 collector）：
+
+```bash
+# 1. 把端点写入 config.properties
+cat << EOF >> /opt/config.properties
+
+# 客户 OTel 端点（无需认证）
+# 明文传输用 http://，TLS 用 https://
+otel_customer_endpoint=http://your-otel-collector:4318
+EOF
+
+# 2. 重新渲染 deploy HCL，让 envsubst 注入 otel_customer_endpoint
+bash nomad/prepare.sh
+
+# 3. 部署所有监控组件
+bash nomad/deploy.sh --all
+```
+
+> **重要：** 运行 `nomad/prepare.sh` **之前**，`/opt/config.properties` 里必须已定义 `otel_customer_endpoint`。`prepare.sh` 会用 `envsubst` 将 `origin/*.hcl` 渲染为 `deploy/*-deploy.hcl`；若变量缺失，exporter 端点会变成空字符串，otel-collector 任务启动失败。
+
+#### 数据流详情
+
+| 数据类型 | 来源 | 管道 | 存储 |
+|---|---|---|---|
+| **Metrics**（应用） | Go 服务 OTel SDK | → OTel Collector → 客户端点 | 外部 |
+| **Metrics**（基础设施） | Nomad `/v1/metrics` | → OTel Collector（Prometheus scrape）→ 客户端点 | 外部 |
+| **Traces** | Go 服务 OTel SDK | → OTel Collector → 客户端点 | 外部 |
+| **应用日志** | Go 服务 zap logger | → OTel Collector（OTLP log bridge）→ 客户端点 | 外部 |
+| **Sandbox 用户日志** | envd → orchestrator | → Vector (:30006) → Loki (:3100) | **S3**（Loki 桶） |
+
+> **注意：** Sandbox 用户日志始终走 Vector → Loki → S3，独立于 OTel 管道。Loki S3 桶由 Terraform 创建（`{prefix}-loki-storage-{account_id}`）。
 
 </details>
 

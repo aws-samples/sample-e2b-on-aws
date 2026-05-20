@@ -31,6 +31,11 @@ Metadata:
         Parameters:
           - Architecture
       - Label:
+          default: Availability Zone Configuration
+        Parameters:
+          - AvailabilityZone1
+          - AvailabilityZone2
+      - Label:
           default: Client Cluster Configuration
         Parameters:
           - ClientInstanceType
@@ -82,6 +87,15 @@ Parameters:
     Description: "Instance type for client cluster nodes (must support nested virtualization, e.g. *.metal). Leave empty to use architecture default (x86: c5.metal, arm64: c7g.metal)."
     Type: String
     Default: ""
+
+  # Availability Zone Configuration - Select AZs that support your instance type
+  AvailabilityZone1:
+    Type: AWS::EC2::AvailabilityZone::Name
+    Description: "First availability zone for subnets (e.g. us-east-1b). Must support the chosen instance type."
+
+  AvailabilityZone2:
+    Type: AWS::EC2::AvailabilityZone::Name
+    Description: "Second availability zone for subnets (e.g. us-east-1c). Must support the chosen instance type."
 
   # Domain Configuration - Settings for SSL certificate and DNS
   BaseDomain:
@@ -224,10 +238,7 @@ Resources:
     Metadata:
       Comment: Public subnet in first availability zone for internet-facing resources
     Properties:
-      AvailabilityZone: !Select
-        - "0"
-        - !GetAZs
-          Ref: AWS::Region
+      AvailabilityZone: !Ref AvailabilityZone1
       CidrBlock: !Ref PublicSubnet1Block
       VpcId: !Ref VPC
       MapPublicIpOnLaunch: true
@@ -243,10 +254,7 @@ Resources:
     Metadata:
       Comment: Public subnet in second availability zone for internet-facing resources
     Properties:
-      AvailabilityZone: !Select
-        - "1"
-        - !GetAZs
-          Ref: AWS::Region
+      AvailabilityZone: !Ref AvailabilityZone2
       CidrBlock: !Ref PublicSubnet2Block
       VpcId: !Ref VPC
       MapPublicIpOnLaunch: true
@@ -262,10 +270,7 @@ Resources:
     Metadata:
       Comment: Private subnet in first availability zone for secure resources
     Properties:
-      AvailabilityZone: !Select
-        - "0"
-        - !GetAZs
-          Ref: AWS::Region
+      AvailabilityZone: !Ref AvailabilityZone1
       CidrBlock: !Ref PrivateSubnet1Block
       VpcId: !Ref VPC
       Tags:
@@ -280,10 +285,7 @@ Resources:
     Metadata:
       Comment: Private subnet in second availability zone for secure resources
     Properties:
-      AvailabilityZone: !Select
-        - "1"
-        - !GetAZs
-          Ref: AWS::Region
+      AvailabilityZone: !Ref AvailabilityZone2
       CidrBlock: !Ref PrivateSubnet2Block
       VpcId: !Ref VPC
       Tags:
@@ -558,6 +560,8 @@ Resources:
                   - ec2:DescribeAvailabilityZones
                   - ec2:DescribeKeyPairs
                   - ec2:DescribeNetworkInterfaces
+                  - ec2:DescribeAccountAttributes
+                  - ec2:DescribeInternetGateways
                   - ec2:DetachVolume
                   - ec2:GetPasswordData
                   - ec2:ModifyImageAttribute
@@ -659,6 +663,18 @@ Resources:
                   StringEquals:
                     iam:PassedToService:
                       - ec2.amazonaws.com
+              - Sid: IAMCreateServiceLinkedRole
+                Effect: Allow
+                Action:
+                  - iam:CreateServiceLinkedRole
+                Resource:
+                  - "arn:aws:iam::*:role/aws-service-role/autoscaling.amazonaws.com/*"
+                  - "arn:aws:iam::*:role/aws-service-role/elasticloadbalancing.amazonaws.com/*"
+                Condition:
+                  StringEquals:
+                    iam:AWSServiceName:
+                      - autoscaling.amazonaws.com
+                      - elasticloadbalancing.amazonaws.com
               - Sid: LogsAndMonitoring
                 Effect: Allow
                 Action:
@@ -775,8 +791,8 @@ Resources:
       MasterUsername: !Ref DBUsername
       MasterUserPassword: !Ref DBPassword
       ServerlessV2ScalingConfiguration:
-        MinCapacity: 0.5
-        MaxCapacity: 4
+        MinCapacity: 4
+        MaxCapacity: 128
       StorageEncrypted: true
       DeletionProtection: !If [IsProd, true, false]
       VpcSecurityGroupIds:
@@ -933,6 +949,7 @@ Resources:
               # Create directory for E2B infrastructure code
               mkdir -p /opt/infra/ && cd /opt/infra/
               git clone https://github.com/aws-samples/sample-e2b-on-aws.git && cd sample-e2b-on-aws
+              git checkout 0410
             - !Sub |
               # Initialize Configuration
               touch /tmp/e2b.log
@@ -1063,13 +1080,15 @@ Outputs:
   # S3 bucket outputs
   CFNE2BBUCKET:
     Description: Unified E2B S3 bucket name
-    Value: !If [HasExternalE2BBucket, !Ref ExistingE2BBucketName, !Ref E2BBucket]
+    Value:
+      !If [HasExternalE2BBucket, !Ref ExistingE2BBucketName, !Ref E2BBucket]
     Export:
       Name: !Sub "${AWS::StackName}-CFNE2BBUCKET"
 
   CFNLOKIBUCKET:
     Description: Loki log storage S3 bucket name
-    Value: !If [HasExternalLokiBucket, !Ref ExistingLokiBucketName, !Ref LokiBucket]
+    Value:
+      !If [HasExternalLokiBucket, !Ref ExistingLokiBucketName, !Ref LokiBucket]
     Export:
       Name: !Sub "${AWS::StackName}-CFNLOKIBUCKET"
 
