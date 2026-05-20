@@ -58,8 +58,8 @@ job "client-proxy" {
 
       resources {
         memory_max = 4096
-        memory     = 1024
-        cpu        = 1000
+        memory     = 4096
+        cpu        = 2000
       }
 
       env {

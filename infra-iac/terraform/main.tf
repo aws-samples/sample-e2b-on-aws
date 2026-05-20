@@ -56,7 +56,7 @@ locals {
   clusters = {
     # Server nodes run Consul and Nomad servers
     server = {
-      instance_type_x86    = var.environment == "prod" ? "m6i.4xlarge" : "t3.xlarge"
+      instance_type_x86    = var.environment == "prod" ? "m7i.4xlarge" : "t3.xlarge"
       instance_type_arm    = var.environment == "prod" ? "m7g.4xlarge" : "t4g.xlarge"
       desired_capacity = 3
       max_size         = 3
@@ -72,7 +72,7 @@ locals {
     }
     # API nodes run the API service
     api = {
-      instance_type_x86    = var.environment == "prod" ? "m6i.4xlarge" : "t3.xlarge"
+      instance_type_x86    = var.environment == "prod" ? "m7i.4xlarge" : "t3.xlarge"
       instance_type_arm    = var.environment == "prod" ? "m7g.4xlarge" : "t4g.xlarge"
       desired_capacity = 1
       max_size         = 1
@@ -574,7 +574,7 @@ resource "aws_launch_template" "client" {
     device_name = "/dev/sda2"
 
     ebs {
-      volume_size           = 500
+      volume_size           = 1000
       volume_type           = "gp3"
       encrypted             = true
       delete_on_termination = true
@@ -615,10 +615,14 @@ resource "aws_launch_template" "client" {
   depends_on = [aws_s3_object.setup_config_objects]
 }
 
+data "aws_ec2_instance_type" "client" {
+  instance_type = var.client_instance_type
+}
+
 # Create a new launch template version with NestedVirtualization enabled via AWS CLI
 # Terraform AWS provider does not support the NestedVirtualization parameter in cpu_options
 resource "null_resource" "client_nested_virtualization" {
-  count = endswith(var.client_instance_type, ".metal") ? 0 : 1
+  count = data.aws_ec2_instance_type.client.bare_metal ? 0 : 1
 
   triggers = {
     launch_template_id      = aws_launch_template.client.id
