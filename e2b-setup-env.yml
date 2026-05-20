@@ -791,8 +791,8 @@ Resources:
       MasterUsername: !Ref DBUsername
       MasterUserPassword: !Ref DBPassword
       ServerlessV2ScalingConfiguration:
-        MinCapacity: 4
-        MaxCapacity: 128
+        MinCapacity: 0.5
+        MaxCapacity: 4
       StorageEncrypted: true
       DeletionProtection: !If [IsProd, true, false]
       VpcSecurityGroupIds:
