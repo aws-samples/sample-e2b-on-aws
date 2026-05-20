@@ -13,6 +13,8 @@ Metadata:
           default: VPC Configuration
         Parameters:
           - VpcBlock
+          - AvailabilityZone1
+          - AvailabilityZone2
           - PublicSubnet1Block
           - PublicSubnet2Block
           - PrivateSubnet1Block
@@ -97,6 +99,15 @@ Parameters:
     Type: String
     Default: 10.0.0.0/16
     Description: The CIDR range for the VPC. Must be a valid private (RFC 1918) CIDR range with sufficient IP addresses for all components.
+
+  # Availability Zone Configuration - Select AZs that support your instance type
+  AvailabilityZone1:
+    Type: AWS::EC2::AvailabilityZone::Name
+    Description: "First availability zone for subnets (e.g. us-east-1b). Must support the chosen instance type."
+
+  AvailabilityZone2:
+    Type: AWS::EC2::AvailabilityZone::Name
+    Description: "Second availability zone for subnets (e.g. us-east-1c). Must support the chosen instance type."
 
   # Public Subnets - Network segments with internet access for load balancers and bastion hosts
   PublicSubnet1Block:
@@ -224,10 +235,7 @@ Resources:
     Metadata:
       Comment: Public subnet in first availability zone for internet-facing resources
     Properties:
-      AvailabilityZone: !Select
-        - "0"
-        - !GetAZs
-          Ref: AWS::Region
+      AvailabilityZone: !Ref AvailabilityZone1
       CidrBlock: !Ref PublicSubnet1Block
       VpcId: !Ref VPC
       MapPublicIpOnLaunch: true
@@ -243,10 +251,7 @@ Resources:
     Metadata:
       Comment: Public subnet in second availability zone for internet-facing resources
     Properties:
-      AvailabilityZone: !Select
-        - "1"
-        - !GetAZs
-          Ref: AWS::Region
+      AvailabilityZone: !Ref AvailabilityZone2
       CidrBlock: !Ref PublicSubnet2Block
       VpcId: !Ref VPC
       MapPublicIpOnLaunch: true
@@ -262,10 +267,7 @@ Resources:
     Metadata:
       Comment: Private subnet in first availability zone for secure resources
     Properties:
-      AvailabilityZone: !Select
-        - "0"
-        - !GetAZs
-          Ref: AWS::Region
+      AvailabilityZone: !Ref AvailabilityZone1
       CidrBlock: !Ref PrivateSubnet1Block
       VpcId: !Ref VPC
       Tags:
@@ -280,10 +282,7 @@ Resources:
     Metadata:
       Comment: Private subnet in second availability zone for secure resources
     Properties:
-      AvailabilityZone: !Select
-        - "1"
-        - !GetAZs
-          Ref: AWS::Region
+      AvailabilityZone: !Ref AvailabilityZone2
       CidrBlock: !Ref PrivateSubnet2Block
       VpcId: !Ref VPC
       Tags:
