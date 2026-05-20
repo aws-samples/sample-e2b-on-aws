@@ -58,6 +58,17 @@ func New(
 		return nil, fmt.Errorf("error getting template storage provider: %v", err)
 	}
 
+	// Separate storage for SDK build-context uploads (COPY/ADD steps).
+	var buildContextStorage storage.StorageProvider
+	if buildCtxBucket := env.GetEnv("BUILD_CONTEXT_BUCKET_NAME", ""); buildCtxBucket != "" {
+		buildContextStorage, err = storage.NewAWSBucketStorageProvider(ctx, buildCtxBucket, "")
+		if err != nil {
+			return nil, fmt.Errorf("error initializing build-context storage provider: %w", err)
+		}
+	} else {
+		logger.Warn("BUILD_CONTEXT_BUCKET_NAME not set; SDK COPY/ADD steps will fail")
+	}
+
 	artifactsregistry, err := artifactsregistry.GetArtifactsRegistryProvider()
 	if err != nil {
 		return nil, fmt.Errorf("error getting artifacts registry provider: %v", err)
@@ -71,6 +82,7 @@ func New(
 		tracer,
 		templateStorage,
 		persistence,
+		buildContextStorage,
 		artifactsregistry,
 		devicePool,
 		networkPool,

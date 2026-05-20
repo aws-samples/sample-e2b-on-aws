@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"go.opentelemetry.io/otel/trace"
@@ -37,14 +38,15 @@ type TemplateBuilder struct {
 	logger *zap.Logger
 	tracer trace.Tracer
 
-	storage          storage.StorageProvider
-	devicePool       *nbd.DevicePool
-	networkPool      *network.Pool
-	buildLogger      *zap.Logger
-	templateStorage  *template.Storage
-	artifactRegistry artifactsregistry.ArtifactsRegistry
-	proxy            *proxy.SandboxProxy
-	sandboxes        *smap.Map[*sandbox.Sandbox]
+	storage             storage.StorageProvider
+	buildContextStorage storage.StorageProvider
+	devicePool          *nbd.DevicePool
+	networkPool         *network.Pool
+	buildLogger         *zap.Logger
+	templateStorage     *template.Storage
+	artifactRegistry    artifactsregistry.ArtifactsRegistry
+	proxy               *proxy.SandboxProxy
+	sandboxes           *smap.Map[*sandbox.Sandbox]
 }
 
 const (
@@ -64,6 +66,7 @@ func NewBuilder(
 	tracer trace.Tracer,
 	templateStorage *template.Storage,
 	storage storage.StorageProvider,
+	buildContextStorage storage.StorageProvider,
 	artifactRegistry artifactsregistry.ArtifactsRegistry,
 	devicePool *nbd.DevicePool,
 	networkPool *network.Pool,
@@ -71,16 +74,17 @@ func NewBuilder(
 	sandboxes *smap.Map[*sandbox.Sandbox],
 ) *TemplateBuilder {
 	return &TemplateBuilder{
-		logger:           logger,
-		tracer:           tracer,
-		buildLogger:      buildLogger,
-		templateStorage:  templateStorage,
-		storage:          storage,
-		artifactRegistry: artifactRegistry,
-		devicePool:       devicePool,
-		networkPool:      networkPool,
-		proxy:            proxy,
-		sandboxes:        sandboxes,
+		logger:              logger,
+		tracer:              tracer,
+		buildLogger:         buildLogger,
+		templateStorage:     templateStorage,
+		storage:             storage,
+		buildContextStorage: buildContextStorage,
+		artifactRegistry:    artifactRegistry,
+		devicePool:          devicePool,
+		networkPool:         networkPool,
+		proxy:               proxy,
+		sandboxes:           sandboxes,
 	}
 }
 
@@ -234,6 +238,77 @@ func (b *TemplateBuilder) Build(ctx context.Context, template *TemplateConfig) (
 		b.proxy.RemoveFromPool(sbx.Metadata.Config.ExecutionId)
 	}()
 
+	// Env variables from the Docker image
+	envVars := oci.ParseEnvs(buildConfig.Env)
+
+	// Execute build steps inside the running FC VM
+	currentUser := "root"
+	var currentWorkdir *string
+	if len(template.Steps) > 0 {
+		postProcessor.WriteMsg(fmt.Sprintf("Executing %d build steps", len(template.Steps)))
+		for i, step := range template.Steps {
+			stepType := strings.ToUpper(step.Type)
+			switch stepType {
+			case "RUN":
+				if len(step.Args) < 1 {
+					return nil, fmt.Errorf("step %d: RUN requires command argument", i)
+				}
+				postProcessor.WriteMsg(fmt.Sprintf("[step %d] RUN %s", i, step.Args[0]))
+				err = b.runCommand(ctx, postProcessor, fmt.Sprintf("step-%d-run", i),
+					sbx.Metadata.Config.SandboxId, step.Args[0], currentUser, currentWorkdir, envVars)
+			case "COPY", "ADD":
+				if len(step.Args) < 2 {
+					return nil, fmt.Errorf("step %d: %s requires source and destination arguments", i, stepType)
+				}
+				postProcessor.WriteMsg(fmt.Sprintf("[step %d] %s %s %s", i, stepType, step.Args[0], step.Args[1]))
+				err = b.copyFilesToSandbox(ctx, postProcessor, sbx.Metadata.Config.SandboxId, template.TemplateId, step, currentWorkdir)
+			case "ENV":
+				snapshot := make(map[string]string, len(envVars))
+				for k, v := range envVars {
+					snapshot[k] = v
+				}
+				for j := 0; j < len(step.Args); j++ {
+					arg := step.Args[j]
+					parts := strings.SplitN(arg, "=", 2)
+					if len(parts) == 2 {
+						envVars[parts[0]] = expandEnvVars(parts[1], snapshot)
+					} else if j+1 < len(step.Args) {
+						envVars[arg] = expandEnvVars(step.Args[j+1], snapshot)
+						j++
+					}
+				}
+				postProcessor.WriteMsg(fmt.Sprintf("[step %d] ENV set %d variable(s)", i, len(step.Args)/2))
+				continue
+			case "WORKDIR":
+				if len(step.Args) > 0 {
+					wd := expandEnvVars(step.Args[0], envVars)
+					postProcessor.WriteMsg(fmt.Sprintf("[step %d] WORKDIR %s", i, wd))
+					err = b.runCommand(ctx, postProcessor, fmt.Sprintf("step-%d-workdir", i),
+						sbx.Metadata.Config.SandboxId, fmt.Sprintf("mkdir -p %s", wd), "root", nil, envVars)
+					currentWorkdir = &wd
+				}
+			case "USER":
+				if len(step.Args) < 1 {
+					return nil, fmt.Errorf("step %d: USER requires username argument", i)
+				}
+				currentUser = step.Args[0]
+				postProcessor.WriteMsg(fmt.Sprintf("[step %d] USER %s", i, currentUser))
+				continue
+			default:
+				return nil, fmt.Errorf("step %d: unsupported step type %q", i, stepType)
+			}
+			if err != nil {
+				return nil, fmt.Errorf("step %d (%s) failed: %w", i, stepType, err)
+			}
+		}
+		postProcessor.WriteMsg("All build steps completed")
+	}
+
+	// For v1 CLI flow: use Docker image USER if no explicit USER step was set
+	if currentUser == "root" && buildConfig.User != "" {
+		currentUser = buildConfig.User
+	}
+
 	// Run configuration script
 	var scriptDef bytes.Buffer
 	err = ConfigureScriptTemplate.Execute(&scriptDef, map[string]string{})
@@ -257,8 +332,12 @@ func (b *TemplateBuilder) Build(ctx context.Context, template *TemplateConfig) (
 		return nil, fmt.Errorf("error running configuration script: %w", err)
 	}
 
-	// Env variables for the start command and ready command
-	envVars := oci.ParseEnvs(buildConfig.Env)
+	// Merge Docker image env variables (steps may have added more via ENV steps above)
+	for k, v := range oci.ParseEnvs(buildConfig.Env) {
+		if _, exists := envVars[k]; !exists {
+			envVars[k] = v
+		}
+	}
 
 	// Start command
 	commandsCtx, commandsCancel := context.WithCancel(ctx)
@@ -270,13 +349,16 @@ func (b *TemplateBuilder) Build(ctx context.Context, template *TemplateConfig) (
 		postProcessor.WriteMsg("Running start command")
 		startCmd.Go(func() error {
 			cwd := "/home/user"
+			if currentWorkdir != nil {
+				cwd = *currentWorkdir
+			}
 			err := b.runCommandWithConfirmation(
 				commandsCtx,
 				postProcessor,
 				"start",
 				sbx.Metadata.Config.SandboxId,
 				template.StartCmd,
-				"root",
+				currentUser,
 				&cwd,
 				envVars,
 				startCmdConfirm,
@@ -301,6 +383,8 @@ func (b *TemplateBuilder) Build(ctx context.Context, template *TemplateConfig) (
 		postProcessor,
 		template,
 		sbx.Metadata.Config.SandboxId,
+		currentUser,
+		currentWorkdir,
 		envVars,
 	)
 	if err != nil {
@@ -523,27 +607,23 @@ func (b *TemplateBuilder) enlargeDiskAfterProvisioning(
 	}
 	template.rootfsSize = rootfsFinalSize
 
-	// Check the rootfs filesystem corruption
-	ext4Check, err := ext4.CheckIntegrity(rootfsPath, false)
+	// Check the rootfs filesystem with preen mode so minor issues
+	// (e.g. residual block bitmap differences) are auto-corrected.
+	ext4Check, err := ext4.CheckIntegrity(rootfsPath, true)
 	if err != nil {
-		zap.L().Error("final enlarge filesystem ext4 integrity",
-			zap.String("result", ext4Check),
-			zap.Error(err),
-		)
-
-		// Occasionally there is Block bitmap differences. For this reason, we retry with fix.
-		ext4Check, err := ext4.CheckIntegrity(rootfsPath, true)
-		zap.L().Error("final enlarge filesystem ext4 integrity - retry with fix",
-			zap.String("result", ext4Check),
-			zap.Error(err),
-		)
-		if err != nil {
-			return fmt.Errorf("error checking final enlarge filesystem integrity: %w", err)
-		}
-	} else {
-		zap.L().Debug("final enlarge filesystem ext4 integrity",
-			zap.String("result", ext4Check),
-		)
+		return fmt.Errorf("error checking final enlarge filesystem integrity: %w", err)
 	}
+	zap.L().Debug("final enlarge filesystem ext4 integrity",
+		zap.String("result", ext4Check),
+	)
 	return nil
+}
+
+func expandEnvVars(value string, envs map[string]string) string {
+	return os.Expand(value, func(key string) string {
+		if v, ok := envs[key]; ok {
+			return v
+		}
+		return ""
+	})
 }
