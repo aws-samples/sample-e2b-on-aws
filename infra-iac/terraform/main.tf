@@ -749,7 +749,8 @@ resource "aws_lb" "alb" {
   security_groups    = [aws_security_group.alb_sg.id]
   subnets            = var.publicaccess == "private" ? var.VPC.private_subnets : var.VPC.public_subnets
   enable_deletion_protection = var.environment == "prod" ? true : false
-  
+  idle_timeout               = 300
+
   tags = merge(
     local.common_tags,
     {
