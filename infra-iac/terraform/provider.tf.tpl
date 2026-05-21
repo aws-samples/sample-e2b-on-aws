@@ -1,5 +1,6 @@
 provider "aws" {
   region     = "${AWSREGION}"
+  skip_region_validation = true
 }
 
 terraform {
@@ -8,5 +9,6 @@ terraform {
     key        = "terraform-state/${CFNSTACKNAME}/terraform.tfstate"
     region     = "${AWSREGION}"
     encrypt    = true
+    skip_region_validation = true
   }
 }

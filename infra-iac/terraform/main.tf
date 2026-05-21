@@ -12,7 +12,7 @@ terraform {
     # AWS provider for creating and managing AWS resources
     aws = {
       source  = "hashicorp/aws"
-      version = "5.34.0"
+      version = "~> 5.82"
     }
     # Random provider for generating random values (UUIDs, encryption keys, etc.)
     random = {
