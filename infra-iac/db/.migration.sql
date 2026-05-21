@@ -728,12 +728,12 @@ ADD COLUMN env_secure boolean NOT NULL DEFAULT false;
 CREATE INDEX CONCURRENTLY idx_env_builds_status ON public.env_builds(status);
 
 ALTER TABLE tiers
-    ADD COLUMN "max_vcpu" bigint NOT NULL default '8'::bigint,
+    ADD COLUMN "max_vcpu" bigint NOT NULL default '32'::bigint,
     ADD COLUMN "max_ram_mb" bigint NOT NULL DEFAULT '8096'::bigint;
 
 ALTER TABLE tiers
     ALTER COLUMN "max_ram_mb" SET DEFAULT '8192'::bigint;
-UPDATE tiers SET "max_ram_mb" = 8192 WHERE "max_ram_mb" = 8096;
+UPDATE tiers SET "max_ram_mb" = 32768 WHERE "max_ram_mb" = 8096;
 
 ALTER TABLE public.users_teams ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
 ALTER TABLE public.env_builds
