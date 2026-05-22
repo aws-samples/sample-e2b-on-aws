@@ -20,6 +20,7 @@ import (
 	"github.com/e2b-dev/infra/packages/orchestrator/internal/sandbox/network"
 	"github.com/e2b-dev/infra/packages/orchestrator/internal/sandbox/socket"
 	"github.com/e2b-dev/infra/packages/orchestrator/internal/sandbox/template"
+	"github.com/e2b-dev/infra/packages/shared/pkg/fc/models"
 	sbxlogger "github.com/e2b-dev/infra/packages/shared/pkg/logger/sandbox"
 	"github.com/e2b-dev/infra/packages/shared/pkg/storage"
 	"github.com/e2b-dev/infra/packages/shared/pkg/telemetry"
@@ -49,6 +50,10 @@ type ProcessOptions struct {
 	Stdout io.Writer
 	// Stderr is the writer to which the process stderr will be written.
 	Stderr io.Writer
+
+	// CPUTemplate optionally overrides the CPU template for the VM.
+	// If nil, defaults to T2.
+	CPUTemplate *models.CPUTemplate
 }
 
 type Process struct {
@@ -334,7 +339,7 @@ func (p *Process) Create(
 	}
 	telemetry.ReportEvent(childCtx, "set fc network config")
 
-	err = p.client.setMachineConfig(childCtx, vCPUCount, memoryMB, hugePages)
+	err = p.client.setMachineConfig(childCtx, vCPUCount, memoryMB, hugePages, options.CPUTemplate)
 	if err != nil {
 		fcStopErr := p.Stop()
 
