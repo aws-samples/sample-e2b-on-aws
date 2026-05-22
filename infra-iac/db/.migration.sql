@@ -726,6 +726,7 @@ ALTER TABLE snapshots
 ADD COLUMN env_secure boolean NOT NULL DEFAULT false;
 
 CREATE INDEX CONCURRENTLY idx_env_builds_status ON public.env_builds(status);
+CREATE INDEX CONCURRENTLY idx_snapshots_sandbox_id ON public.snapshots(sandbox_id);
 
 ALTER TABLE tiers
     ADD COLUMN "max_vcpu" bigint NOT NULL default '32'::bigint,
