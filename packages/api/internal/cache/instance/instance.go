@@ -215,15 +215,35 @@ func (c *InstanceCache) Len() int {
 }
 
 func (c *InstanceCache) Set(key string, value *InstanceInfo, created bool) {
+	_ = c.set(key, value, created, false)
+}
+
+func (c *InstanceCache) set(key string, value *InstanceInfo, created bool, waitForInsert bool) error {
 	inserted := c.cache.SetIfAbsent(key, value)
 	if inserted {
-		go func() {
-			err := c.insertInstance(value, created)
-			if err != nil {
+		if c.insertInstance == nil {
+			return nil
+		}
+
+		insert := func() error {
+			if err := c.insertInstance(value, created); err != nil {
 				zap.L().Error("error inserting instance", zap.Error(err))
+				return err
 			}
+
+			return nil
+		}
+
+		if waitForInsert {
+			return insert()
+		}
+
+		go func() {
+			_ = insert()
 		}()
 	}
+
+	return nil
 }
 
 func (c *InstanceCache) MarkAsPausing(instanceInfo *InstanceInfo) {
