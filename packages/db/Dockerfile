@@ -1,5 +1,9 @@
 # Builder stage
-FROM golang:1.24-alpine AS builder
+ARG JFROG_DOCKER_REGISTRY=artifactory.aic.aws.zoomdev.us/zoom-docker-virtual
+FROM ${JFROG_DOCKER_REGISTRY}/golang:1.24-alpine AS builder
+
+ARG JFROG_ARTIFACTORY_URL=https://artifactory.aic.aws.zoomdev.us/artifactory
+ENV GOPROXY=${JFROG_ARTIFACTORY_URL}/api/go/zoom-go-virtual
 
 # Shared
 WORKDIR /build/shared
@@ -21,7 +25,7 @@ RUN go build -o ./migrator ./migrator.go
 RUN chmod +x ./migrator
 
 # Final stage
-FROM alpine:latest
+FROM ${JFROG_DOCKER_REGISTRY}/alpine:latest
 
 COPY --from=builder /build/db/migrator /usr/local/bin/migrator
 

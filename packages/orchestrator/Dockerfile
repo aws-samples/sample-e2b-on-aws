@@ -1,4 +1,8 @@
-FROM golang:1.24-bullseye AS builder
+ARG JFROG_DOCKER_REGISTRY=artifactory.aic.aws.zoomdev.us/zoom-docker-virtual
+FROM ${JFROG_DOCKER_REGISTRY}/golang:1.24-bullseye AS builder
+
+ARG JFROG_ARTIFACTORY_URL=https://artifactory.aic.aws.zoomdev.us/artifactory
+ENV GOPROXY=${JFROG_ARTIFACTORY_URL}/api/go/zoom-go-virtual
 
 WORKDIR /build/shared
 

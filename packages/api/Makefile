@@ -70,6 +70,9 @@ build-and-upload-aws:
 	$(eval AWS_ACCOUNT_ID := $(shell grep "^account_id=" /opt/config.properties | cut -d= -f2))
 	$(eval AWS_REGION := $(shell grep "^AWSREGION=" /opt/config.properties | cut -d= -f2))
 	$(eval ARCHITECTURE := $(shell grep "^CFNARCHITECTURE=" /opt/config.properties | cut -d= -f2 || echo "amd64"))
+	$(eval JFROG_ARTIFACTORY_URL := $(shell grep -E "^(jfrog_artifactory_url|JFROGARTIFACTORYURL)=" /opt/config.properties 2>/dev/null | tail -n 1 | cut -d= -f2-))
+	$(eval JFROG_ARTIFACTORY_URL := $(if $(JFROG_ARTIFACTORY_URL),$(JFROG_ARTIFACTORY_URL),https://artifactory.aic.aws.zoomdev.us/artifactory))
+	$(eval JFROG_DOCKER_REGISTRY := $(shell printf '%s' "$(JFROG_ARTIFACTORY_URL)" | sed -e 's#^https://##' -e 's#^http://##' -e 's#/*$$##' -e 's#/artifactory$$##' -e 's#$$#/zoom-docker-virtual#'))
 	$(eval COMMIT_SHA := $(shell git rev-parse --short HEAD))
 
 	@rm -rf .shared/ .db/
@@ -82,6 +85,6 @@ build-and-upload-aws:
 	@aws ecr get-login-password --region $(AWS_REGION) | docker login --username AWS --password-stdin $(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com
 	# Build and push the image
 	@echo "Building for architecture: $(ARCHITECTURE)"
-	@docker build --platform linux/$(ARCHITECTURE) --tag "$(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/$(IMAGE):$(COMMIT_SHA)" .
+	@docker build --platform linux/$(ARCHITECTURE) --tag "$(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/$(IMAGE):$(COMMIT_SHA)" --build-arg JFROG_ARTIFACTORY_URL="$(JFROG_ARTIFACTORY_URL)" --build-arg JFROG_DOCKER_REGISTRY="$(JFROG_DOCKER_REGISTRY)" .
 	@docker push "$(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/$(IMAGE):$(COMMIT_SHA)"
 	@rm -rf .shared/

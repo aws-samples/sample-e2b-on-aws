@@ -18,6 +18,13 @@ fi
 BUCKET_FC_ENV_PIPELINE=$(grep "BUCKET_FC_ENV_PIPELINE" $CONFIG_FILE | cut -d'=' -f2)
 BUCKET_FC_KERNELS=$(grep "BUCKET_FC_KERNELS" $CONFIG_FILE | cut -d'=' -f2)
 BUCKET_FC_VERSIONS=$(grep "BUCKET_FC_VERSIONS" $CONFIG_FILE | cut -d'=' -f2)
+JFROG_ARTIFACTORY_URL=$(grep "^jfrog_artifactory_url=" "$CONFIG_FILE" | cut -d'=' -f2-)
+if [ -z "$JFROG_ARTIFACTORY_URL" ]; then
+    JFROG_ARTIFACTORY_URL=$(grep "^JFROGARTIFACTORYURL=" "$CONFIG_FILE" | cut -d'=' -f2-)
+fi
+JFROG_ARTIFACTORY_URL="${JFROG_ARTIFACTORY_URL:-https://artifactory.aic.aws.zoomdev.us/artifactory}"
+JFROG_ARTIFACTORY_URL="${JFROG_ARTIFACTORY_URL%/}"
+JFROG_GENERIC_URL="${JFROG_ARTIFACTORY_URL}/zoom-generic-virtual"
 
 if [ -z "$BUCKET_FC_ENV_PIPELINE" ] || [ -z "$BUCKET_FC_KERNELS" ] || [ -z "$BUCKET_FC_VERSIONS" ]; then
     echo "Error: Could not read all required bucket information from configuration file"
@@ -51,24 +58,24 @@ FC_FOLDER="v1.12.1_210cbac"
 mkdir -p "${TEMP_DIR}/kernels/${KERNEL_FOLDER}"
 mkdir -p "${TEMP_DIR}/firecrackers/${FC_FOLDER}"
 
-fc_url="https://github.com/firecracker-microvm/firecracker/releases"
+fc_url="${JFROG_GENERIC_URL}/firecracker-microvm/firecracker/releases"
 
 ARCHITECTURE=$(grep "^CFNARCHITECTURE=" "$CONFIG_FILE" | cut -d'=' -f2)
 
 # Download kernel and fc
 if [ "$ARCHITECTURE" = "arm64" ]; then
     # Download kernel
-	curl -L https://github.com/e2b-dev/fc-kernels/releases/download/v0.0.12/vmlinux-${KERNEL_VERSION}-arm64.bin -o ${TEMP_DIR}/kernels/${KERNEL_FOLDER}/vmlinux.bin
+	curl -fL "${JFROG_GENERIC_URL}/e2b-dev/fc-kernels/releases/download/v0.0.12/vmlinux-${KERNEL_VERSION}-arm64.bin" -o ${TEMP_DIR}/kernels/${KERNEL_FOLDER}/vmlinux.bin
 	# Download firecracker
-	curl -L ${fc_url}/download/${FC_VERSION}/firecracker-${FC_VERSION}-aarch64.tgz | tar -xz
+	curl -fL ${fc_url}/download/${FC_VERSION}/firecracker-${FC_VERSION}-aarch64.tgz | tar -xz
     mv release-${FC_VERSION}-aarch64/firecracker-${FC_VERSION}-aarch64 \
        ${TEMP_DIR}/firecrackers/${FC_FOLDER}/firecracker
     rm -rf release-${latest_version}-aarch64
 else
     # Download kernel
-	curl -L https://github.com/e2b-dev/fc-kernels/releases/download/v0.0.12/vmlinux-${KERNEL_VERSION}-amd64.bin -o ${TEMP_DIR}/kernels/${KERNEL_FOLDER}/vmlinux.bin
+	curl -fL "${JFROG_GENERIC_URL}/e2b-dev/fc-kernels/releases/download/v0.0.12/vmlinux-${KERNEL_VERSION}-amd64.bin" -o ${TEMP_DIR}/kernels/${KERNEL_FOLDER}/vmlinux.bin
 	# Download firecracker
-	curl -L ${fc_url}/download/${FC_VERSION}/firecracker-${FC_VERSION}-x86_64.tgz | tar -xz
+	curl -fL ${fc_url}/download/${FC_VERSION}/firecracker-${FC_VERSION}-x86_64.tgz | tar -xz
     mv release-${FC_VERSION}-x86_64/firecracker-${FC_VERSION}-x86_64 \
        ${TEMP_DIR}/firecrackers/${FC_FOLDER}/firecracker
     rm -rf release-${latest_version}-x86_64

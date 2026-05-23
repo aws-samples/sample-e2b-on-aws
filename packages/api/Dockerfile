@@ -1,4 +1,8 @@
-FROM golang:1.24-alpine3.20 AS builder
+ARG JFROG_DOCKER_REGISTRY=artifactory.aic.aws.zoomdev.us/zoom-docker-virtual
+FROM ${JFROG_DOCKER_REGISTRY}/golang:1.24-alpine3.20 AS builder
+
+ARG JFROG_ARTIFACTORY_URL=https://artifactory.aic.aws.zoomdev.us/artifactory
+ENV GOPROXY=${JFROG_ARTIFACTORY_URL}/api/go/zoom-go-virtual
 
 RUN apk add --no-cache make
 
@@ -31,7 +35,7 @@ RUN --mount=type=cache,target=/root/.cache/go-build make build
 
 RUN chmod +x /build/api/bin/api
 
-FROM alpine:3.20
+FROM ${JFROG_DOCKER_REGISTRY}/alpine:3.20
 
 # Install Docker CLI (communicates with host Docker daemon via mounted docker.sock)
 RUN apk add --no-cache docker-cli

@@ -9,6 +9,16 @@ cd "$(dirname "$0")"
 PROJECT_ROOT=$(pwd)
 echo "Project root directory: $PROJECT_ROOT"
 
+CONFIG_FILE="/opt/config.properties"
+if [ -f "$CONFIG_FILE" ]; then
+  JFROG_ARTIFACTORY_URL=$(grep -E "^(jfrog_artifactory_url|JFROGARTIFACTORYURL)=" "$CONFIG_FILE" | tail -n 1 | cut -d= -f2-)
+  JFROG_ARTIFACTORY_URL="${JFROG_ARTIFACTORY_URL:-https://artifactory.aic.aws.zoomdev.us/artifactory}"
+  JFROG_ARTIFACTORY_URL="${JFROG_ARTIFACTORY_URL%/}"
+  export JFROG_ARTIFACTORY_URL
+  export GOPROXY="${JFROG_ARTIFACTORY_URL}/api/go/zoom-go-virtual"
+  echo "Using GOPROXY: $GOPROXY"
+fi
+
 # Build and upload API module
 echo "=== Building and uploading API module ==="
 cd "$PROJECT_ROOT/api" || { echo "API directory not found"; exit 1; }

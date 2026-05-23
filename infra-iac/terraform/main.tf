@@ -795,6 +795,7 @@ resource "aws_launch_template" "server" {
     NOMAD_TLS_KEY_SECRET         = aws_secretsmanager_secret.nomad_tls_server_key.name
     AWS_REGION                   = local.aws_region
     AWS_ACCOUNT_ID               = local.account_id
+    JFROG_ARTIFACTORY_URL        = var.jfrog_artifactory_url
   }))
 
   tag_specifications {
@@ -995,6 +996,7 @@ resource "aws_launch_template" "client" {
     DB_CREDENTIAL_SECRET_NAME    = "e2b-${var.prefix}-db-credential"
     INFRA_TOKENS_SECRET_NAME     = aws_secretsmanager_secret.infra_tokens.name
     INSTANCE_TYPE                = var.architecture == "x86_64" ? local.clusters.client.instance_type_x86 : local.clusters.client.instance_type_arm
+    JFROG_ARTIFACTORY_URL        = var.jfrog_artifactory_url
   }))
 
   tag_specifications {
@@ -1472,6 +1474,7 @@ resource "aws_launch_template" "api" {
     SETUP_SECRETS_FILE_HASH      = local.file_hash["scripts/setup-secrets.sh"]
     DB_CREDENTIAL_SECRET_NAME    = "e2b-${var.prefix}-db-credential"
     INFRA_TOKENS_SECRET_NAME     = aws_secretsmanager_secret.infra_tokens.name
+    JFROG_ARTIFACTORY_URL        = var.jfrog_artifactory_url
   }))
 
   tag_specifications {

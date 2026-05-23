@@ -35,7 +35,7 @@ job "redis" {
 
       config {
         network_mode = "host"
-        image        = "redis:7.4.2-alpine"
+        image        = "${JFROG_DOCKER_REGISTRY}/redis:7.4.2-alpine"
         ports        = ["redis"]
         args = []
         auth_soft_fail = true

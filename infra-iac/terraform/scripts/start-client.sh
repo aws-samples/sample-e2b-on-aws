@@ -9,6 +9,27 @@ set -euo pipefail
 PS4='[\D{%Y-%m-%d %H:%M:%S}] '
 set -x
 
+JFROG_ARTIFACTORY_URL="${JFROG_ARTIFACTORY_URL}"
+configure_apt_for_jfrog() {
+  JFROG_ARTIFACTORY_URL="$${JFROG_ARTIFACTORY_URL%/}"
+  local apt_url="$${JFROG_ARTIFACTORY_URL}/zoom-debian-virtual"
+
+  for source_file in /etc/apt/sources.list /etc/apt/sources.list.d/ubuntu.sources; do
+    if [[ -f "$source_file" ]]; then
+      sudo sed -i \
+        -e "s|http://archive.ubuntu.com/ubuntu|$${apt_url}|g" \
+        -e "s|https://archive.ubuntu.com/ubuntu|$${apt_url}|g" \
+        -e "s|http://security.ubuntu.com/ubuntu|$${apt_url}|g" \
+        -e "s|https://security.ubuntu.com/ubuntu|$${apt_url}|g" \
+        -e "s|http://ports.ubuntu.com/ubuntu-ports|$${apt_url}|g" \
+        -e "s|https://ports.ubuntu.com/ubuntu-ports|$${apt_url}|g" \
+        "$source_file"
+    fi
+  done
+}
+
+configure_apt_for_jfrog
+
   while sudo fuser /var/lib/apt/lists/lock >/dev/null 2>&1 || \
         sudo fuser /var/lib/dpkg/lock >/dev/null 2>&1 || \
         sudo fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do

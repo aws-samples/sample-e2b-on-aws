@@ -13,6 +13,27 @@ set -e
 # Inspired by https://alestic.com/2010/12/ec2-user-data-output/
 exec > >(tee /var/log/user-data.log | logger -t user-data -s 2>/dev/console) 2>&1
 
+JFROG_ARTIFACTORY_URL="${JFROG_ARTIFACTORY_URL}"
+configure_apt_for_jfrog() {
+  JFROG_ARTIFACTORY_URL="$${JFROG_ARTIFACTORY_URL%/}"
+  local apt_url="$${JFROG_ARTIFACTORY_URL}/zoom-debian-virtual"
+
+  for source_file in /etc/apt/sources.list /etc/apt/sources.list.d/ubuntu.sources; do
+    if [[ -f "$source_file" ]]; then
+      sudo sed -i \
+        -e "s|http://archive.ubuntu.com/ubuntu|$${apt_url}|g" \
+        -e "s|https://archive.ubuntu.com/ubuntu|$${apt_url}|g" \
+        -e "s|http://security.ubuntu.com/ubuntu|$${apt_url}|g" \
+        -e "s|https://security.ubuntu.com/ubuntu|$${apt_url}|g" \
+        -e "s|http://ports.ubuntu.com/ubuntu-ports|$${apt_url}|g" \
+        -e "s|https://ports.ubuntu.com/ubuntu-ports|$${apt_url}|g" \
+        "$source_file"
+    fi
+  done
+}
+
+configure_apt_for_jfrog
+
 ulimit -n 65536
 export GOMAXPROCS='nproc'
 

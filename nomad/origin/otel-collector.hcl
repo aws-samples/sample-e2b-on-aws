@@ -49,7 +49,7 @@ job "otel-collector" {
 
       config {
         network_mode = "host"
-        image        = "otel/opentelemetry-collector-contrib:0.130.0"
+        image        = "${JFROG_DOCKER_REGISTRY}/otel/opentelemetry-collector-contrib:0.130.0"
         auth_soft_fail = true
         volumes = [
           "local/config:/config",

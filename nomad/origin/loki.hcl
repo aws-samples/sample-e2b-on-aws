@@ -30,7 +30,7 @@ job "loki" {
 
       config {
         network_mode = "host"
-        image = "grafana/loki:2.9.8"
+        image = "${JFROG_DOCKER_REGISTRY}/grafana/loki:2.9.8"
         auth_soft_fail = true
         args = [
           "-config.file",

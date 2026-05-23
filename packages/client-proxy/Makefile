@@ -35,6 +35,9 @@ build-and-upload-aws:
 	$(eval AWS_ACCOUNT_ID := $(shell grep "^account_id=" /opt/config.properties | cut -d= -f2))
 	$(eval AWS_REGION := $(shell grep "^AWSREGION=" /opt/config.properties | cut -d= -f2))
 	$(eval ARCHITECTURE := $(shell grep "^CFNARCHITECTURE=" /opt/config.properties | cut -d= -f2 || echo "amd64"))
+	$(eval JFROG_ARTIFACTORY_URL := $(shell grep -E "^(jfrog_artifactory_url|JFROGARTIFACTORYURL)=" /opt/config.properties 2>/dev/null | tail -n 1 | cut -d= -f2-))
+	$(eval JFROG_ARTIFACTORY_URL := $(if $(JFROG_ARTIFACTORY_URL),$(JFROG_ARTIFACTORY_URL),https://artifactory.aic.aws.zoomdev.us/artifactory))
+	$(eval JFROG_DOCKER_REGISTRY := $(shell printf '%s' "$(JFROG_ARTIFACTORY_URL)" | sed -e 's#^https://##' -e 's#^http://##' -e 's#/*$$##' -e 's#/artifactory$$##' -e 's#$$#/zoom-docker-virtual#'))
 	$(eval COMMIT_SHA := $(shell git rev-parse --short HEAD))
 
 	@rm -rf .shared/
@@ -49,10 +52,10 @@ build-and-upload-aws:
 
 	@if [ "$(ARCHITECTURE)" = "arm64" ]; then \
 		echo "Building for ARM64 architecture"; \
-		docker build --platform linux/arm64 --tag "$(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/$(IMAGE):$(COMMIT_SHA)" .; \
+		docker build --platform linux/arm64 --tag "$(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/$(IMAGE):$(COMMIT_SHA)" --build-arg JFROG_ARTIFACTORY_URL="$(JFROG_ARTIFACTORY_URL)" --build-arg JFROG_DOCKER_REGISTRY="$(JFROG_DOCKER_REGISTRY)" .; \
 	else \
 		echo "Building for x86_64 architecture"; \
-		docker build --platform linux/amd64 --tag "$(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/$(IMAGE):$(COMMIT_SHA)" .; \
+		docker build --platform linux/amd64 --tag "$(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/$(IMAGE):$(COMMIT_SHA)" --build-arg JFROG_ARTIFACTORY_URL="$(JFROG_ARTIFACTORY_URL)" --build-arg JFROG_DOCKER_REGISTRY="$(JFROG_DOCKER_REGISTRY)" .; \
 	fi
 
 	@docker push "$(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/$(IMAGE):$(COMMIT_SHA)"

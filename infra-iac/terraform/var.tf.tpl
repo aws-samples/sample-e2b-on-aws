@@ -65,6 +65,12 @@ variable "client_instance_type" {
   default     = "${CFNCLIENTINSTANCETYPE}"
 }
 
+variable "jfrog_artifactory_url" {
+  description = "JFrog Artifactory base URL used for mirrored package sources"
+  type        = string
+  default     = "${JFROGARTIFACTORYURL}"
+}
+
 # Golden AMI built by the Packer flow.
 variable "custom_ami_id" {
   description = "Packer-built E2B Golden AMI ID to use for all cluster instances"

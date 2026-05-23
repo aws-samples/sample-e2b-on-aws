@@ -18,11 +18,14 @@ generate:
 build:
 	$(eval COMMIT_SHA := $(shell git rev-parse --short HEAD))
 	$(eval ARCHITECTURE := $(shell grep "^CFNARCHITECTURE=" /opt/config.properties | cut -d= -f2 || echo "amd64"))
+	$(eval JFROG_ARTIFACTORY_URL := $(shell grep -E "^(jfrog_artifactory_url|JFROGARTIFACTORYURL)=" /opt/config.properties 2>/dev/null | tail -n 1 | cut -d= -f2-))
+	$(eval JFROG_ARTIFACTORY_URL := $(if $(JFROG_ARTIFACTORY_URL),$(JFROG_ARTIFACTORY_URL),https://artifactory.aic.aws.zoomdev.us/artifactory))
+	$(eval JFROG_DOCKER_REGISTRY := $(shell printf '%s' "$(JFROG_ARTIFACTORY_URL)" | sed -e 's#^https://##' -e 's#^http://##' -e 's#/*$$##' -e 's#/artifactory$$##' -e 's#$$#/zoom-docker-virtual#'))
 	@rm -rf .shared/
 	@cp -r ../shared .shared/
 	@echo "Building with Docker workspace module approach for architecture: $(ARCHITECTURE)"
 
-	@docker build --platform linux/$(ARCHITECTURE) --output=bin --build-arg COMMIT_SHA="$(COMMIT_SHA)" .
+	@docker build --platform linux/$(ARCHITECTURE) --output=bin --build-arg COMMIT_SHA="$(COMMIT_SHA)" --build-arg JFROG_ARTIFACTORY_URL="$(JFROG_ARTIFACTORY_URL)" --build-arg JFROG_DOCKER_REGISTRY="$(JFROG_DOCKER_REGISTRY)" .
 	@rm -rf .shared/
 
 .PHONY: build-local

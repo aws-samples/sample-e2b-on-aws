@@ -38,7 +38,7 @@ job "logs-collector" {
 
       config {
         network_mode = "host"
-        image        = "timberio/vector:0.44.0-alpine"
+        image        = "${JFROG_DOCKER_REGISTRY}/timberio/vector:0.44.0-alpine"
         auth_soft_fail = true
         ports = [
           "health",

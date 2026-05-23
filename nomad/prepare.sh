@@ -30,6 +30,18 @@ IMAGE_TAG=$(git rev-parse --short HEAD)
 export IMAGE_TAG
 echo "Using IMAGE_TAG: $IMAGE_TAG"
 
+JFROG_ARTIFACTORY_URL="${jfrog_artifactory_url:-${JFROGARTIFACTORYURL:-https://artifactory.aic.aws.zoomdev.us/artifactory}}"
+JFROG_ARTIFACTORY_URL="${JFROG_ARTIFACTORY_URL%/}"
+JFROG_DOCKER_REGISTRY="${JFROG_ARTIFACTORY_URL#https://}"
+JFROG_DOCKER_REGISTRY="${JFROG_DOCKER_REGISTRY#http://}"
+if [[ "$JFROG_DOCKER_REGISTRY" == */artifactory ]]; then
+    JFROG_DOCKER_REGISTRY="${JFROG_DOCKER_REGISTRY%/artifactory}/zoom-docker-virtual"
+else
+    JFROG_DOCKER_REGISTRY="${JFROG_DOCKER_REGISTRY}/zoom-docker-virtual"
+fi
+export JFROG_ARTIFACTORY_URL JFROG_DOCKER_REGISTRY
+echo "Using JFROG_DOCKER_REGISTRY: $JFROG_DOCKER_REGISTRY"
+
 # Process each HCL file in the origin directory
 for file in origin/*.hcl; do
     if [[ -f "$file" && "$file" != *"-deploy.hcl" ]]; then
