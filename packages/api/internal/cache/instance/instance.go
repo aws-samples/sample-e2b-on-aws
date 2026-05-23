@@ -189,7 +189,11 @@ func NewCache(
 	cache.OnEviction(func(ctx context.Context, instanceInfo *InstanceInfo) {
 		if instanceCache.redisStore != nil {
 			if err := instanceCache.redisStore.Remove(ctx, *instanceInfo.TeamID, instanceInfo.Instance.SandboxID); err != nil {
+				if errors.Is(err, ErrRedisSandboxNotFound) {
+					return
+				}
 				zap.L().Error("Error removing instance from redis store", zap.Error(err))
+				return
 			}
 		}
 

@@ -2,6 +2,7 @@ package instance
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
@@ -162,7 +163,11 @@ func (c *InstanceCache) Delete(instanceID string, pause bool) bool {
 	if found {
 		if c.redisStore != nil && value.TeamID != nil {
 			if err := c.redisStore.Remove(context.Background(), *value.TeamID, instanceID); err != nil {
+				if errors.Is(err, ErrRedisSandboxNotFound) {
+					return false
+				}
 				zap.L().Error("error removing sandbox from redis", zap.Error(err))
+				return false
 			}
 		}
 

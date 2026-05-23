@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -15,13 +16,23 @@ import (
 )
 
 const (
-	redisSandboxKeyPrefix     = "api:sandbox"
-	redisReservationKeyPrefix = "api:sandbox-reservation"
+	redisKeySeparator    = ":"
+	redisSandboxKeyBase  = "sandbox:storage"
+	redisSandboxesKey    = "sandboxes"
+	redisIndexKey        = "index"
+	redisGlobalTeamsKey  = "global:teams"
+	redisReservationsKey = "reservations"
+	redisPendingKey      = "pending"
+	redisResultKey       = "result"
+
+	redisStaleTeamCutoff = 5 * time.Minute
 )
 
 type redisInstanceStore struct {
 	client redis.UniversalClient
 }
+
+var ErrRedisSandboxNotFound = errors.New("sandbox not found in redis store")
 
 func newRedisInstanceStore(client redis.UniversalClient) *redisInstanceStore {
 	return &redisInstanceStore{client: client}
@@ -114,25 +125,56 @@ func (r redisInstanceRecord) toInstanceInfo() *InstanceInfo {
 	)
 }
 
+func redisCreateKey(parts ...string) string {
+	return strings.Join(parts, redisKeySeparator)
+}
+
+func redisSameSlot(key string) string {
+	return fmt.Sprintf("{%s}", key)
+}
+
+func redisTeamPrefix(teamID uuid.UUID) string {
+	return redisCreateKey(redisSandboxKeyBase, redisSameSlot(teamID.String()))
+}
+
 func sandboxKey(teamID uuid.UUID, sandboxID string) string {
-	return fmt.Sprintf("%s:item:%s:%s", redisSandboxKeyPrefix, teamID.String(), sandboxID)
+	return redisCreateKey(redisTeamPrefix(teamID), redisSandboxesKey, sandboxID)
 }
 
 func teamIndexKey(teamID uuid.UUID) string {
-	return fmt.Sprintf("%s:index:%s", redisSandboxKeyPrefix, teamID.String())
+	return redisCreateKey(redisTeamPrefix(teamID), redisIndexKey)
 }
 
-func allIndexKey() string {
-	return redisSandboxKeyPrefix + ":index:all"
+func globalTeamsKey() string {
+	return redisCreateKey(redisSandboxKeyBase, redisGlobalTeamsKey)
+}
+
+func reservationPrefix(teamID uuid.UUID) string {
+	return redisCreateKey(redisTeamPrefix(teamID), redisReservationsKey)
 }
 
 func reservationKey(teamID uuid.UUID) string {
-	return fmt.Sprintf("%s:%s:pending", redisReservationKeyPrefix, teamID.String())
+	return redisCreateKey(reservationPrefix(teamID), redisPendingKey)
 }
 
 func reservationResultKey(teamID uuid.UUID, sandboxID string) string {
-	return fmt.Sprintf("%s:%s:%s:result", redisReservationKeyPrefix, teamID.String(), sandboxID)
+	return redisCreateKey(reservationPrefix(teamID), sandboxID, redisResultKey)
 }
+
+var addSandboxScript = redis.NewScript(`
+redis.call('SET', KEYS[1], ARGV[1])
+redis.call('SADD', KEYS[2], ARGV[2])
+return 1
+`)
+
+var removeSandboxScript = redis.NewScript(`
+if redis.call('EXISTS', KEYS[1]) == 0 then
+	return 0
+end
+redis.call('DEL', KEYS[1])
+redis.call('SREM', KEYS[2], ARGV[1])
+return 1
+`)
 
 func (s *redisInstanceStore) Add(ctx context.Context, info *InstanceInfo) error {
 	data, err := json.Marshal(recordFromInstance(info))
@@ -142,12 +184,14 @@ func (s *redisInstanceStore) Add(ctx context.Context, info *InstanceInfo) error 
 
 	key := sandboxKey(*info.TeamID, info.Instance.SandboxID)
 	index := teamIndexKey(*info.TeamID)
-	pipe := s.client.TxPipeline()
-	pipe.Set(ctx, key, data, 0)
-	pipe.SAdd(ctx, index, info.Instance.SandboxID)
-	pipe.SAdd(ctx, allIndexKey(), key)
-	pipe.ZAdd(ctx, index+":exp", redis.Z{Score: float64(info.GetEndTime().Unix()), Member: info.Instance.SandboxID})
-	_, err = pipe.Exec(ctx)
+	if err := s.client.ZAdd(ctx, globalTeamsKey(), redis.Z{
+		Score:  float64(time.Now().Unix()),
+		Member: info.TeamID.String(),
+	}).Err(); err != nil {
+		return fmt.Errorf("add team to redis global sandbox index: %w", err)
+	}
+
+	err = addSandboxScript.Run(ctx, s.client, []string{key, index}, data, info.Instance.SandboxID).Err()
 	if err != nil {
 		return fmt.Errorf("store sandbox in redis: %w", err)
 	}
@@ -192,40 +236,36 @@ func (s *redisInstanceStore) TeamItems(ctx context.Context, teamID uuid.UUID) ([
 	if err != nil {
 		return nil, fmt.Errorf("list team sandbox ids from redis: %w", err)
 	}
+	if len(ids) == 0 {
+		return []*InstanceInfo{}, nil
+	}
+
+	keys := make([]string, 0, len(ids))
+	for _, id := range ids {
+		keys = append(keys, sandboxKey(teamID, id))
+	}
+
+	results, err := s.client.MGet(ctx, keys...).Result()
+	if err != nil {
+		return nil, fmt.Errorf("get team sandboxes from redis: %w", err)
+	}
 
 	items := make([]*InstanceInfo, 0, len(ids))
-	for _, id := range ids {
-		item, err := s.Get(ctx, teamID, id)
-		if errors.Is(err, redis.Nil) {
+	for _, raw := range results {
+		if raw == nil {
 			continue
 		}
-		if err != nil {
-			return nil, err
-		}
-		if item.IsExpired() {
-			continue
-		}
-		items = append(items, item)
-	}
 
-	return items, nil
-}
-
-func (s *redisInstanceStore) AllItems(ctx context.Context) ([]*InstanceInfo, error) {
-	keys, err := s.client.SMembers(ctx, allIndexKey()).Result()
-	if err != nil {
-		return nil, fmt.Errorf("list redis sandboxes: %w", err)
-	}
-
-	items := make([]*InstanceInfo, 0, len(keys))
-	for _, key := range keys {
-		data, err := s.client.Get(ctx, key).Bytes()
-		if errors.Is(err, redis.Nil) {
-			continue
+		var data []byte
+		switch value := raw.(type) {
+		case string:
+			data = []byte(value)
+		case []byte:
+			data = value
+		default:
+			return nil, fmt.Errorf("unexpected redis sandbox payload type %T", raw)
 		}
-		if err != nil {
-			return nil, fmt.Errorf("get sandbox from redis: %w", err)
-		}
+
 		var record redisInstanceRecord
 		if err := json.Unmarshal(data, &record); err != nil {
 			return nil, fmt.Errorf("unmarshal sandbox: %w", err)
@@ -240,43 +280,90 @@ func (s *redisInstanceStore) AllItems(ctx context.Context) ([]*InstanceInfo, err
 	return items, nil
 }
 
+func (s *redisInstanceStore) AllItems(ctx context.Context) ([]*InstanceInfo, error) {
+	teams, err := s.client.ZRangeWithScores(ctx, globalTeamsKey(), 0, -1).Result()
+	if err != nil {
+		return nil, fmt.Errorf("list redis sandboxes: %w", err)
+	}
+
+	items := make([]*InstanceInfo, 0, len(teams))
+	var staleTeams []interface{}
+	for _, team := range teams {
+		teamIDRaw, ok := team.Member.(string)
+		if !ok {
+			continue
+		}
+		teamID, err := uuid.Parse(teamIDRaw)
+		if err != nil {
+			staleTeams = append(staleTeams, team.Member)
+			continue
+		}
+
+		teamItems, err := s.TeamItems(ctx, teamID)
+		if err != nil {
+			return nil, err
+		}
+		if len(teamItems) == 0 && int64(team.Score) < time.Now().Add(-redisStaleTeamCutoff).Unix() {
+			staleTeams = append(staleTeams, team.Member)
+		}
+		items = append(items, teamItems...)
+	}
+
+	if len(staleTeams) > 0 {
+		_ = s.client.ZRem(ctx, globalTeamsKey(), staleTeams...).Err()
+	}
+
+	return items, nil
+}
+
 func (s *redisInstanceStore) Update(ctx context.Context, info *InstanceInfo) error {
 	return s.Add(ctx, info)
 }
 
 func (s *redisInstanceStore) Remove(ctx context.Context, teamID uuid.UUID, sandboxID string) error {
-	pipe := s.client.TxPipeline()
-	pipe.Del(ctx, sandboxKey(teamID, sandboxID))
-	pipe.SRem(ctx, teamIndexKey(teamID), sandboxID)
-	pipe.SRem(ctx, allIndexKey(), sandboxKey(teamID, sandboxID))
-	pipe.ZRem(ctx, teamIndexKey(teamID)+":exp", sandboxID)
-	_, err := pipe.Exec(ctx)
+	result, err := removeSandboxScript.Run(ctx, s.client, []string{sandboxKey(teamID, sandboxID), teamIndexKey(teamID)}, sandboxID).Int()
 	if err != nil {
 		return fmt.Errorf("remove sandbox from redis: %w", err)
+	}
+	if result == 0 {
+		return ErrRedisSandboxNotFound
 	}
 
 	return nil
 }
 
-var reserveScript = redis.NewScript(`
+const (
+	reserveResultReserved         = 0
+	reserveResultAlreadyInStorage = 1
+	reserveResultAlreadyPending   = 2
+	reserveResultLimitExceeded    = 3
+)
+
+var reserveScript = redis.NewScript(fmt.Sprintf(`
 redis.call('ZREMRANGEBYSCORE', KEYS[2], '-inf', ARGV[4])
 if redis.call('SISMEMBER', KEYS[1], ARGV[1]) == 1 then
-	return 1
+	return %d
 end
 if redis.call('ZSCORE', KEYS[2], ARGV[1]) then
-	return 2
+	return %d
 end
 local limit = tonumber(ARGV[2])
 if limit >= 0 then
 	local storageCount = redis.call('SCARD', KEYS[1])
 	local pendingCount = redis.call('ZCARD', KEYS[2])
 	if storageCount + pendingCount >= limit then
-		return 3
+		return %d
 	end
 end
 redis.call('DEL', KEYS[3])
 redis.call('ZADD', KEYS[2], ARGV[3], ARGV[1])
-return 0
+return %d
+`, reserveResultAlreadyInStorage, reserveResultAlreadyPending, reserveResultLimitExceeded, reserveResultReserved))
+
+var releaseReservationScript = redis.NewScript(`
+redis.call('ZREM', KEYS[1], ARGV[1])
+redis.call('DEL', KEYS[2])
+return 1
 `)
 
 func (s *redisInstanceStore) Reserve(ctx context.Context, teamID uuid.UUID, sandboxID string, limit int64) error {
@@ -293,11 +380,11 @@ func (s *redisInstanceStore) Reserve(ctx context.Context, teamID uuid.UUID, sand
 	}
 
 	switch result {
-	case 0:
+	case reserveResultReserved:
 		return nil
-	case 1, 2:
+	case reserveResultAlreadyInStorage, reserveResultAlreadyPending:
 		return &ErrAlreadyBeingStarted{sandboxID: sandboxID}
-	case 3:
+	case reserveResultLimitExceeded:
 		return &ErrSandboxLimitExceeded{teamID: teamID.String()}
 	default:
 		return fmt.Errorf("unexpected redis reservation result: %d", result)
@@ -305,6 +392,5 @@ func (s *redisInstanceStore) Reserve(ctx context.Context, teamID uuid.UUID, sand
 }
 
 func (s *redisInstanceStore) ReleaseReservation(ctx context.Context, teamID uuid.UUID, sandboxID string) {
-	s.client.ZRem(ctx, reservationKey(teamID), sandboxID)
-	s.client.Del(ctx, reservationResultKey(teamID, sandboxID))
+	_ = releaseReservationScript.Run(ctx, s.client, []string{reservationKey(teamID), reservationResultKey(teamID, sandboxID)}, sandboxID).Err()
 }

@@ -17,6 +17,8 @@ import (
 // This is to prevent remove instances that are still being started
 const syncSandboxRemoveGracePeriod = 10 * time.Second
 
+const redisOrphanGracePeriod = time.Minute
+
 func getMaxAllowedTTL(now time.Time, startTime time.Time, duration, maxInstanceLength time.Duration) time.Duration {
 	timeLeft := maxInstanceLength - now.Sub(startTime)
 	if timeLeft <= 0 {
@@ -106,47 +108,22 @@ func (c *InstanceCache) Reconcile(ctx context.Context, instances []*InstanceInfo
 }
 
 func (c *InstanceCache) reconcileRedis(ctx context.Context, instances []*InstanceInfo, nodeID string) (orphans []*InstanceInfo) {
-	redisItems, err := c.redisStore.AllItems(ctx)
-	if err != nil {
-		zap.L().Error("error listing redis sandboxes during reconcile", zap.Error(err))
-		return nil
-	}
-
-	nodeReported := make(map[string]*InstanceInfo, len(instances))
 	for _, instance := range instances {
-		nodeReported[instance.Instance.SandboxID] = instance
-	}
-
-	redisByID := make(map[string]*InstanceInfo, len(redisItems))
-	for _, item := range redisItems {
-		redisByID[item.Instance.SandboxID] = item
-	}
-
-	for _, item := range redisItems {
-		if item.Instance.ClientID != nodeID {
+		if instance.TeamID == nil {
 			continue
 		}
-		if time.Since(item.StartTime) <= syncSandboxRemoveGracePeriod {
+		if time.Since(instance.StartTime) <= redisOrphanGracePeriod {
 			continue
 		}
-		if _, found := nodeReported[item.Instance.SandboxID]; !found {
-			if item.TeamID != nil {
-				if err := c.redisStore.Remove(ctx, *item.TeamID, item.Instance.SandboxID); err != nil {
-					zap.L().Error("error removing missing sandbox from redis", zap.Error(err))
-				}
-			}
-			c.cache.Remove(item.Instance.SandboxID)
-		}
-	}
 
-	for _, instance := range instances {
-		if _, found := redisByID[instance.Instance.SandboxID]; !found {
+		redisItem, err := c.redisStore.Get(ctx, *instance.TeamID, instance.Instance.SandboxID)
+		if err != nil {
 			orphans = append(orphans, instance)
 			continue
 		}
 
 		if !c.Exists(instance.Instance.SandboxID) {
-			c.Set(instance.Instance.SandboxID, instance, false)
+			c.Set(redisItem.Instance.SandboxID, redisItem, false)
 		}
 	}
 

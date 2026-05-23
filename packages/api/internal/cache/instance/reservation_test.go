@@ -2,10 +2,13 @@ package instance
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
+	miniredis "github.com/alicebob/miniredis/v2"
 	"github.com/google/uuid"
+	goredis "github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/metric/noop"
@@ -67,14 +70,53 @@ func TestReservation_Release(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-func TestRedisRecordRoundTrip(t *testing.T) {
+func TestRedisKeysFollowOfficialSameSlotPattern(t *testing.T) {
+	tag := redisSameSlot(teamID.String())
+
+	keys := []string{
+		redisTeamPrefix(teamID),
+		teamIndexKey(teamID),
+		reservationKey(teamID),
+		reservationResultKey(teamID, sandboxID),
+		sandboxKey(teamID, sandboxID),
+	}
+
+	for _, key := range keys {
+		require.Contains(t, key, tag)
+		require.Equal(t, 1, strings.Count(key, tag))
+	}
+
+	require.Equal(t, "sandbox:storage:"+tag, redisTeamPrefix(teamID))
+	require.Equal(t, "sandbox:storage:"+tag+":index", teamIndexKey(teamID))
+	require.Equal(t, "sandbox:storage:"+tag+":sandboxes:"+sandboxID, sandboxKey(teamID, sandboxID))
+	require.Equal(t, "sandbox:storage:"+tag+":reservations:pending", reservationKey(teamID))
+	require.Equal(t, "sandbox:storage:"+tag+":reservations:"+sandboxID+":result", reservationResultKey(teamID, sandboxID))
+	require.Equal(t, "sandbox:storage:global:teams", globalTeamsKey())
+}
+
+func newRedisInstanceStoreForTest(t *testing.T) (*redisInstanceStore, func()) {
+	t.Helper()
+
+	server, err := miniredis.Run()
+	require.NoError(t, err)
+
+	client := goredis.NewClient(&goredis.Options{Addr: server.Addr()})
+	cleanup := func() {
+		require.NoError(t, client.Close())
+		server.Close()
+	}
+
+	return newRedisInstanceStore(client), cleanup
+}
+
+func newTestInstanceInfo(sandboxID string, teamID uuid.UUID) *InstanceInfo {
 	buildID := uuid.New()
 	start := time.Now().UTC().Truncate(time.Second)
-	end := start.Add(time.Minute)
+	end := start.Add(time.Hour)
 	alias := "base"
 	token := "envd-token"
 
-	info := NewInstanceInfo(
+	return NewInstanceInfo(
 		&api.Sandbox{
 			SandboxID:       sandboxID,
 			TemplateID:      "tpl",
@@ -105,14 +147,75 @@ func TestRedisRecordRoundTrip(t *testing.T) {
 		&token,
 		"base-template",
 	)
+}
+
+func TestRedisStoreAddListReserveAndRemove(t *testing.T) {
+	store, cleanup := newRedisInstanceStoreForTest(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	info := newTestInstanceInfo(sandboxID, teamID)
+
+	require.NoError(t, store.Add(ctx, info))
+
+	got, err := store.Get(ctx, teamID, sandboxID)
+	require.NoError(t, err)
+	require.Equal(t, sandboxID, got.Instance.SandboxID)
+
+	teamItems, err := store.TeamItems(ctx, teamID)
+	require.NoError(t, err)
+	require.Len(t, teamItems, 1)
+
+	allItems, err := store.AllItems(ctx)
+	require.NoError(t, err)
+	require.Len(t, allItems, 1)
+
+	err = store.Reserve(ctx, teamID, "another-sandbox", 1)
+	require.ErrorAs(t, err, new(*ErrSandboxLimitExceeded))
+
+	err = store.Reserve(ctx, teamID, sandboxID, 10)
+	require.ErrorAs(t, err, new(*ErrAlreadyBeingStarted))
+
+	require.NoError(t, store.Remove(ctx, teamID, sandboxID))
+	require.ErrorIs(t, store.Remove(ctx, teamID, sandboxID), ErrRedisSandboxNotFound)
+
+	teamItems, err = store.TeamItems(ctx, teamID)
+	require.NoError(t, err)
+	require.Empty(t, teamItems)
+
+	allItems, err = store.AllItems(ctx)
+	require.NoError(t, err)
+	require.Empty(t, allItems)
+}
+
+func TestRedisReservationReserveRelease(t *testing.T) {
+	store, cleanup := newRedisInstanceStoreForTest(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	require.NoError(t, store.Reserve(ctx, teamID, sandboxID, 1))
+
+	err := store.Reserve(ctx, teamID, "second-sandbox", 1)
+	require.ErrorAs(t, err, new(*ErrSandboxLimitExceeded))
+
+	err = store.Reserve(ctx, teamID, sandboxID, 1)
+	require.ErrorAs(t, err, new(*ErrAlreadyBeingStarted))
+
+	store.ReleaseReservation(ctx, teamID, sandboxID)
+	require.NoError(t, store.Reserve(ctx, teamID, "second-sandbox", 1))
+}
+
+func TestRedisRecordRoundTrip(t *testing.T) {
+	info := newTestInstanceInfo(sandboxID, teamID)
 
 	got := recordFromInstance(info).toInstanceInfo()
 
 	require.Equal(t, sandboxID, got.Instance.SandboxID)
 	require.Equal(t, teamID, *got.TeamID)
-	require.Equal(t, buildID, *got.BuildID)
+	require.Equal(t, *info.BuildID, *got.BuildID)
 	require.Equal(t, "node-a", got.Node.ID)
-	require.Equal(t, end, got.GetEndTime())
+	require.Equal(t, info.GetEndTime(), got.GetEndTime())
 	require.Equal(t, true, got.AutoPause.Load())
 	require.Equal(t, "base-template", got.BaseTemplateID)
 	require.Equal(t, "v", got.Metadata["k"])
