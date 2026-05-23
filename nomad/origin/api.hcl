@@ -4,6 +4,8 @@ job "api" {
   priority = 90
 
   group "api-service" {
+    count = ${API_COUNT}
+
     network {
       port "api" {
         static = "50001"
@@ -68,6 +70,7 @@ job "api" {
         NOMAD_CLIENT_KEY              = "/opt/nomad/tls/key.pem"
         OTEL_COLLECTOR_GRPC_ENDPOINT  = "localhost:4317"
         REDIS_URL                     = "${REDIS_ENDPOINT}:6379"
+        SANDBOX_STORAGE_BACKEND       = "${SANDBOX_STORAGE_BACKEND}"
         DNS_PORT                      = 5353
         # This is here just because it is required in some part of our code which is transitively imported
         TEMPLATE_BUCKET_NAME          = "skip"

@@ -158,7 +158,14 @@ func (o *Orchestrator) syncNode(ctx context.Context, node *Node, nodes []*node.N
 			continue
 		}
 
-		instanceCache.Sync(ctx, activeInstances, node.Info.ID)
+		orphans := instanceCache.Reconcile(ctx, activeInstances, node.Info.ID)
+		for _, orphan := range orphans {
+			zap.L().Warn("Deleting orphan sandbox missing from redis store", zap.String("node_id", node.Info.ID), zap.String("sandbox_id", orphan.Instance.SandboxID))
+			req := &orchestrator.SandboxDeleteRequest{SandboxId: orphan.Instance.SandboxID}
+			if _, err := node.Client.Sandbox.Delete(ctx, req); err != nil {
+				zap.L().Error("Error deleting orphan sandbox", zap.String("node_id", node.Info.ID), zap.String("sandbox_id", orphan.Instance.SandboxID), zap.Error(err))
+			}
+		}
 
 		syncRetrySuccess = true
 		break

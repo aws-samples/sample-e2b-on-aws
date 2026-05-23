@@ -71,6 +71,24 @@ variable "jfrog_artifactory_url" {
   default     = "${JFROGARTIFACTORYURL}"
 }
 
+variable "api_asg_desired_capacity" {
+  description = "Desired number of API nodes."
+  type        = number
+  default     = 2
+}
+
+variable "api_asg_max_size" {
+  description = "Maximum number of API nodes."
+  type        = number
+  default     = 2
+}
+
+variable "api_asg_min_size" {
+  description = "Minimum number of API nodes."
+  type        = number
+  default     = 2
+}
+
 # Golden AMI built by the Packer flow.
 variable "custom_ami_id" {
   description = "Packer-built E2B Golden AMI ID to use for all cluster instances"

@@ -39,6 +39,22 @@ func (c *InstanceCache) Exists(instanceID string) bool {
 func (c *InstanceCache) Get(instanceID string) (*InstanceInfo, error) {
 	item, ok := c.cache.Get(instanceID)
 	if !ok {
+		if c.redisStore == nil {
+			return nil, fmt.Errorf("instance \"%s\" doesn't exist", instanceID)
+		}
+
+		items, err := c.redisStore.AllItems(context.Background())
+		if err != nil {
+			return nil, err
+		}
+
+		for _, item := range items {
+			if item.Instance.SandboxID == instanceID {
+				c.Set(item.Instance.SandboxID, item, false)
+				return item, nil
+			}
+		}
+
 		return nil, fmt.Errorf("instance \"%s\" doesn't exist", instanceID)
 	}
 
@@ -46,6 +62,24 @@ func (c *InstanceCache) Get(instanceID string) (*InstanceInfo, error) {
 }
 
 func (c *InstanceCache) GetInstances(teamID *uuid.UUID) (instances []*InstanceInfo) {
+	if c.redisStore != nil {
+		if teamID != nil {
+			items, err := c.redisStore.TeamItems(context.Background(), *teamID)
+			if err != nil {
+				zap.L().Error("error listing team sandboxes from redis", zap.Error(err))
+				return nil
+			}
+			return items
+		}
+
+		items, err := c.redisStore.AllItems(context.Background())
+		if err != nil {
+			zap.L().Error("error listing sandboxes from redis", zap.Error(err))
+			return nil
+		}
+		return items
+	}
+
 	for _, item := range c.cache.Items() {
 		currentTeamID := item.TeamID
 
@@ -87,6 +121,12 @@ func (c *InstanceCache) Add(ctx context.Context, instance *InstanceInfo, newlyCr
 		return fmt.Errorf("instance %s is missing env ID", instance.Instance.TemplateID)
 	}
 
+	if c.redisStore != nil {
+		if err := c.redisStore.Add(ctx, instance); err != nil {
+			return err
+		}
+	}
+
 	endTime := instance.GetEndTime()
 
 	if instance.StartTime.IsZero() || endTime.IsZero() || instance.StartTime.After(endTime) {
@@ -109,11 +149,35 @@ func (c *InstanceCache) Add(ctx context.Context, instance *InstanceInfo, newlyCr
 // Delete the instance and remove it from the cache.
 func (c *InstanceCache) Delete(instanceID string, pause bool) bool {
 	value, found := c.cache.GetAndRemove(instanceID)
+	remoteOnly := false
+	if !found && c.redisStore != nil {
+		var err error
+		value, err = c.redisStore.GetByID(context.Background(), instanceID)
+		if err == nil {
+			found = true
+			remoteOnly = true
+		}
+	}
+
 	if found {
+		if c.redisStore != nil && value.TeamID != nil {
+			if err := c.redisStore.Remove(context.Background(), *value.TeamID, instanceID); err != nil {
+				zap.L().Error("error removing sandbox from redis", zap.Error(err))
+			}
+		}
+
 		value.AutoPause.Store(pause)
 
 		if pause {
 			c.MarkAsPausing(value)
+		}
+
+		if remoteOnly && c.deleteInstance != nil {
+			go func() {
+				if err := c.deleteInstance(value); err != nil {
+					zap.L().Error("error deleting remotely loaded instance", zap.Error(err))
+				}
+			}()
 		}
 	}
 
@@ -121,5 +185,14 @@ func (c *InstanceCache) Delete(instanceID string, pause bool) bool {
 }
 
 func (c *InstanceCache) Items() []*InstanceInfo {
+	if c.redisStore != nil {
+		items, err := c.redisStore.AllItems(context.Background())
+		if err != nil {
+			zap.L().Error("error listing sandboxes from redis", zap.Error(err))
+			return nil
+		}
+		return items
+	}
+
 	return c.cache.Items()
 }

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
 	"go.opentelemetry.io/otel/metric"
 	"go.uber.org/zap"
 
@@ -138,6 +139,8 @@ type InstanceCache struct {
 
 	cache          *lifecycleCache[*InstanceInfo]
 	insertInstance func(data *InstanceInfo, created bool) error
+	deleteInstance func(data *InstanceInfo) error
+	redisStore     *redisInstanceStore
 
 	sandboxCounter metric.Int64UpDownCounter
 	createdCounter metric.Int64Counter
@@ -150,6 +153,7 @@ func NewCache(
 	meterProvider metric.MeterProvider,
 	insertInstance func(data *InstanceInfo, created bool) error,
 	deleteInstance func(data *InstanceInfo) error,
+	redisClient ...redis.UniversalClient,
 ) *InstanceCache {
 	// We will need to either use Redis or Consul's KV for storing active sandboxes to keep everything in sync,
 	// right now we load them from Orchestrator
@@ -166,16 +170,29 @@ func NewCache(
 		zap.L().Error("error getting counter", zap.Error(err))
 	}
 
+	var remoteStore *redisInstanceStore
+	if len(redisClient) > 0 && redisClient[0] != nil {
+		remoteStore = newRedisInstanceStore(redisClient[0])
+	}
+
 	instanceCache := &InstanceCache{
 		cache:          cache,
 		insertInstance: insertInstance,
+		deleteInstance: deleteInstance,
 		sandboxCounter: sandboxCounter,
 		createdCounter: createdCounter,
 		reservations:   NewReservationCache(),
 		pausing:        smap.New[*InstanceInfo](),
+		redisStore:     remoteStore,
 	}
 
 	cache.OnEviction(func(ctx context.Context, instanceInfo *InstanceInfo) {
+		if instanceCache.redisStore != nil {
+			if err := instanceCache.redisStore.Remove(ctx, *instanceInfo.TeamID, instanceInfo.Instance.SandboxID); err != nil {
+				zap.L().Error("Error removing instance from redis store", zap.Error(err))
+			}
+		}
+
 		err := deleteInstance(instanceInfo)
 		if err != nil {
 			zap.L().Error("Error deleting instance", zap.Error(err))

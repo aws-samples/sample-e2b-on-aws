@@ -1,6 +1,7 @@
 package instance
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/google/uuid"
@@ -79,6 +80,17 @@ func (e *ErrSandboxLimitExceeded) Error() string {
 }
 
 func (c *InstanceCache) Reserve(instanceID string, team uuid.UUID, limit int64) (release func(), err error) {
+	if c.redisStore != nil {
+		err := c.redisStore.Reserve(context.Background(), team, instanceID, limit)
+		if err != nil {
+			return nil, err
+		}
+
+		return func() {
+			c.redisStore.ReleaseReservation(context.Background(), team, instanceID)
+		}, nil
+	}
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 

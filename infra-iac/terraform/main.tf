@@ -74,9 +74,9 @@ locals {
     api = {
       instance_type_x86    = var.environment == "prod" ? "m7i.4xlarge" : "t3.xlarge"
       instance_type_arm    = var.environment == "prod" ? "m7g.xlarge" : "t4g.xlarge"
-      desired_capacity = 1
-      max_size         = 1
-      min_size         = 1
+      desired_capacity = var.api_asg_desired_capacity
+      max_size         = var.api_asg_max_size
+      min_size         = var.api_asg_min_size
     }
     # Build nodes for environment building (currently not active)
     build = {

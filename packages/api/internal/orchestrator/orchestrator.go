@@ -83,11 +83,26 @@ func New(
 		tel:         tel,
 	}
 
+	var sandboxStateRedis redis.UniversalClient
+	switch os.Getenv("SANDBOX_STORAGE_BACKEND") {
+	case "", "memory":
+		zap.L().Info("Using memory sandbox storage backend")
+	case "redis":
+		if redisClient == nil {
+			return nil, fmt.Errorf("SANDBOX_STORAGE_BACKEND=redis requires REDIS_URL or REDIS_CLUSTER_URL")
+		}
+		zap.L().Info("Using redis sandbox storage backend")
+		sandboxStateRedis = redisClient
+	default:
+		return nil, fmt.Errorf("invalid SANDBOX_STORAGE_BACKEND %q", os.Getenv("SANDBOX_STORAGE_BACKEND"))
+	}
+
 	cache := instance.NewCache(
 		ctx,
 		tel.MeterProvider,
 		o.getInsertInstanceFunction(ctx, cacheHookTimeout),
 		o.getDeleteInstanceFunction(ctx, posthogClient, cacheHookTimeout),
+		sandboxStateRedis,
 	)
 
 	o.instanceCache = cache

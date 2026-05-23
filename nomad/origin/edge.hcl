@@ -5,12 +5,12 @@ job "client-proxy" {
   priority = 80
 
   group "client-proxy" {
-  //count = ${count}
+    count = ${CLIENT_PROXY_COUNT}
 
-  constraint {
-    operator  = "distinct_hosts"
-    value     = "true"
-  }
+    constraint {
+      operator  = "distinct_hosts"
+      value     = "true"
+    }
 
     network {
       port "session" {
