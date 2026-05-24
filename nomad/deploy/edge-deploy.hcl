@@ -102,7 +102,7 @@ EOH
       config {
         network_mode = "host"
         dns_servers  = ["127.0.0.53"]
-        image        = "269562551342.dkr.ecr.us-west-2.amazonaws.com/e2b-orchestration/client-proxy:c4ca593"
+        image        = "269562551342.dkr.ecr.us-west-2.amazonaws.com/e2b-orchestration/client-proxy:4fdbdf7"
         ports        = ["session", "edge-api"]
       }
     }

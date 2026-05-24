@@ -245,6 +245,12 @@ func (o *Orchestrator) getDeleteInstanceFunction(
 
 		o.dns.Remove(ctx, info.Instance.SandboxID, node.Info.IPAddress)
 
+		// Remove catalog entry
+		if o.redisClient != nil {
+			catalogKey := fmt.Sprintf("sandbox:catalog:%s", info.Instance.SandboxID)
+			o.redisClient.Del(ctx, catalogKey)
+		}
+
 		if node.Client == nil {
 			zap.L().Error("client for node not found", zap.String("node_id", info.Instance.ClientID))
 
@@ -354,13 +360,14 @@ func (o *Orchestrator) getInsertInstanceFunction(parentCtx context.Context, time
 				}
 				catalogEntry := map[string]interface{}{
 					"orchestrator_id":             node.Info.ID,
+					"orchestrator_ip":             node.Info.IPAddress,
 					"execution_id":                info.ExecutionID,
 					"sandbox_started_at":          info.StartTime,
 					"sandbox_max_length_in_hours": maxLengthHours,
 				}
 				catalogJSON, jsonErr := json.Marshal(catalogEntry)
 				if jsonErr == nil {
-					catalogKey := fmt.Sprintf("sandbox.dns.%s", info.Instance.SandboxID)
+					catalogKey := fmt.Sprintf("sandbox:catalog:%s", info.Instance.SandboxID)
 					ttl := info.MaxInstanceLength + time.Minute
 					if setErr := o.redisClient.Set(ctx, catalogKey, string(catalogJSON), ttl).Err(); setErr != nil {
 						zap.L().Error("failed to write sandbox catalog to Redis",

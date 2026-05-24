@@ -97,7 +97,7 @@ EOH
       config {
         network_mode = "host"
         dns_servers  = ["127.0.0.53"]
-        image        = "269562551342.dkr.ecr.us-west-2.amazonaws.com/e2b-orchestration/api:c4ca593"
+        image        = "269562551342.dkr.ecr.us-west-2.amazonaws.com/e2b-orchestration/api:4fdbdf7"
         ports        = ["api"]
         args         = [
           "--port", "50001",
