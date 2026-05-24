@@ -5,7 +5,6 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"time"
 
@@ -143,6 +142,7 @@ func (o *Orchestrator) CreateSandbox(
 
 	attempt := 1
 	nodesExcluded := make(map[string]*Node)
+	attemptErrs := make([]error, 0, maxNodeRetries)
 	for {
 		select {
 		case <-childCtx.Done():
@@ -159,7 +159,8 @@ func (o *Orchestrator) CreateSandbox(
 			return nil, &api.APIError{
 				Code:      http.StatusInternalServerError,
 				ClientMsg: "Failed to create sandbox",
-				Err:       errSandboxCreateFailed,
+				Err: fmt.Errorf("%w (attempts=%d): %w",
+					errSandboxCreateFailed, maxNodeRetries, errors.Join(attemptErrs...)),
 			}
 		}
 
@@ -191,7 +192,16 @@ func (o *Orchestrator) CreateSandbox(
 
 		node.sbxsInProgress.Remove(sandboxID)
 
-		log.Printf("failed to create sandbox '%s' on node '%s', attempt #%d: %v", sandboxID, node.Info.ID, attempt, utils.UnwrapGRPCError(err))
+		unwrappedErr := utils.UnwrapGRPCError(err)
+		attemptErr := fmt.Errorf("attempt #%d on node %s: %w", attempt, node.Info.ID, unwrappedErr)
+		attemptErrs = append(attemptErrs, attemptErr)
+
+		zap.L().Error("failed to create sandbox on node",
+			logger.WithSandboxID(sandboxID),
+			zap.String("node_id", node.Info.ID),
+			zap.Int("attempt", attempt),
+			zap.Error(unwrappedErr),
+		)
 
 		// The node is not available, try again with another node
 		node.createFails.Add(1)
