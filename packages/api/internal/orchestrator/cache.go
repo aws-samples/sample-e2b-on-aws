@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"github.com/e2b-dev/infra/packages/api/internal/cache/instance"
 	"github.com/e2b-dev/infra/packages/api/internal/node"
 	"github.com/e2b-dev/infra/packages/shared/pkg/grpc/orchestrator"
+	"github.com/e2b-dev/infra/packages/shared/pkg/logger"
 	sbxlogger "github.com/e2b-dev/infra/packages/shared/pkg/logger/sandbox"
 	"github.com/e2b-dev/infra/packages/shared/pkg/telemetry"
 )
@@ -343,6 +345,29 @@ func (o *Orchestrator) getInsertInstanceFunction(parentCtx context.Context, time
 			node.RamUsage.Add(info.RamMB)
 
 			o.dns.Add(ctx, info.Instance.SandboxID, node.Info.IPAddress)
+
+			// Write SandboxInfo JSON to Redis for client-proxy catalog resolution
+			if o.redisClient != nil {
+				maxLengthHours := int64(info.MaxInstanceLength.Hours())
+				if maxLengthHours < 1 {
+					maxLengthHours = 1
+				}
+				catalogEntry := map[string]interface{}{
+					"orchestrator_id":             node.Info.ID,
+					"execution_id":                info.ExecutionID,
+					"sandbox_started_at":          info.StartTime,
+					"sandbox_max_length_in_hours": maxLengthHours,
+				}
+				catalogJSON, jsonErr := json.Marshal(catalogEntry)
+				if jsonErr == nil {
+					catalogKey := fmt.Sprintf("sandbox.dns.%s", info.Instance.SandboxID)
+					ttl := info.MaxInstanceLength + time.Minute
+					if setErr := o.redisClient.Set(ctx, catalogKey, string(catalogJSON), ttl).Err(); setErr != nil {
+						zap.L().Error("failed to write sandbox catalog to Redis",
+							zap.Error(setErr), logger.WithSandboxID(info.Instance.SandboxID))
+					}
+				}
+			}
 		}
 
 		if info.AutoPause.Load() {

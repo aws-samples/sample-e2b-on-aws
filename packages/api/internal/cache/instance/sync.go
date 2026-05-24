@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 
 	"github.com/e2b-dev/infra/packages/api/internal/api"
@@ -118,7 +119,13 @@ func (c *InstanceCache) reconcileRedis(ctx context.Context, instances []*Instanc
 
 		redisItem, err := c.redisStore.Get(ctx, *instance.TeamID, instance.Instance.SandboxID)
 		if err != nil {
-			orphans = append(orphans, instance)
+			if errors.Is(err, ErrRedisSandboxNotFound) || errors.Is(err, redis.Nil) {
+				orphans = append(orphans, instance)
+			} else {
+				zap.L().Warn("Redis error during reconcile, skipping orphan check",
+					zap.Error(err),
+					zap.String("sandbox_id", instance.Instance.SandboxID))
+			}
 			continue
 		}
 

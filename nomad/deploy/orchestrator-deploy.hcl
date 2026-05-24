@@ -1,0 +1,73 @@
+job "orchestrator" {
+  type = "system"
+  datacenters = ["us-west-2a", "us-west-2b"]
+
+  priority = 90
+
+  group "client-orchestrator" {
+    network {
+      port "orchestrator" {
+        static = "5008"
+      }
+    }
+
+    service {
+      name = "orchestrator"
+      port = "orchestrator"
+
+      check {
+        type         = "grpc"
+        name         = "health"
+        interval     = "20s"
+        timeout      = "5s"
+        grpc_use_tls = false
+        port         = "orchestrator"
+      }
+    }
+
+    task "start" {
+      driver = "raw_exec"
+
+      env {
+        NODE_ID                      = "$${node.unique.id}"
+        OTEL_TRACING_PRINT           = false
+        LOGS_COLLECTOR_ADDRESS       = "http://localhost:30006"
+        LOGS_COLLECTOR_PUBLIC_IP     = "http://$${attr.unique.network.ip-address}:30006"
+        LOGS_COLLECTOR_FIREWALL_IP   = "$${attr.unique.network.ip-address}"
+        ENVIRONMENT                  = "dev"
+        TEMPLATE_BUCKET_NAME         = "e2b-dev-fc-template-269562551342"
+        OTEL_COLLECTOR_GRPC_ENDPOINT = "localhost:4317"
+        AWS_ENABLED                  = true
+        TEMPLATE_AWS_BUCKET_NAME     = "e2b-dev-fc-template-269562551342"
+        AWS_REGION                   = "us-west-2"
+        USE_FIRECRACKER_NATIVE_DIFF  = true
+        STORAGE_PROVIDER             = "AWSBucket"
+        ARTIFACTS_REGISTRY_PROVIDER  = "AWS_ECR"
+        ORCHESTRATOR_SERVICES        = "orchestrator"
+        CONSUL_HTTP_ADDR             = "https://127.0.0.1:8501"
+        CONSUL_CACERT                = "/opt/consul/tls/ca/ca.pem"
+        CONSUL_CLIENT_CERT           = "/opt/consul/tls/cert.pem"
+        CONSUL_CLIENT_KEY            = "/opt/consul/tls/key.pem"
+      }
+
+      template {
+        data = <<EOH
+CONSUL_TOKEN={{ file "/opt/e2b/secrets/consul_http_token" }}
+EOH
+        destination = "secrets/secrets.env"
+        env         = true
+        change_mode = "restart"
+        perms       = "400"
+      }
+
+      config {
+        command = "/bin/bash"
+        args    = ["-c", " chmod +x local/orchestrator && local/orchestrator --port 5008 --proxy-port 5007"]
+      }
+
+      artifact {
+        source = "s3://software-e2b-dev-us-west-2-269562551342.s3.us-west-2.amazonaws.com/orchestrator"
+      }
+    }
+  }
+}
