@@ -18,6 +18,7 @@ import (
 	"github.com/go-redsync/redsync/v4"
 	"github.com/go-redsync/redsync/v4/redis/goredis/v9"
 	"github.com/google/uuid"
+	"crypto/tls"
 	"github.com/redis/go-redis/v9"
 	"github.com/soheilhy/cmux"
 	"go.uber.org/zap"
@@ -124,11 +125,11 @@ func run() int {
 	var catalog sandboxes.SandboxesCatalog
 
 	if redisClusterUrl := os.Getenv("REDIS_CLUSTER_URL"); redisClusterUrl != "" {
-		redisClient := redis.NewClusterClient(&redis.ClusterOptions{Addrs: []string{redisClusterUrl}, MinIdleConns: 1})
+		redisClient := redis.NewClusterClient(&redis.ClusterOptions{Addrs: []string{redisClusterUrl}, MinIdleConns: 1, TLSConfig: &tls.Config{}})
 		redisSync := redsync.New(goredis.NewPool(redisClient))
 		catalog = sandboxes.NewRedisSandboxesCatalog(ctx, tracer, redisClient, redisSync)
 	} else if redisUrl := os.Getenv("REDIS_URL"); redisUrl != "" {
-		redisClient := redis.NewClient(&redis.Options{Addr: redisUrl, MinIdleConns: 1})
+		redisClient := redis.NewClient(&redis.Options{Addr: redisUrl, MinIdleConns: 1, TLSConfig: &tls.Config{}})
 		redisSync := redsync.New(goredis.NewPool(redisClient))
 		catalog = sandboxes.NewRedisSandboxesCatalog(ctx, tracer, redisClient, redisSync)
 	} else {

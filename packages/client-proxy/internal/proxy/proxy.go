@@ -95,6 +95,13 @@ func catalogResolution(sandboxId string, catalog sandboxes.SandboxesCatalog, orc
 
 	o, ok := orchestrators.GetOrchestrator(s.OrchestratorId)
 	if !ok {
+		// Fallback: catalog stores Nomad node ID, pool is keyed by ServiceInstanceId.
+		// Match by NodeID field (O(N) where N=number of orchestrator nodes, typically 1-5).
+		for _, node := range orchestrators.GetOrchestrators() {
+			if node.NodeID == s.OrchestratorId {
+				return node.Ip, nil
+			}
+		}
 		return "", errors.New("orchestrator not found")
 	}
 

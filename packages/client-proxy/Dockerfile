@@ -1,8 +1,8 @@
 ARG JFROG_DOCKER_REGISTRY=artifactory.aic.aws.zoomdev.us/zoom-docker-virtual
-FROM ${JFROG_DOCKER_REGISTRY}/golang:1.24-alpine3.20 AS builder
+FROM golang:1.24-alpine3.20 AS builder
 
 ARG JFROG_ARTIFACTORY_URL=https://artifactory.aic.aws.zoomdev.us/artifactory
-ENV GOPROXY=${JFROG_ARTIFACTORY_URL}/api/go/zoom-go-virtual
+ENV GOPROXY=https://proxy.golang.org,direct
 
 RUN apk add --no-cache make
 
@@ -25,7 +25,7 @@ ARG COMMIT_SHA
 RUN --mount=type=cache,target=/root/.cache/go-build make build COMMIT_SHA=${COMMIT_SHA}
 RUN chmod +x /build/proxy/bin/client-proxy
 
-FROM ${JFROG_DOCKER_REGISTRY}/alpine:3.17
+FROM alpine:3.17
 
 COPY --from=builder /build/proxy/bin/client-proxy .
 

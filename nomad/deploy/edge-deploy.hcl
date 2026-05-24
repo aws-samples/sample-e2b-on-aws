@@ -81,7 +81,7 @@ job "client-proxy" {
         ENVIRONMENT = "dev"
 
         // use legacy dns resolution for orchestrator services
-        USE_PROXY_CATALOG_RESOLUTION = "true"
+        USE_CATALOG_RESOLUTION = "true"
 
         OTEL_COLLECTOR_GRPC_ENDPOINT  = "localhost:4317"
         LOGS_COLLECTOR_ADDRESS        = "analytics_collector_host"
@@ -102,7 +102,7 @@ EOH
       config {
         network_mode = "host"
         dns_servers  = ["127.0.0.53"]
-        image        = "269562551342.dkr.ecr.us-west-2.amazonaws.com/e2b-orchestration/client-proxy:76ea90d"
+        image        = "269562551342.dkr.ecr.us-west-2.amazonaws.com/e2b-orchestration/client-proxy:c4ca593"
         ports        = ["session", "edge-api"]
       }
     }

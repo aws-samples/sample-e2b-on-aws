@@ -63,7 +63,7 @@ EOH
       config {
         network_mode = "host"
         dns_servers  = ["127.0.0.53"]
-        image        = "269562551342.dkr.ecr.us-west-2.amazonaws.com/e2b-orchestration/docker-reverse-proxy:76ea90d"
+        image        = "269562551342.dkr.ecr.us-west-2.amazonaws.com/e2b-orchestration/docker-reverse-proxy:c4ca593"
         ports        = ["docker-reverse-proxy"]
         args         = ["--port", "5000"]
         force_pull   = true
