@@ -269,3 +269,86 @@ func TestDeleteLocalRedisBackedInstanceCallsDeleteHook(t *testing.T) {
 		t.Fatal("delete hook was not called")
 	}
 }
+
+func TestRedisBackedGetDoesNotReturnLocalWhenRedisMissing(t *testing.T) {
+	server, err := miniredis.Run()
+	require.NoError(t, err)
+	defer server.Close()
+
+	client := goredis.NewClient(&goredis.Options{Addr: server.Addr()})
+	defer func() { require.NoError(t, client.Close()) }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	deleted := make(chan string, 1)
+	cache := NewCache(
+		ctx,
+		noop.MeterProvider{},
+		nil,
+		func(info *InstanceInfo) error {
+			deleted <- info.Instance.SandboxID
+			return nil
+		},
+		client,
+	)
+
+	info := newTestInstanceInfo(sandboxID, teamID)
+	require.NoError(t, cache.Add(ctx, info))
+	require.NoError(t, cache.redisStore.Remove(ctx, teamID, sandboxID))
+
+	_, err = cache.Get(sandboxID)
+	require.ErrorIs(t, err, ErrRedisSandboxNotFound)
+	require.False(t, cache.Exists(sandboxID))
+
+	select {
+	case got := <-deleted:
+		t.Fatalf("stale local cache removal called delete hook for %s", got)
+	default:
+	}
+}
+
+func TestRedisBackedEvictionKeepsNewerRedisExecution(t *testing.T) {
+	server, err := miniredis.Run()
+	require.NoError(t, err)
+	defer server.Close()
+
+	client := goredis.NewClient(&goredis.Options{Addr: server.Addr()})
+	defer func() { require.NoError(t, client.Close()) }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	deleted := make(chan string, 1)
+	cache := NewCache(
+		ctx,
+		noop.MeterProvider{},
+		nil,
+		func(info *InstanceInfo) error {
+			deleted <- info.ExecutionID
+			return nil
+		},
+		client,
+	)
+
+	oldInfo := newTestInstanceInfo(sandboxID, teamID)
+	require.NoError(t, cache.Add(ctx, oldInfo))
+
+	newInfo := newTestInstanceInfo(sandboxID, teamID)
+	newInfo.ExecutionID = "new-execution-id"
+	newInfo.SetEndTime(time.Now().Add(time.Hour))
+	require.NoError(t, cache.redisStore.Add(ctx, newInfo))
+
+	oldInfo.SetExpired()
+
+	require.Eventually(t, func() bool {
+		got, err := cache.Get(sandboxID)
+		return err == nil && got.ExecutionID == newInfo.ExecutionID
+	}, time.Second, 10*time.Millisecond)
+
+	select {
+	case got := <-deleted:
+		t.Fatalf("stale local eviction called delete hook for execution %s", got)
+	default:
+	}
+}

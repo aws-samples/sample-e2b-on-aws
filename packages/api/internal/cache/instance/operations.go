@@ -39,27 +39,42 @@ func (c *InstanceCache) Exists(instanceID string) bool {
 // Get the item from the cache.
 func (c *InstanceCache) Get(instanceID string) (*InstanceInfo, error) {
 	item, ok := c.cache.Get(instanceID)
-	if !ok {
-		if c.redisStore == nil {
+	if c.redisStore == nil {
+		if !ok {
 			return nil, fmt.Errorf("instance \"%s\" doesn't exist", instanceID)
 		}
 
-		items, err := c.redisStore.AllItems(context.Background())
-		if err != nil {
-			return nil, err
-		}
-
-		for _, item := range items {
-			if item.Instance.SandboxID == instanceID {
-				c.Set(item.Instance.SandboxID, item, false)
-				return item, nil
-			}
-		}
-
-		return nil, fmt.Errorf("instance \"%s\" doesn't exist", instanceID)
+		return item, nil
 	}
 
-	return item, nil
+	if ok && item.TeamID != nil {
+		redisItem, err := c.redisStore.Get(context.Background(), *item.TeamID, instanceID)
+		if err == nil {
+			c.cache.Set(instanceID, redisItem)
+			return redisItem, nil
+		}
+		if errors.Is(err, ErrRedisSandboxNotFound) {
+			c.cache.Forget(instanceID)
+			return nil, fmt.Errorf("instance \"%s\" doesn't exist: %w", instanceID, ErrRedisSandboxNotFound)
+		}
+		return nil, err
+	}
+
+	redisItem, err := c.redisStore.GetByID(context.Background(), instanceID)
+	if err != nil {
+		if errors.Is(err, ErrRedisSandboxNotFound) && c.cache.Has(instanceID, true) {
+			c.cache.Forget(instanceID)
+		}
+		return nil, err
+	}
+
+	if ok || c.cache.Has(instanceID, true) {
+		c.cache.Set(instanceID, redisItem)
+	} else if err := c.set(redisItem.Instance.SandboxID, redisItem, false, false); err != nil {
+		return nil, err
+	}
+
+	return redisItem, nil
 }
 
 func (c *InstanceCache) GetInstances(teamID *uuid.UUID) (instances []*InstanceInfo) {

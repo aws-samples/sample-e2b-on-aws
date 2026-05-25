@@ -188,6 +188,23 @@ func NewCache(
 
 	cache.OnEviction(func(ctx context.Context, instanceInfo *InstanceInfo) {
 		if instanceCache.redisStore != nil {
+			redisItem, err := instanceCache.redisStore.Get(ctx, *instanceInfo.TeamID, instanceInfo.Instance.SandboxID)
+			if err == nil {
+				if redisItem.ExecutionID != instanceInfo.ExecutionID || redisItem.GetEndTime().After(time.Now()) {
+					instanceCache.cache.Set(instanceInfo.Instance.SandboxID, redisItem)
+					zap.L().Debug("skipping stale local sandbox eviction",
+						zap.String("sandbox_id", instanceInfo.Instance.SandboxID),
+						zap.String("local_execution_id", instanceInfo.ExecutionID),
+						zap.String("redis_execution_id", redisItem.ExecutionID),
+						zap.Time("redis_end_time", redisItem.GetEndTime()),
+					)
+					return
+				}
+			} else if !errors.Is(err, ErrRedisSandboxNotFound) {
+				zap.L().Error("Error reading instance from redis store before eviction", zap.Error(err))
+				return
+			}
+
 			if err := instanceCache.redisStore.Remove(ctx, *instanceInfo.TeamID, instanceInfo.Instance.SandboxID); err != nil {
 				if !errors.Is(err, ErrRedisSandboxNotFound) {
 					zap.L().Error("Error removing instance from redis store", zap.Error(err))

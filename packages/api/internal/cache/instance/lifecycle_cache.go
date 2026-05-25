@@ -82,6 +82,15 @@ func (c *lifecycleCache[T]) SetIfAbsent(key string, value T) bool {
 	return c.running.SetIfAbsent(key, value)
 }
 
+func (c *lifecycleCache[T]) Set(key string, value T) {
+	c.running.Set(key, value)
+}
+
+func (c *lifecycleCache[T]) Forget(key string) {
+	c.running.Remove(key)
+	c.evicting.Remove(key)
+}
+
 func (c *lifecycleCache[T]) Has(key string, includeExpired bool) bool {
 	if includeExpired {
 		ok := c.evicting.Has(key)

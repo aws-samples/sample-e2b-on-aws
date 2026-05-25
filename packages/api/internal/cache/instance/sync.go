@@ -120,6 +120,7 @@ func (c *InstanceCache) reconcileRedis(ctx context.Context, instances []*Instanc
 		redisItem, err := c.redisStore.Get(ctx, *instance.TeamID, instance.Instance.SandboxID)
 		if err != nil {
 			if errors.Is(err, ErrRedisSandboxNotFound) || errors.Is(err, redis.Nil) {
+				c.cache.Forget(instance.Instance.SandboxID)
 				orphans = append(orphans, instance)
 			} else {
 				zap.L().Warn("Redis error during reconcile, skipping orphan check",
@@ -129,7 +130,9 @@ func (c *InstanceCache) reconcileRedis(ctx context.Context, instances []*Instanc
 			continue
 		}
 
-		if !c.Exists(instance.Instance.SandboxID) {
+		if c.Exists(instance.Instance.SandboxID) {
+			c.cache.Set(redisItem.Instance.SandboxID, redisItem)
+		} else {
 			c.Set(redisItem.Instance.SandboxID, redisItem, false)
 		}
 	}
