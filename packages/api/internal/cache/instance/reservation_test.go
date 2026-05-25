@@ -233,3 +233,39 @@ func TestRedisStoreMissingLookupsReturnNotFound(t *testing.T) {
 	_, err = store.GetByID(ctx, sandboxID)
 	require.ErrorIs(t, err, ErrRedisSandboxNotFound)
 }
+
+func TestDeleteLocalRedisBackedInstanceCallsDeleteHook(t *testing.T) {
+	server, err := miniredis.Run()
+	require.NoError(t, err)
+	defer server.Close()
+
+	client := goredis.NewClient(&goredis.Options{Addr: server.Addr()})
+	defer func() { require.NoError(t, client.Close()) }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	deleted := make(chan string, 1)
+	cache := NewCache(
+		ctx,
+		noop.MeterProvider{},
+		nil,
+		func(info *InstanceInfo) error {
+			deleted <- info.Instance.SandboxID
+			return nil
+		},
+		client,
+	)
+
+	info := newTestInstanceInfo(sandboxID, teamID)
+	require.NoError(t, cache.Add(ctx, info))
+
+	require.True(t, cache.Delete(sandboxID, false))
+
+	select {
+	case got := <-deleted:
+		require.Equal(t, sandboxID, got)
+	case <-time.After(time.Second):
+		t.Fatal("delete hook was not called")
+	}
+}
