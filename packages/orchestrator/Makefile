@@ -16,7 +16,7 @@ generate:
 
 .PHONY: build
 build:
-	$(eval COMMIT_SHA := $(shell git rev-parse --short HEAD))
+	$(eval COMMIT_SHA ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown))
 	$(eval ARCHITECTURE := $(shell grep "^CFNARCHITECTURE=" /opt/config.properties | cut -d= -f2 || echo "amd64"))
 	$(eval JFROG_ARTIFACTORY_URL := $(shell grep -E "^(jfrog_artifactory_url|JFROGARTIFACTORYURL)=" /opt/config.properties 2>/dev/null | tail -n 1 | cut -d= -f2-))
 	$(eval JFROG_ARTIFACTORY_URL := $(if $(JFROG_ARTIFACTORY_URL),$(JFROG_ARTIFACTORY_URL),https://artifactory.aic.aws.zoomdev.us/artifactory))
@@ -31,7 +31,7 @@ build:
 .PHONY: build-local
 build-local:
 	# Allow for passing commit sha directly for docker builds
-	$(eval COMMIT_SHA ?= $(shell git rev-parse --short HEAD))
+	$(eval COMMIT_SHA ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown))
 	
 	CGO_ENABLED=1 GOOS=linux go build -o bin/orchestrator -ldflags "-X=main.commitSHA=$(COMMIT_SHA)" .
 
@@ -63,7 +63,7 @@ upload-aws:
 	# Login to ECR
 	aws ecr get-login-password --region us-east-1 | sudo docker login --username AWS --password-stdin $(AWS_ACCOUNT_ID).dkr.ecr.us-east-1.amazonaws.com
 	# Build and push Docker image
-	$(eval COMMIT_SHA := $(shell git rev-parse --short HEAD))
+	$(eval COMMIT_SHA ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown))
 	sudo docker buildx install || true # sets up the buildx as default docker builder
 	sudo docker build --platform linux/amd64 --tag "$(AWS_ACCOUNT_ID).dkr.ecr.us-east-1.amazonaws.com/$(IMAGE):latest" --build-arg COMMIT_SHA="$(COMMIT_SHA)" .
 	sudo docker push "$(AWS_ACCOUNT_ID).dkr.ecr.us-east-1.amazonaws.com/$(IMAGE):latest"

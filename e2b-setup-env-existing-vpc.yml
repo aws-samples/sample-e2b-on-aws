@@ -1358,7 +1358,10 @@ Resources:
               # Initialize Configuration
               touch /tmp/e2b.log
               echo "StackName=${AWS::StackName}" >> /tmp/e2b.log
-              BUILD=$(git rev-parse --short HEAD)
+              BUILD="$(printf '%s' "$INFRA_COMMIT" | cut -c 1-7)"
+              COMMIT_SHA="$BUILD"
+              IMAGE_TAG="$BUILD"
+              export BUILD COMMIT_SHA IMAGE_TAG
               echo "BUILD=$BUILD" >> /tmp/e2b.log
               while true; do
                 STACK_STATUS=$(aws cloudformation describe-stacks --stack-name ${AWS::StackName} --query "Stacks[0].StackStatus" --output text)

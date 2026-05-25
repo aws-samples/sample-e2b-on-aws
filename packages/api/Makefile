@@ -15,13 +15,13 @@ generate:
 .PHONY: build
 build:
 	# Allow for passing commit sha directly for docker builds
-	$(eval COMMIT_SHA ?= $(shell git rev-parse --short HEAD))
+	$(eval COMMIT_SHA ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown))
 	$(eval EXPECTED_MIGRATION_TIMESTAMP ?= $(expectedMigration))
 	CGO_ENABLED=0 go build -o bin/api -ldflags "-X=main.commitSHA=$(COMMIT_SHA) -X=main.expectedMigrationTimestamp=$(EXPECTED_MIGRATION_TIMESTAMP)" .
 
 .PHONY: build-debug
 build-debug:
-	$(eval COMMIT_SHA ?= $(shell git rev-parse --short HEAD))
+	$(eval COMMIT_SHA ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown))
 	$(eval EXPECTED_MIGRATION_TIMESTAMP ?= $(expectedMigration))
 	CGO_ENABLED=1 go build -race -gcflags=all="-N -l" -o bin/api -ldflags "-X=main.commitSHA=$(COMMIT_SHA) -X=main.expectedMigrationTimestamp=$(EXPECTED_MIGRATION_TIMESTAMP)" .
 
@@ -51,7 +51,7 @@ profiler:
 
 .PHONY: build-and-upload
 build-and-upload:
-	$(eval COMMIT_SHA := $(shell git rev-parse --short HEAD))
+	$(eval COMMIT_SHA ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown))
 	$(eval EXPECTED_MIGRATION_TIMESTAMP := $(expectedMigration))
 	@rm -rf .shared/ .db/
 	@cp -r ../shared .shared/
@@ -73,7 +73,7 @@ build-and-upload-aws:
 	$(eval JFROG_ARTIFACTORY_URL := $(shell grep -E "^(jfrog_artifactory_url|JFROGARTIFACTORYURL)=" /opt/config.properties 2>/dev/null | tail -n 1 | cut -d= -f2-))
 	$(eval JFROG_ARTIFACTORY_URL := $(if $(JFROG_ARTIFACTORY_URL),$(JFROG_ARTIFACTORY_URL),https://artifactory.aic.aws.zoomdev.us/artifactory))
 	$(eval JFROG_DOCKER_REGISTRY := $(shell printf '%s' "$(JFROG_ARTIFACTORY_URL)" | sed -e 's#^https://##' -e 's#^http://##' -e 's#/*$$##' -e 's#/artifactory$$##' -e 's#$$#/zoom-docker-virtual#'))
-	$(eval COMMIT_SHA := $(shell git rev-parse --short HEAD))
+	$(eval COMMIT_SHA ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown))
 
 	@rm -rf .shared/ .db/
 	@cp -r ../shared .shared/

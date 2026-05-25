@@ -6,7 +6,7 @@ IMAGE := e2b-orchestration/docker-reverse-proxy
 .PHONY: build
 build:
 	# Allow for passing commit sha directly for docker builds
-	$(eval COMMIT_SHA ?= $(shell git rev-parse --short HEAD))
+	$(eval COMMIT_SHA ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown))
 	CGO_ENABLED=0 go build -o bin/docker-reverse-proxy -ldflags "-X=main.commitSHA=$(COMMIT_SHA)" .
 
 .PHONY: build-debug
@@ -15,7 +15,7 @@ build-debug:
 
 .PHONY: build-and-upload
 build-and-upload:
-	$(eval COMMIT_SHA := $(shell git rev-parse --short HEAD))
+	$(eval COMMIT_SHA ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown))
 	@cp -r ../shared .shared/
 	@docker buildx install # sets up the buildx as default docker builder (otherwise the command below won't work)
 	@docker build --platform linux/amd64 --tag "$(GCP_REGION)-docker.pkg.dev/$(GCP_PROJECT_ID)/$(IMAGE)" --push --build-arg COMMIT_SHA="$(COMMIT_SHA)" .
@@ -34,7 +34,7 @@ build-and-upload-aws:
 	$(eval JFROG_ARTIFACTORY_URL := $(shell grep -E "^(jfrog_artifactory_url|JFROGARTIFACTORYURL)=" /opt/config.properties 2>/dev/null | tail -n 1 | cut -d= -f2-))
 	$(eval JFROG_ARTIFACTORY_URL := $(if $(JFROG_ARTIFACTORY_URL),$(JFROG_ARTIFACTORY_URL),https://artifactory.aic.aws.zoomdev.us/artifactory))
 	$(eval JFROG_DOCKER_REGISTRY := $(shell printf '%s' "$(JFROG_ARTIFACTORY_URL)" | sed -e 's#^https://##' -e 's#^http://##' -e 's#/*$$##' -e 's#/artifactory$$##' -e 's#$$#/zoom-docker-virtual#'))
-	$(eval COMMIT_SHA := $(shell git rev-parse --short HEAD))
+	$(eval COMMIT_SHA ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown))
 	# Create ECR repository if it doesn't exist
 	@aws ecr describe-repositories --repository-names $(IMAGE) || aws ecr create-repository --repository-name $(IMAGE) --image-tag-mutability IMMUTABLE --image-scanning-configuration scanOnPush=true
 	# Login to ECR

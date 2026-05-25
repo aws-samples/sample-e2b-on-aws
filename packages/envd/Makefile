@@ -1,4 +1,4 @@
-BUILD := $(shell git rev-parse --short HEAD)
+BUILD ?= $(if $(COMMIT_SHA),$(COMMIT_SHA),$(shell git rev-parse --short HEAD 2>/dev/null || echo unknown))
 LDFLAGS=-ldflags "-X=main.commitSHA=$(BUILD)"
 
 .PHONY: init

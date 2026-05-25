@@ -3,12 +3,12 @@ IMAGE := e2b-orchestration/client-proxy
 .PHONY: build
 build:
 	# Allow for passing commit sha directly for docker builds
-	$(eval COMMIT_SHA ?= $(shell git rev-parse --short HEAD))
+	$(eval COMMIT_SHA ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown))
 	CGO_ENABLED=0 GOOS=linux go build -o bin/client-proxy -ldflags "-X=main.commitSHA=$(COMMIT_SHA)" .
 
 .PHONY: build-and-upload
 build-and-upload:
-	$(eval COMMIT_SHA := $(shell git rev-parse --short HEAD))
+	$(eval COMMIT_SHA ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown))
 	@rm -rf .shared/
 	@cp -r ../shared .shared/
 	@docker buildx install # sets up the buildx as default docker builder (otherwise the command below won't work)
@@ -38,7 +38,7 @@ build-and-upload-aws:
 	$(eval JFROG_ARTIFACTORY_URL := $(shell grep -E "^(jfrog_artifactory_url|JFROGARTIFACTORYURL)=" /opt/config.properties 2>/dev/null | tail -n 1 | cut -d= -f2-))
 	$(eval JFROG_ARTIFACTORY_URL := $(if $(JFROG_ARTIFACTORY_URL),$(JFROG_ARTIFACTORY_URL),https://artifactory.aic.aws.zoomdev.us/artifactory))
 	$(eval JFROG_DOCKER_REGISTRY := $(shell printf '%s' "$(JFROG_ARTIFACTORY_URL)" | sed -e 's#^https://##' -e 's#^http://##' -e 's#/*$$##' -e 's#/artifactory$$##' -e 's#$$#/zoom-docker-virtual#'))
-	$(eval COMMIT_SHA := $(shell git rev-parse --short HEAD))
+	$(eval COMMIT_SHA ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown))
 
 	@rm -rf .shared/
 	@cp -r ../shared .shared/

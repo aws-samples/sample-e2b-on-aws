@@ -26,7 +26,16 @@ else
     exit 1
 fi
 
-IMAGE_TAG=$(git rev-parse --short HEAD)
+if [[ -n "${IMAGE_TAG:-}" ]]; then
+    IMAGE_TAG="$IMAGE_TAG"
+elif [[ -n "${COMMIT_SHA:-}" ]]; then
+    IMAGE_TAG="$COMMIT_SHA"
+else
+    IMAGE_TAG=$(git rev-parse --short HEAD 2>/dev/null) || {
+        echo "Error: IMAGE_TAG or COMMIT_SHA must be set when .git metadata is unavailable"
+        exit 1
+    }
+fi
 export IMAGE_TAG
 echo "Using IMAGE_TAG: $IMAGE_TAG"
 
