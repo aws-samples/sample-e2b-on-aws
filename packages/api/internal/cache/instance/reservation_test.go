@@ -220,3 +220,16 @@ func TestRedisRecordRoundTrip(t *testing.T) {
 	require.Equal(t, "base-template", got.BaseTemplateID)
 	require.Equal(t, "v", got.Metadata["k"])
 }
+
+func TestRedisStoreMissingLookupsReturnNotFound(t *testing.T) {
+	store, cleanup := newRedisInstanceStoreForTest(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	_, err := store.Get(ctx, teamID, sandboxID)
+	require.ErrorIs(t, err, ErrRedisSandboxNotFound)
+
+	_, err = store.GetByID(ctx, sandboxID)
+	require.ErrorIs(t, err, ErrRedisSandboxNotFound)
+}

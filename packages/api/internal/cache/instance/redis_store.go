@@ -202,7 +202,7 @@ func (s *redisInstanceStore) Add(ctx context.Context, info *InstanceInfo) error 
 func (s *redisInstanceStore) Get(ctx context.Context, teamID uuid.UUID, sandboxID string) (*InstanceInfo, error) {
 	data, err := s.client.Get(ctx, sandboxKey(teamID, sandboxID)).Bytes()
 	if errors.Is(err, redis.Nil) {
-		return nil, fmt.Errorf("instance %q doesn't exist", sandboxID)
+		return nil, fmt.Errorf("instance %q doesn't exist: %w", sandboxID, ErrRedisSandboxNotFound)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("get sandbox from redis: %w", err)
@@ -228,7 +228,7 @@ func (s *redisInstanceStore) GetByID(ctx context.Context, sandboxID string) (*In
 		}
 	}
 
-	return nil, fmt.Errorf("instance %q doesn't exist", sandboxID)
+	return nil, fmt.Errorf("instance %q doesn't exist: %w", sandboxID, ErrRedisSandboxNotFound)
 }
 
 func (s *redisInstanceStore) TeamItems(ctx context.Context, teamID uuid.UUID) ([]*InstanceInfo, error) {
