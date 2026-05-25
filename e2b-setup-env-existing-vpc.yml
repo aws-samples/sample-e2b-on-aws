@@ -1348,7 +1348,7 @@ Resources:
               # Create directory for E2B infrastructure code
               mkdir -p /opt/infra/ && cd /opt/infra/
               rm -rf sample-e2b-on-aws
-              INFRA_COMMIT="46725a767376147483c112927e44c42b0de5bf60"
+              INFRA_COMMIT="602964d6c70c9339e18e7147f819c40aa1f8729e"
               wget -O sample-e2b-on-aws.zip "${JFROG_GENERIC_URL}/aws-samples/sample-e2b-on-aws/archive/${INFRA_COMMIT}.zip"
               unzip -q sample-e2b-on-aws.zip
               mv "sample-e2b-on-aws-${INFRA_COMMIT}" sample-e2b-on-aws
