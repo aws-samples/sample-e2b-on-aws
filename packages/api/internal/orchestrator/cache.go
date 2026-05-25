@@ -162,10 +162,22 @@ func (o *Orchestrator) syncNode(ctx context.Context, node *Node, nodes []*node.N
 
 		orphans := instanceCache.Reconcile(ctx, activeInstances, node.Info.ID)
 		for _, orphan := range orphans {
-			zap.L().Warn("Deleting orphan sandbox missing from redis store", zap.String("node_id", node.Info.ID), zap.String("sandbox_id", orphan.Instance.SandboxID))
+			zap.L().Warn("Deleting orphan sandbox missing from redis store",
+				zap.String("node_id", node.Info.ID),
+				zap.String("sandbox_id", orphan.Instance.SandboxID),
+				zap.String("team_id", orphan.TeamID.String()),
+				zap.String("execution_id", orphan.ExecutionID),
+				zap.Time("start_time", orphan.StartTime),
+			)
 			req := &orchestrator.SandboxDeleteRequest{SandboxId: orphan.Instance.SandboxID}
 			if _, err := node.Client.Sandbox.Delete(ctx, req); err != nil {
-				zap.L().Error("Error deleting orphan sandbox", zap.String("node_id", node.Info.ID), zap.String("sandbox_id", orphan.Instance.SandboxID), zap.Error(err))
+				zap.L().Error("Error deleting orphan sandbox",
+					zap.String("node_id", node.Info.ID),
+					zap.String("sandbox_id", orphan.Instance.SandboxID),
+					zap.String("team_id", orphan.TeamID.String()),
+					zap.String("execution_id", orphan.ExecutionID),
+					zap.Error(err),
+				)
 			}
 		}
 
@@ -248,7 +260,16 @@ func (o *Orchestrator) getDeleteInstanceFunction(
 		// Remove catalog entry
 		if o.redisClient != nil {
 			catalogKey := fmt.Sprintf("sandbox:catalog:%s", info.Instance.SandboxID)
-			o.redisClient.Del(ctx, catalogKey)
+			if err := o.redisClient.Del(ctx, catalogKey).Err(); err != nil {
+				zap.L().Warn("failed to remove sandbox catalog from Redis",
+					zap.Error(err),
+					logger.WithSandboxID(info.Instance.SandboxID),
+					zap.String("team_id", info.TeamID.String()),
+					zap.String("execution_id", info.ExecutionID),
+					zap.String("node_id", node.Info.ID),
+					zap.String("catalog_key", catalogKey),
+				)
+			}
 		}
 
 		if node.Client == nil {
@@ -371,8 +392,25 @@ func (o *Orchestrator) getInsertInstanceFunction(parentCtx context.Context, time
 					ttl := info.MaxInstanceLength + time.Minute
 					if setErr := o.redisClient.Set(ctx, catalogKey, string(catalogJSON), ttl).Err(); setErr != nil {
 						zap.L().Error("failed to write sandbox catalog to Redis",
-							zap.Error(setErr), logger.WithSandboxID(info.Instance.SandboxID))
+							zap.Error(setErr),
+							logger.WithSandboxID(info.Instance.SandboxID),
+							zap.String("team_id", info.TeamID.String()),
+							zap.String("execution_id", info.ExecutionID),
+							zap.String("node_id", node.Info.ID),
+							zap.String("node_ip", node.Info.IPAddress),
+							zap.String("catalog_key", catalogKey),
+							zap.Duration("catalog_ttl", ttl),
+						)
 					}
+				} else {
+					zap.L().Error("failed to marshal sandbox catalog entry",
+						zap.Error(jsonErr),
+						logger.WithSandboxID(info.Instance.SandboxID),
+						zap.String("team_id", info.TeamID.String()),
+						zap.String("execution_id", info.ExecutionID),
+						zap.String("node_id", node.Info.ID),
+						zap.String("node_ip", node.Info.IPAddress),
+					)
 				}
 			}
 		}

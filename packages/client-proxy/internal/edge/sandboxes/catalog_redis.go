@@ -3,6 +3,7 @@ package sandboxes
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -61,8 +62,21 @@ func (c *RedisSandboxCatalog) GetSandbox(sandboxId string) (*SandboxInfo, error)
 	ctx, ctxCancel := context.WithTimeout(spanCtx, catalogRedisTimeout)
 	defer ctxCancel()
 
-	data, err := c.redisClient.Get(ctx, c.getCatalogKey(sandboxId)).Bytes()
+	catalogKey := c.getCatalogKey(sandboxId)
+	data, err := c.redisClient.Get(ctx, catalogKey).Bytes()
 	if err != nil {
+		if errors.Is(err, redis.Nil) {
+			zap.L().Debug("sandbox catalog entry not found in redis",
+				logger.WithSandboxID(sandboxId),
+				zap.String("catalog_key", catalogKey),
+			)
+		} else {
+			zap.L().Warn("error getting sandbox catalog from redis",
+				logger.WithSandboxID(sandboxId),
+				zap.String("catalog_key", catalogKey),
+				zap.Error(err),
+			)
+		}
 		return nil, ErrSandboxNotFound
 	}
 
@@ -128,9 +142,17 @@ func (c *RedisSandboxCatalog) DeleteSandbox(sandboxId string, executionId string
 	ctx, ctxCancel := context.WithTimeout(spanCtx, catalogRedisTimeout)
 	defer ctxCancel()
 
-	data, err := c.redisClient.Get(ctx, c.getCatalogKey(sandboxId)).Bytes()
+	catalogKey := c.getCatalogKey(sandboxId)
+	data, err := c.redisClient.Get(ctx, catalogKey).Bytes()
 	// If sandbox does not exist, we can return early
 	if err != nil {
+		if !errors.Is(err, redis.Nil) {
+			zap.L().Warn("error getting sandbox catalog before delete",
+				logger.WithSandboxID(sandboxId),
+				zap.String("catalog_key", catalogKey),
+				zap.Error(err),
+			)
+		}
 		return nil
 	}
 
@@ -145,20 +167,26 @@ func (c *RedisSandboxCatalog) DeleteSandbox(sandboxId string, executionId string
 		return nil
 	}
 
-	c.redisClient.Del(ctx, c.getCatalogKey(sandboxId))
+	if err := c.redisClient.Del(ctx, catalogKey).Err(); err != nil {
+		zap.L().Warn("error deleting sandbox catalog from redis",
+			logger.WithSandboxID(sandboxId),
+			zap.String("catalog_key", catalogKey),
+			zap.Error(err),
+		)
+	}
 	c.cache.Delete(sandboxId)
 	return nil
 }
 
 func (c *RedisSandboxCatalog) getCatalogKey(sandboxId string) string {
-	zap.L().Debug("getCatalogKey method called", 
+	zap.L().Debug("getCatalogKey method called",
 		zap.String("input_sandboxId", sandboxId))
-	
+
 	key := fmt.Sprintf("sandbox:catalog:%s", sandboxId)
-	
-	zap.L().Debug("getCatalogKey method result", 
+
+	zap.L().Debug("getCatalogKey method result",
 		zap.String("input_sandboxId", sandboxId),
 		zap.String("output_key", key))
-	
+
 	return key
 }

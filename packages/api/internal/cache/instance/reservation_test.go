@@ -258,7 +258,7 @@ func TestDeleteLocalRedisBackedInstanceCallsDeleteHook(t *testing.T) {
 	)
 
 	info := newTestInstanceInfo(sandboxID, teamID)
-	require.NoError(t, cache.Add(ctx, info))
+	require.NoError(t, cache.Add(ctx, info, true))
 
 	require.True(t, cache.Delete(sandboxID, false))
 
@@ -294,7 +294,7 @@ func TestRedisBackedGetDoesNotReturnLocalWhenRedisMissing(t *testing.T) {
 	)
 
 	info := newTestInstanceInfo(sandboxID, teamID)
-	require.NoError(t, cache.Add(ctx, info))
+	require.NoError(t, cache.Add(ctx, info, true))
 	require.NoError(t, cache.redisStore.Remove(ctx, teamID, sandboxID))
 
 	_, err = cache.Get(sandboxID)
@@ -332,7 +332,7 @@ func TestRedisBackedEvictionKeepsNewerRedisExecution(t *testing.T) {
 	)
 
 	oldInfo := newTestInstanceInfo(sandboxID, teamID)
-	require.NoError(t, cache.Add(ctx, oldInfo))
+	require.NoError(t, cache.Add(ctx, oldInfo, true))
 
 	newInfo := newTestInstanceInfo(sandboxID, teamID)
 	newInfo.ExecutionID = "new-execution-id"

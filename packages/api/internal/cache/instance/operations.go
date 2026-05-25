@@ -54,6 +54,11 @@ func (c *InstanceCache) Get(instanceID string) (*InstanceInfo, error) {
 			return redisItem, nil
 		}
 		if errors.Is(err, ErrRedisSandboxNotFound) {
+			zap.L().Debug("forgetting stale local sandbox cache after redis miss",
+				zap.String("sandbox_id", instanceID),
+				zap.String("team_id", item.TeamID.String()),
+				zap.String("local_execution_id", item.ExecutionID),
+			)
 			c.cache.Forget(instanceID)
 			return nil, fmt.Errorf("instance \"%s\" doesn't exist: %w", instanceID, ErrRedisSandboxNotFound)
 		}
@@ -63,7 +68,15 @@ func (c *InstanceCache) Get(instanceID string) (*InstanceInfo, error) {
 	redisItem, err := c.redisStore.GetByID(context.Background(), instanceID)
 	if err != nil {
 		if errors.Is(err, ErrRedisSandboxNotFound) && c.cache.Has(instanceID, true) {
+			zap.L().Debug("forgetting stale local sandbox cache after redis lookup miss",
+				zap.String("sandbox_id", instanceID),
+			)
 			c.cache.Forget(instanceID)
+		} else if !errors.Is(err, ErrRedisSandboxNotFound) {
+			zap.L().Warn("error reading sandbox from redis store by id",
+				zap.String("sandbox_id", instanceID),
+				zap.Error(err),
+			)
 		}
 		return nil, err
 	}
@@ -174,6 +187,11 @@ func (c *InstanceCache) Delete(instanceID string, pause bool) bool {
 		if err == nil {
 			found = true
 			remoteOnly = true
+		} else if !errors.Is(err, ErrRedisSandboxNotFound) {
+			zap.L().Warn("error reading remote-only sandbox before delete",
+				zap.String("sandbox_id", instanceID),
+				zap.Error(err),
+			)
 		}
 	}
 
@@ -183,7 +201,12 @@ func (c *InstanceCache) Delete(instanceID string, pause bool) bool {
 				if errors.Is(err, ErrRedisSandboxNotFound) {
 					return false
 				}
-				zap.L().Error("error removing sandbox from redis", zap.Error(err))
+				zap.L().Error("error removing sandbox from redis",
+					zap.String("sandbox_id", instanceID),
+					zap.String("team_id", value.TeamID.String()),
+					zap.String("execution_id", value.ExecutionID),
+					zap.Error(err),
+				)
 				return false
 			}
 		}
@@ -197,7 +220,12 @@ func (c *InstanceCache) Delete(instanceID string, pause bool) bool {
 		if remoteOnly && c.deleteInstance != nil {
 			go func() {
 				if err := c.deleteInstance(value); err != nil {
-					zap.L().Error("error deleting remotely loaded instance", zap.Error(err))
+					zap.L().Error("error deleting remotely loaded instance",
+						zap.String("sandbox_id", instanceID),
+						zap.String("team_id", value.TeamID.String()),
+						zap.String("execution_id", value.ExecutionID),
+						zap.Error(err),
+					)
 				}
 			}()
 		}

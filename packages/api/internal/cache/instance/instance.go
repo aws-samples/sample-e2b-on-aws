@@ -194,20 +194,36 @@ func NewCache(
 					instanceCache.cache.Set(instanceInfo.Instance.SandboxID, redisItem)
 					zap.L().Debug("skipping stale local sandbox eviction",
 						zap.String("sandbox_id", instanceInfo.Instance.SandboxID),
+						zap.String("team_id", instanceInfo.TeamID.String()),
+						zap.String("node_id", instanceInfo.Instance.ClientID),
 						zap.String("local_execution_id", instanceInfo.ExecutionID),
 						zap.String("redis_execution_id", redisItem.ExecutionID),
+						zap.Time("local_end_time", instanceInfo.GetEndTime()),
 						zap.Time("redis_end_time", redisItem.GetEndTime()),
 					)
 					return
 				}
 			} else if !errors.Is(err, ErrRedisSandboxNotFound) {
-				zap.L().Error("Error reading instance from redis store before eviction", zap.Error(err))
+				zap.L().Error("Error reading instance from redis store before eviction",
+					zap.Error(err),
+					zap.String("sandbox_id", instanceInfo.Instance.SandboxID),
+					zap.String("team_id", instanceInfo.TeamID.String()),
+					zap.String("node_id", instanceInfo.Instance.ClientID),
+					zap.String("execution_id", instanceInfo.ExecutionID),
+					zap.Time("local_end_time", instanceInfo.GetEndTime()),
+				)
 				return
 			}
 
 			if err := instanceCache.redisStore.Remove(ctx, *instanceInfo.TeamID, instanceInfo.Instance.SandboxID); err != nil {
 				if !errors.Is(err, ErrRedisSandboxNotFound) {
-					zap.L().Error("Error removing instance from redis store", zap.Error(err))
+					zap.L().Error("Error removing instance from redis store",
+						zap.Error(err),
+						zap.String("sandbox_id", instanceInfo.Instance.SandboxID),
+						zap.String("team_id", instanceInfo.TeamID.String()),
+						zap.String("node_id", instanceInfo.Instance.ClientID),
+						zap.String("execution_id", instanceInfo.ExecutionID),
+					)
 					return
 				}
 			}
@@ -215,7 +231,13 @@ func NewCache(
 
 		err := deleteInstance(instanceInfo)
 		if err != nil {
-			zap.L().Error("Error deleting instance", zap.Error(err))
+			zap.L().Error("Error deleting instance",
+				zap.Error(err),
+				zap.String("sandbox_id", instanceInfo.Instance.SandboxID),
+				zap.String("team_id", instanceInfo.TeamID.String()),
+				zap.String("node_id", instanceInfo.Instance.ClientID),
+				zap.String("execution_id", instanceInfo.ExecutionID),
+			)
 		}
 
 		instanceCache.UpdateCounters(ctx, instanceInfo, -1, false)

@@ -125,7 +125,10 @@ func (c *InstanceCache) reconcileRedis(ctx context.Context, instances []*Instanc
 			} else {
 				zap.L().Warn("Redis error during reconcile, skipping orphan check",
 					zap.Error(err),
-					zap.String("sandbox_id", instance.Instance.SandboxID))
+					zap.String("node_id", nodeID),
+					zap.String("sandbox_id", instance.Instance.SandboxID),
+					zap.String("team_id", instance.TeamID.String()),
+					zap.String("execution_id", instance.ExecutionID))
 			}
 			continue
 		}
