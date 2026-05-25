@@ -93,12 +93,19 @@ func catalogResolution(sandboxId string, catalog sandboxes.SandboxesCatalog, orc
 		return "", fmt.Errorf("failed to get sandbox from catalog: %w", err)
 	}
 
-	o, ok := orchestrators.GetOrchestrator(s.OrchestratorId)
-	if !ok {
-		return "", errors.New("orchestrator not found")
+	// Use OrchestratorIP directly from catalog (aligned with upstream design)
+	if s.OrchestratorIP != "" {
+		return s.OrchestratorIP, nil
 	}
 
-	return o.Ip, nil
+	// Fallback: match by NodeID for catalog entries without IP (e.g. created before this fix)
+	for _, node := range orchestrators.GetOrchestrators() {
+		if node.NodeID == s.OrchestratorId {
+			return node.Ip, nil
+		}
+	}
+
+	return "", errors.New("orchestrator not found")
 }
 
 func NewClientProxy(meterProvider metric.MeterProvider, serviceName string, port uint, catalog sandboxes.SandboxesCatalog, orchestrators *orchestratorspool.OrchestratorsPool, useCatalogResolution bool, useDnsResolution bool) (*reverseproxy.Proxy, error) {

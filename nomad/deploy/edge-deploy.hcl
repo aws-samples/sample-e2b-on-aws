@@ -1,11 +1,11 @@
 job "client-proxy" {
-  datacenters = ["${aws_az1}", "${aws_az2}"]
+  datacenters = ["us-west-2a", "us-west-2b"]
   node_pool = "api"
 
   priority = 80
 
   group "client-proxy" {
-    count = ${CLIENT_PROXY_COUNT}
+    count = 2
 
     constraint {
       operator  = "distinct_hosts"
@@ -85,7 +85,7 @@ job "client-proxy" {
 
         OTEL_COLLECTOR_GRPC_ENDPOINT  = "localhost:4317"
         LOGS_COLLECTOR_ADDRESS        = "analytics_collector_host"
-        REDIS_URL                     = "${REDIS_ENDPOINT}:6379"
+        REDIS_URL                     = "e2b-dev-redis-s2auw3.serverless.usw2.cache.amazonaws.com:6379"
         LOKI_URL                      = "http://loki.service.consul:3100"
       }
 
@@ -102,7 +102,7 @@ EOH
       config {
         network_mode = "host"
         dns_servers  = ["127.0.0.53"]
-        image        = "${account_id}.dkr.ecr.${AWSREGION}.amazonaws.com/e2b-orchestration/client-proxy:${IMAGE_TAG}"
+        image        = "269562551342.dkr.ecr.us-west-2.amazonaws.com/e2b-orchestration/client-proxy:4fdbdf7"
         ports        = ["session", "edge-api"]
       }
     }

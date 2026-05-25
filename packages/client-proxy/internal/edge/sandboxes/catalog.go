@@ -7,6 +7,7 @@ import (
 
 type SandboxInfo struct {
 	OrchestratorId string `json:"orchestrator_id"`
+	OrchestratorIP string `json:"orchestrator_ip"`
 	ExecutionId    string `json:"execution_id"`
 
 	SandboxStartedAt        time.Time `json:"sandbox_started_at"`          // when sandbox was started

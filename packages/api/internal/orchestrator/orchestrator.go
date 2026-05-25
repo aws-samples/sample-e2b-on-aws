@@ -40,6 +40,7 @@ type Orchestrator struct {
 	tracer              trace.Tracer
 	analytics           *analyticscollector.Analytics
 	dns                 *dns.DNS
+	redisClient         redis.UniversalClient
 	dbClient            *db.DB
 	tel                 *telemetry.Client
 	metricsRegistration metric.Registration
@@ -79,6 +80,7 @@ func New(
 		tracer:      tracer,
 		nodes:       smap.New[*Node](),
 		dns:         dnsServer,
+		redisClient: redisClient,
 		dbClient:    dbClient,
 		tel:         tel,
 	}

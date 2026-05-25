@@ -154,7 +154,7 @@ func (c *RedisSandboxCatalog) getCatalogKey(sandboxId string) string {
 	zap.L().Debug("getCatalogKey method called", 
 		zap.String("input_sandboxId", sandboxId))
 	
-	key := fmt.Sprintf("sandbox.dns.%s", sandboxId)
+	key := fmt.Sprintf("sandbox:catalog:%s", sandboxId)
 	
 	zap.L().Debug("getCatalogKey method result", 
 		zap.String("input_sandboxId", sandboxId),
