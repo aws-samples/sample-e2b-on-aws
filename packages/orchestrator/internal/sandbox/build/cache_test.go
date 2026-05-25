@@ -243,8 +243,13 @@ func TestDiffStoreOldestFromCache(t *testing.T) {
 	assert.True(t, found)
 
 	// Delete oldest item
-	_, err = store.deleteOldestFromCache()
+	expectedSize, err := diff.FileSize()
 	assert.NoError(t, err)
+	deleted, deletedKey, deletedSize, err := store.deleteOldestFromCache()
+	assert.NoError(t, err)
+	assert.True(t, deleted)
+	assert.Equal(t, diff.CacheKey(), deletedKey)
+	assert.Equal(t, expectedSize, deletedSize)
 
 	assert.True(t, store.isBeingDeleted(diff.CacheKey()))
 	// Wait for removal trigger of diff
@@ -262,8 +267,13 @@ func TestDiffStoreOldestFromCache(t *testing.T) {
 	store.Add(diff3)
 
 	// Delete oldest item
-	_, err = store.deleteOldestFromCache()
+	expectedSize, err = diff2.FileSize()
 	assert.NoError(t, err)
+	deleted, deletedKey, deletedSize, err = store.deleteOldestFromCache()
+	assert.NoError(t, err)
+	assert.True(t, deleted)
+	assert.Equal(t, diff2.CacheKey(), deletedKey)
+	assert.Equal(t, expectedSize, deletedSize)
 
 	assert.True(t, store.isBeingDeleted(diff2.CacheKey()))
 	// Wait for removal trigger of diff

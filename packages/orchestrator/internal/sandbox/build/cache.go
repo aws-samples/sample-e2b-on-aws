@@ -174,11 +174,26 @@ func (s *DiffStore) startDiskSpaceEviction(threshold float64) {
 				continue
 			}
 
-			succ, err := s.deleteOldestFromCache()
+			succ, evictedKey, evictedSize, err := s.deleteOldestFromCache()
 			if err != nil {
 				zap.L().Error("failed to delete oldest item from cache", zap.Error(err))
 				timer.Reset(getDelay(false))
 				continue
+			}
+
+			if succ {
+				zap.L().Warn(
+					"evicting build data cache item due to disk usage threshold",
+					zap.String("cache_path", s.cachePath),
+					zap.String("item_key", string(evictedKey)),
+					zap.Int64("item_size_bytes", evictedSize),
+					zap.Float64("disk_used_percent", percentage),
+					zap.Float64("disk_threshold_percent", threshold),
+					zap.Uint64("disk_used_bytes", dUsed),
+					zap.Uint64("disk_total_bytes", dTotal),
+					zap.Int64("effective_used_bytes", used),
+					zap.Int64("pending_delete_bytes", pUsed),
+				)
 			}
 
 			// Item evicted, reset timer to fast check
@@ -200,12 +215,14 @@ func (s *DiffStore) getPendingDeletesSize() int64 {
 
 // deleteOldestFromCache deletes the oldest item (smallest TTL) from the cache.
 // ttlcache has items in order by TTL
-func (s *DiffStore) deleteOldestFromCache() (suc bool, e error) {
+func (s *DiffStore) deleteOldestFromCache() (suc bool, deletedKey DiffStoreKey, deletedSize int64, e error) {
 	defer func() {
 		// Because of bug in ttlcache RangeBackwards method, we need to handle potential panic until it gets fixed
 		if r := recover(); r != nil {
 			e = fmt.Errorf("recovered from panic in deleteOldestFromCache: %v", r)
 			suc = false
+			deletedKey = ""
+			deletedSize = 0
 
 			zap.L().Error("recovered from panic in deleteOldestFromCache", zap.Error(e))
 		}
@@ -213,7 +230,8 @@ func (s *DiffStore) deleteOldestFromCache() (suc bool, e error) {
 
 	success := false
 	s.cache.RangeBackwards(func(item *ttlcache.Item[DiffStoreKey, Diff]) bool {
-		isDeleted := s.isBeingDeleted(item.Key())
+		itemKey := item.Key()
+		isDeleted := s.isBeingDeleted(itemKey)
 		if isDeleted {
 			return true
 		}
@@ -224,13 +242,15 @@ func (s *DiffStore) deleteOldestFromCache() (suc bool, e error) {
 			sfSize = fallbackDiffSize
 		}
 
-		s.scheduleDelete(item.Key(), sfSize)
+		s.scheduleDelete(itemKey, sfSize)
 
 		success = true
+		deletedKey = itemKey
+		deletedSize = sfSize
 		return false
 	})
 
-	return success, e
+	return success, deletedKey, deletedSize, e
 }
 
 func (s *DiffStore) resetDelete(key DiffStoreKey) {
