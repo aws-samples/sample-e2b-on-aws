@@ -213,18 +213,24 @@ func snapshotsToPaginatedSandboxes(snapshots []queries.GetSnapshotsWithCursorRow
 			alias = &record.Aliases[0]
 		}
 
+		envdVersion := ""
+		if build.EnvdVersion != nil {
+			envdVersion = *build.EnvdVersion
+		}
+
 		sandbox := utils.PaginatedSandbox{
 			ListedSandbox: api.ListedSandbox{
-				ClientID:   "00000000", // for backwards compatibility we need to return a client id
-				Alias:      alias,
-				TemplateID: snapshot.BaseEnvID,
-				SandboxID:  snapshot.SandboxID,
-				StartedAt:  snapshot.SandboxStartedAt.Time,
-				CpuCount:   int32(build.Vcpu),
-				DiskSizeMB: envBuildDiskSizeMB(build),
-				MemoryMB:   int32(build.RamMb),
-				EndAt:      snapshot.CreatedAt.Time,
-				State:      api.Paused,
+				ClientID:    "00000000", // for backwards compatibility we need to return a client id
+				Alias:       alias,
+				TemplateID:  snapshot.BaseEnvID,
+				SandboxID:   snapshot.SandboxID,
+				StartedAt:   snapshot.SandboxStartedAt.Time,
+				CpuCount:    int32(build.Vcpu),
+				DiskSizeMB:  envBuildDiskSizeMB(build),
+				MemoryMB:    int32(build.RamMb),
+				EndAt:       snapshot.CreatedAt.Time,
+				State:       api.Paused,
+				EnvdVersion: envdVersion,
 			},
 			PaginationTimestamp: snapshot.CreatedAt.Time,
 		}
@@ -247,16 +253,17 @@ func instanceInfoToPaginatedSandboxes(runningSandboxes []*instance.InstanceInfo)
 	for _, info := range runningSandboxes {
 		sandbox := utils.PaginatedSandbox{
 			ListedSandbox: api.ListedSandbox{
-				ClientID:   info.Instance.ClientID,
-				TemplateID: info.BaseTemplateID,
-				Alias:      info.Instance.Alias,
-				SandboxID:  info.Instance.SandboxID,
-				StartedAt:  info.StartTime,
-				CpuCount:   api.CPUCount(info.VCpu),
-				DiskSizeMB: info.TotalDiskSizeMB,
-				MemoryMB:   api.MemoryMB(info.RamMB),
-				EndAt:      info.GetEndTime(),
-				State:      api.Running,
+				ClientID:    info.Instance.ClientID,
+				TemplateID:  info.BaseTemplateID,
+				Alias:       info.Instance.Alias,
+				SandboxID:   info.Instance.SandboxID,
+				StartedAt:   info.StartTime,
+				CpuCount:    api.CPUCount(info.VCpu),
+				DiskSizeMB:  info.TotalDiskSizeMB,
+				MemoryMB:    api.MemoryMB(info.RamMB),
+				EndAt:       info.GetEndTime(),
+				State:       api.Running,
+				EnvdVersion: info.EnvdVersion,
 			},
 			PaginationTimestamp: info.StartTime,
 		}

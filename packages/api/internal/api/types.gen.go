@@ -122,6 +122,9 @@ type ListedSandbox struct {
 	// EndAt Time when the sandbox will expire
 	EndAt time.Time `json:"endAt"`
 
+	// EnvdVersion Version of the envd running in the sandbox
+	EnvdVersion string `json:"envdVersion"`
+
 	// MemoryMB Memory for the sandbox in MB
 	MemoryMB MemoryMB         `json:"memoryMB"`
 	Metadata *SandboxMetadata `json:"metadata,omitempty"`
