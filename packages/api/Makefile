@@ -85,6 +85,6 @@ build-and-upload-aws:
 	@aws ecr get-login-password --region $(AWS_REGION) | docker login --username AWS --password-stdin $(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com
 	# Build and push the image
 	@echo "Building for architecture: $(ARCHITECTURE)"
-	@docker build --platform linux/$(ARCHITECTURE) --tag "$(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/$(IMAGE):$(COMMIT_SHA)" --build-arg JFROG_ARTIFACTORY_URL="$(JFROG_ARTIFACTORY_URL)" --build-arg JFROG_DOCKER_REGISTRY="$(JFROG_DOCKER_REGISTRY)" .
+	@docker build --platform linux/$(ARCHITECTURE) --tag "$(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/$(IMAGE):$(COMMIT_SHA)" --build-arg COMMIT_SHA="$(COMMIT_SHA)" --build-arg JFROG_ARTIFACTORY_URL="$(JFROG_ARTIFACTORY_URL)" --build-arg JFROG_DOCKER_REGISTRY="$(JFROG_DOCKER_REGISTRY)" .
 	@docker push "$(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/$(IMAGE):$(COMMIT_SHA)"
 	@rm -rf .shared/

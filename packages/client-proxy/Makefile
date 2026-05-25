@@ -52,10 +52,10 @@ build-and-upload-aws:
 
 	@if [ "$(ARCHITECTURE)" = "arm64" ]; then \
 		echo "Building for ARM64 architecture"; \
-		docker build --platform linux/arm64 --tag "$(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/$(IMAGE):$(COMMIT_SHA)" --build-arg JFROG_ARTIFACTORY_URL="$(JFROG_ARTIFACTORY_URL)" --build-arg JFROG_DOCKER_REGISTRY="$(JFROG_DOCKER_REGISTRY)" .; \
+		docker build --platform linux/arm64 --tag "$(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/$(IMAGE):$(COMMIT_SHA)" --build-arg COMMIT_SHA="$(COMMIT_SHA)" --build-arg JFROG_ARTIFACTORY_URL="$(JFROG_ARTIFACTORY_URL)" --build-arg JFROG_DOCKER_REGISTRY="$(JFROG_DOCKER_REGISTRY)" .; \
 	else \
 		echo "Building for x86_64 architecture"; \
-		docker build --platform linux/amd64 --tag "$(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/$(IMAGE):$(COMMIT_SHA)" --build-arg JFROG_ARTIFACTORY_URL="$(JFROG_ARTIFACTORY_URL)" --build-arg JFROG_DOCKER_REGISTRY="$(JFROG_DOCKER_REGISTRY)" .; \
+		docker build --platform linux/amd64 --tag "$(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/$(IMAGE):$(COMMIT_SHA)" --build-arg COMMIT_SHA="$(COMMIT_SHA)" --build-arg JFROG_ARTIFACTORY_URL="$(JFROG_ARTIFACTORY_URL)" --build-arg JFROG_DOCKER_REGISTRY="$(JFROG_DOCKER_REGISTRY)" .; \
 	fi
 
 	@docker push "$(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/$(IMAGE):$(COMMIT_SHA)"
