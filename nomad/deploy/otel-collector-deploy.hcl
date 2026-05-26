@@ -141,13 +141,6 @@ receivers:
             - targets: ['localhost:4646']
           params:
             format: ['prometheus']
-        - job_name: e2b-hugepages
-          scrape_interval: 15s
-          scrape_timeout: 5s
-          metrics_path: /metrics
-          static_configs:
-            - targets: ['127.0.0.1:9108']
-
 processors:
   batch:
     timeout: 15s
@@ -168,7 +161,13 @@ processors:
           - "client_proxy.*"
           - "e2b\\.sandbox\\..*"      # per-sandbox cpu/ram gauges
           - "http\\..*"                  # api HTTP middleware histograms
+          - "orchestration-api\\.http\\..*" # api HTTP middleware histograms with service prefix
           - "rpc\\..*"                   # otelgrpc client/server histograms
+          - "rpc\\.client\\.duration.*"
+          - "rpc\\.client\\.request\\.size.*"
+          - "rpc\\.client\\.response\\.size.*"
+          - "rpc\\.client\\.requests_per_rpc.*"
+          - "rpc\\.client\\.responses_per_rpc.*"
           - "otelcol_.*"                   # collector self-metrics
 
 
@@ -188,6 +187,36 @@ processors:
           - "nomad_client_allocs_memory_allocated"
           - "nomad_client_allocs_cpu_total_percent"
           - "nomad_client_allocs_cpu_allocated"
+          - "nomad_nomad_job_status_running"
+          - "nomad_nomad_job_status_pending"
+          - "nomad_nomad_job_status_dead"
+          - "nomad_nomad_job_summary_running"
+          - "nomad_nomad_job_summary_failed"
+          - "nomad_nomad_job_summary_lost"
+          - "nomad_nomad_job_summary_queued"
+          - "nomad_nomad_job_summary_starting"
+          - "nomad_nomad_job_summary_unknown"
+          - "nomad_nomad_plan_queue_depth"
+          - "nomad_nomad_blocked_evals_total_blocked"
+          - "nomad_nomad_blocked_evals_total_escaped"
+          - "nomad_nomad_blocked_evals_total_quota_limit"
+          - "nomad_nomad_broker_total_pending"
+          - "nomad_nomad_broker_total_ready"
+          - "nomad_nomad_broker_total_unacked"
+          - "nomad_nomad_broker_total_waiting"
+          - "nomad_nomad_autopilot_healthy"
+          - "nomad_nomad_autopilot_failure_tolerance"
+          - "nomad_raft_leader_lastContact"
+          - "nomad_raft_leader_oldestLogAge"
+          - "nomad_raft_thread_fsm_saturation"
+          - "nomad_raft_thread_main_saturation"
+          - "nomad_nomad_rpc_request"
+          - "nomad_nomad_rpc_query"
+          - "nomad_nomad_rpc_eval_write"
+          - "nomad_nomad_client_update_status"
+          - "nomad_memberlist_size_local"
+          - "nomad_memberlist_gossip"
+          - "nomad_nomad_heartbeat_active"
           - "e2b_host_hugepage_size_bytes"
           - "e2b_host_hugetlb_bytes"
           - "e2b_host_mem_available_bytes"
@@ -277,9 +306,14 @@ processors:
     metrics:
       include:
         match_type: regexp
-        # Include info about grpc server endpoint durations - used for monitoring request times
+        # Include gRPC endpoint metrics with low-cardinality resource labels.
         metric_names:
           - "rpc.server.duration.*"
+          - "rpc.client.duration.*"
+          - "rpc.client.request.size.*"
+          - "rpc.client.response.size.*"
+          - "rpc.client.requests_per_rpc.*"
+          - "rpc.client.responses_per_rpc.*"
   resource/remove_instance:
     attributes:
       - action: delete
