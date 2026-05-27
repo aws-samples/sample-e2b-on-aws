@@ -215,10 +215,10 @@ func NewCache(
 				return
 			}
 
-			if err := instanceCache.redisStore.Remove(ctx, *instanceInfo.TeamID, instanceInfo.Instance.SandboxID); err != nil {
-				if !errors.Is(err, ErrRedisSandboxNotFound) {
-					zap.L().Error("Error removing instance from redis store",
-						zap.Error(err),
+			removed, err := instanceCache.redisStore.RemoveIfExecution(ctx, *instanceInfo.TeamID, instanceInfo.Instance.SandboxID, instanceInfo.ExecutionID)
+			if err != nil {
+				if errors.Is(err, ErrRedisSandboxNotFound) {
+					zap.L().Debug("skipping sandbox eviction already claimed by another api instance",
 						zap.String("sandbox_id", instanceInfo.Instance.SandboxID),
 						zap.String("team_id", instanceInfo.TeamID.String()),
 						zap.String("node_id", instanceInfo.Instance.ClientID),
@@ -226,6 +226,29 @@ func NewCache(
 					)
 					return
 				}
+
+				zap.L().Error("Error removing instance from redis store",
+					zap.Error(err),
+					zap.String("sandbox_id", instanceInfo.Instance.SandboxID),
+					zap.String("team_id", instanceInfo.TeamID.String()),
+					zap.String("node_id", instanceInfo.Instance.ClientID),
+					zap.String("execution_id", instanceInfo.ExecutionID),
+				)
+				return
+			}
+
+			if !removed {
+				redisItem, getErr := instanceCache.redisStore.Get(ctx, *instanceInfo.TeamID, instanceInfo.Instance.SandboxID)
+				if getErr == nil {
+					instanceCache.cache.Set(redisItem.Instance.SandboxID, redisItem)
+				}
+				zap.L().Debug("skipping stale sandbox eviction because redis execution changed",
+					zap.String("sandbox_id", instanceInfo.Instance.SandboxID),
+					zap.String("team_id", instanceInfo.TeamID.String()),
+					zap.String("node_id", instanceInfo.Instance.ClientID),
+					zap.String("execution_id", instanceInfo.ExecutionID),
+				)
+				return
 			}
 		}
 

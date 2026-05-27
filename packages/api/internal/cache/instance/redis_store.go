@@ -168,8 +168,15 @@ return 1
 `)
 
 var removeSandboxScript = redis.NewScript(`
-if redis.call('EXISTS', KEYS[1]) == 0 then
+local data = redis.call('GET', KEYS[1])
+if data == false then
 	return 0
+end
+if ARGV[2] ~= '' then
+	local sandbox = cjson.decode(data)
+	if sandbox['executionID'] ~= ARGV[2] then
+		return 2
+	end
 end
 redis.call('DEL', KEYS[1])
 redis.call('SREM', KEYS[2], ARGV[1])
@@ -320,16 +327,40 @@ func (s *redisInstanceStore) Update(ctx context.Context, info *InstanceInfo) err
 	return s.Add(ctx, info)
 }
 
-func (s *redisInstanceStore) Remove(ctx context.Context, teamID uuid.UUID, sandboxID string) error {
-	result, err := removeSandboxScript.Run(ctx, s.client, []string{sandboxKey(teamID, sandboxID), teamIndexKey(teamID)}, sandboxID).Int()
+func (s *redisInstanceStore) remove(ctx context.Context, teamID uuid.UUID, sandboxID, executionID string) (int, error) {
+	result, err := removeSandboxScript.Run(ctx, s.client, []string{sandboxKey(teamID, sandboxID), teamIndexKey(teamID)}, sandboxID, executionID).Int()
 	if err != nil {
-		return fmt.Errorf("remove sandbox from redis: %w", err)
+		return 0, fmt.Errorf("remove sandbox from redis: %w", err)
+	}
+
+	return result, nil
+}
+
+func (s *redisInstanceStore) Remove(ctx context.Context, teamID uuid.UUID, sandboxID string) error {
+	result, err := s.remove(ctx, teamID, sandboxID, "")
+	if err != nil {
+		return err
 	}
 	if result == 0 {
 		return ErrRedisSandboxNotFound
 	}
 
 	return nil
+}
+
+func (s *redisInstanceStore) RemoveIfExecution(ctx context.Context, teamID uuid.UUID, sandboxID, executionID string) (bool, error) {
+	result, err := s.remove(ctx, teamID, sandboxID, executionID)
+	if err != nil {
+		return false, err
+	}
+	if result == 0 {
+		return false, ErrRedisSandboxNotFound
+	}
+	if result == 2 {
+		return false, nil
+	}
+
+	return true, nil
 }
 
 const (

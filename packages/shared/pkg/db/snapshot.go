@@ -130,11 +130,10 @@ func (db *DB) NewSnapshotBuild(
 }
 
 func (db *DB) GetSnapshotBuilds(ctx context.Context, sandboxID string, teamID uuid.UUID) (
-	*models.Env,
-	[]*models.EnvBuild,
+	[]*models.Env,
 	error,
 ) {
-	e, err := db.
+	envs, err := db.
 		Client.
 		Env.
 		Query().
@@ -143,17 +142,15 @@ func (db *DB) GetSnapshotBuilds(ctx context.Context, sandboxID string, teamID uu
 			env.TeamID(teamID),
 		).
 		WithBuilds().
-		Only(ctx)
-
-	notFound := models.IsNotFound(err)
-
-	if notFound {
-		return nil, nil, EnvNotFound{}
-	}
+		All(ctx)
 
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to get snapshot build for '%s': %w", sandboxID, err)
+		return nil, fmt.Errorf("failed to get snapshot build for '%s': %w", sandboxID, err)
 	}
 
-	return e, e.Edges.Builds, nil
+	if len(envs) == 0 {
+		return nil, EnvNotFound{}
+	}
+
+	return envs, nil
 }

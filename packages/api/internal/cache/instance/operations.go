@@ -196,12 +196,31 @@ func (c *InstanceCache) Delete(instanceID string, pause bool) bool {
 	}
 
 	if found {
+		value.AutoPause.Store(pause)
+
+		if pause {
+			c.MarkAsPausing(value)
+		}
+
 		if c.redisStore != nil && value.TeamID != nil {
-			if err := c.redisStore.Remove(context.Background(), *value.TeamID, instanceID); err != nil {
+			if remoteOnly {
+				if err := c.redisStore.Remove(context.Background(), *value.TeamID, instanceID); err != nil {
+					if errors.Is(err, ErrRedisSandboxNotFound) {
+						return false
+					}
+					zap.L().Error("error removing sandbox from redis",
+						zap.String("sandbox_id", instanceID),
+						zap.String("team_id", value.TeamID.String()),
+						zap.String("execution_id", value.ExecutionID),
+						zap.Error(err),
+					)
+					return false
+				}
+			} else if err := c.redisStore.Update(context.Background(), value); err != nil {
 				if errors.Is(err, ErrRedisSandboxNotFound) {
 					return false
 				}
-				zap.L().Error("error removing sandbox from redis",
+				zap.L().Error("error updating sandbox expiration in redis",
 					zap.String("sandbox_id", instanceID),
 					zap.String("team_id", value.TeamID.String()),
 					zap.String("execution_id", value.ExecutionID),
@@ -209,12 +228,6 @@ func (c *InstanceCache) Delete(instanceID string, pause bool) bool {
 				)
 				return false
 			}
-		}
-
-		value.AutoPause.Store(pause)
-
-		if pause {
-			c.MarkAsPausing(value)
 		}
 
 		if remoteOnly && c.deleteInstance != nil {

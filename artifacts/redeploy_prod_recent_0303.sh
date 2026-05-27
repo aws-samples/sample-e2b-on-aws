@@ -14,7 +14,10 @@ set -Eeuo pipefail
 # Components redeployed by default:
 #   - api: Docker image + Nomad job, API_COUNT defaults to 2
 #   - client-proxy: Docker image + Nomad job, CLIENT_PROXY_COUNT defaults to 2
-#   - orchestrator: S3 binary artifact + lock-safe stop/cleanup/start
+#   - orchestrator: S3 binary artifact is built/uploaded, but the Nomad
+#     orchestrator job is not restarted by default. Restarting it in place can
+#     orphan live Firecracker processes; use a drained/replaced client node or
+#     an explicit maintenance-window override.
 #   - template-manager: same S3 binary artifact + Nomad job restart
 #   - envd: S3 binary artifact for new template/sandbox usage
 #   - otel-collector: Nomad metrics/OTLP collector job
@@ -27,9 +30,12 @@ set -Eeuo pipefail
 #   IMAGE_TAG=e82bd62
 #   DEPLOY_ENVD=1
 #   SKIP_OBSERVABILITY=0
-#   SKIP_ORCHESTRATOR=0
+#   SKIP_ORCHESTRATOR=1
+#   SKIP_ORCHESTRATOR=0   # only after client nodes are drained/replaced
+#   CHECK_ORCHESTRATOR_HEALTH=1
 #   SKIP_TEMPLATE_MANAGER=0
-#   RUN_SDK_LIFECYCLE_CHECK=0
+#   RUN_SDK_LIFECYCLE_CHECK=auto
+#   SDK_VERSION=2.1.0
 #   APPLY_DB_TIER_UPDATE=1
 #   BASE_TIER_DISK_MB=10240
 #   NOMAD_CLI_EXTRA="-tls-skip-verify"
@@ -45,9 +51,11 @@ CLIENT_PROXY_COUNT="${CLIENT_PROXY_COUNT:-2}"
 SANDBOX_STORAGE_BACKEND="${SANDBOX_STORAGE_BACKEND:-redis}"
 DEPLOY_ENVD="${DEPLOY_ENVD:-1}"
 SKIP_OBSERVABILITY="${SKIP_OBSERVABILITY:-0}"
-SKIP_ORCHESTRATOR="${SKIP_ORCHESTRATOR:-0}"
+SKIP_ORCHESTRATOR="${SKIP_ORCHESTRATOR:-1}"
+CHECK_ORCHESTRATOR_HEALTH="${CHECK_ORCHESTRATOR_HEALTH:-1}"
 SKIP_TEMPLATE_MANAGER="${SKIP_TEMPLATE_MANAGER:-0}"
-RUN_SDK_LIFECYCLE_CHECK="${RUN_SDK_LIFECYCLE_CHECK:-0}"
+RUN_SDK_LIFECYCLE_CHECK="${RUN_SDK_LIFECYCLE_CHECK:-auto}"
+SDK_VERSION="${SDK_VERSION:-2.1.0}"
 APPLY_DB_TIER_UPDATE="${APPLY_DB_TIER_UPDATE:-1}"
 BASE_TIER_ID="${BASE_TIER_ID:-base_v1}"
 BASE_TIER_DISK_MB="${BASE_TIER_DISK_MB:-10240}"
@@ -207,6 +215,9 @@ preflight() {
   echo "api_count=$API_COUNT"
   echo "client_proxy_count=$CLIENT_PROXY_COUNT"
   echo "sandbox_storage_backend=$SANDBOX_STORAGE_BACKEND"
+  echo "check_orchestrator_health=$CHECK_ORCHESTRATOR_HEALTH"
+  echo "run_sdk_lifecycle_check=$RUN_SDK_LIFECYCLE_CHECK"
+  echo "sdk_version=$SDK_VERSION"
   echo "apply_db_tier_update=$APPLY_DB_TIER_UPDATE"
   echo "base_tier_id=$BASE_TIER_ID"
   echo "base_tier_disk_mb=$BASE_TIER_DISK_MB"
@@ -637,6 +648,7 @@ restart_raw_exec_jobs() {
 
   if [[ "$SKIP_ORCHESTRATOR" != "1" ]]; then
     local expected_orchestrators
+    log "WARNING: restarting the orchestrator job in place can orphan live Firecracker processes. Continue only for a drained/replaced client node or an approved maintenance window."
     expected_orchestrators="$(default_ready_node_count_for_job orchestrator)"
     [[ "$expected_orchestrators" =~ ^[0-9]+$ ]] || die "cannot resolve orchestrator expected allocation count"
     (( expected_orchestrators > 0 )) || die "no ready eligible nodes for orchestrator"
@@ -651,7 +663,7 @@ restart_raw_exec_jobs() {
     nomad_cmd job run deploy/orchestrator-deploy.hcl
     wait_running_allocs orchestrator client-orchestrator "$expected_orchestrators" 600
   else
-    log "Skipping orchestrator because SKIP_ORCHESTRATOR=$SKIP_ORCHESTRATOR"
+    log "Skipping orchestrator Nomad restart because SKIP_ORCHESTRATOR=$SKIP_ORCHESTRATOR; orchestrator/template-manager artifact was still built and uploaded."
   fi
 }
 
@@ -703,19 +715,41 @@ check_http_health() {
 }
 
 run_sdk_lifecycle_check() {
-  if [[ "$RUN_SDK_LIFECYCLE_CHECK" != "1" ]]; then
-    log "Skipping SDK lifecycle check because RUN_SDK_LIFECYCLE_CHECK=$RUN_SDK_LIFECYCLE_CHECK"
+  case "$RUN_SDK_LIFECYCLE_CHECK" in
+    0|false|False|FALSE|no|No|NO)
+      log "Skipping SDK lifecycle check because RUN_SDK_LIFECYCLE_CHECK=$RUN_SDK_LIFECYCLE_CHECK"
+      return 0
+      ;;
+    1|true|True|TRUE|yes|Yes|YES|auto)
+      ;;
+    *)
+      die "RUN_SDK_LIFECYCLE_CHECK must be 0, 1, or auto; got $RUN_SDK_LIFECYCLE_CHECK"
+      ;;
+  esac
+
+  if [[ "$RUN_SDK_LIFECYCLE_CHECK" == "auto" && -z "${E2B_API_KEY:-${E2B_TEAM_API_KEY:-}}" ]]; then
+    log "Skipping SDK lifecycle check because RUN_SDK_LIFECYCLE_CHECK=auto and E2B_API_KEY/E2B_TEAM_API_KEY is not set"
+    return 0
+  fi
+
+  if [[ "$RUN_SDK_LIFECYCLE_CHECK" == "auto" && -z "${E2B_DOMAIN:-${CFNDOMAIN:-}}" ]]; then
+    log "Skipping SDK lifecycle check because RUN_SDK_LIFECYCLE_CHECK=auto and E2B_DOMAIN/CFNDOMAIN is not set"
     return 0
   fi
 
   [[ -f "$REPO_DIR/test_use_case/sdk_lifecycle_execute_report.py" ]] || die "missing SDK lifecycle script"
   [[ -n "${E2B_API_KEY:-${E2B_TEAM_API_KEY:-}}" ]] || die "E2B_API_KEY/E2B_TEAM_API_KEY is required for SDK lifecycle check"
+  [[ -n "${E2B_DOMAIN:-${CFNDOMAIN:-}}" ]] || die "E2B_DOMAIN/CFNDOMAIN is required for SDK lifecycle check"
 
-  log "Run SDK lifecycle check"
+  log "Run SDK lifecycle check with e2b==$SDK_VERSION"
   cd "$REPO_DIR"
+  python3 -m venv "$TMP_DIR/e2b-sdk-check"
+  "$TMP_DIR/e2b-sdk-check/bin/python" -m pip install --upgrade pip >/dev/null
+  "$TMP_DIR/e2b-sdk-check/bin/python" -m pip install "e2b==$SDK_VERSION" >/dev/null
+
   E2B_DOMAIN="${E2B_DOMAIN:-${CFNDOMAIN:-}}" \
     E2B_API_KEY="${E2B_API_KEY:-${E2B_TEAM_API_KEY:-}}" \
-    python3 test_use_case/sdk_lifecycle_execute_report.py
+    "$TMP_DIR/e2b-sdk-check/bin/python" test_use_case/sdk_lifecycle_execute_report.py
 }
 
 post_checks() {
@@ -731,7 +765,11 @@ post_checks() {
     assert_job_healthy nomad-event-collector nomad-event-collector 1
   fi
   [[ "$SKIP_TEMPLATE_MANAGER" == "1" ]] || assert_job_healthy template-manager template-manager 1
-  [[ "$SKIP_ORCHESTRATOR" == "1" ]] || assert_job_healthy orchestrator client-orchestrator "$(default_ready_node_count_for_job orchestrator)"
+  if [[ "$CHECK_ORCHESTRATOR_HEALTH" == "1" ]]; then
+    assert_job_healthy orchestrator client-orchestrator "$(default_ready_node_count_for_job orchestrator)"
+  else
+    log "Skipping orchestrator health check because CHECK_ORCHESTRATOR_HEALTH=$CHECK_ORCHESTRATOR_HEALTH"
+  fi
 
   prefix="$(stack_prefix)"
   if [[ -n "$prefix" ]]; then
@@ -759,6 +797,7 @@ post_checks() {
   fi
 
   run_sdk_lifecycle_check
+  log "Post-deploy health checks passed"
 }
 
 main() {
