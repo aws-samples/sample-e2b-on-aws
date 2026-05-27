@@ -415,10 +415,6 @@ func (o *Orchestrator) getInsertInstanceFunction(parentCtx context.Context, time
 			}
 		}
 
-		if info.AutoPause.Load() {
-			o.instanceCache.MarkAsPausing(info)
-		}
-
 		if created {
 			// Run in separate goroutine to not block sandbox creation
 			// Also use parentCtx to not cancel the request with this hook timeout
