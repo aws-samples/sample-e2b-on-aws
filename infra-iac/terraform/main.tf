@@ -957,7 +957,7 @@ resource "aws_launch_template" "client" {
     device_name = "/dev/sda2"
 
     ebs {
-      volume_size           = 1000
+      volume_size           = 2048
       volume_type           = "gp3"
       iops                  = 6000
       throughput            = 1000
