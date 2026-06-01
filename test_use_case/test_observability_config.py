@@ -114,6 +114,12 @@ def main() -> None:
     assert_contains(op_script, "ORPHAN_FC_EXPORTER_SCRIPT_SYNCED", "artifacts/deploy_orphan_fc_exporter_to_clients.sh")
     assert_contains(op_script, 'exec "$script_path" "$@"', "artifacts/deploy_orphan_fc_exporter_to_clients.sh")
     assert_contains(op_script, "e2b-hugepages-metrics.service.d/resource-limits.conf", "artifacts/deploy_orphan_fc_exporter_to_clients.sh")
+    assert_not_contains(op_script, "aws_cmd ssm send-command", "artifacts/deploy_orphan_fc_exporter_to_clients.sh")
+    assert_not_contains(op_script, "AWS-RunShellScript", "artifacts/deploy_orphan_fc_exporter_to_clients.sh")
+    assert_not_contains(op_script, "run_ssm_preflight", "artifacts/deploy_orphan_fc_exporter_to_clients.sh")
+    assert_contains(op_script, "setup_nomad_env", "artifacts/deploy_orphan_fc_exporter_to_clients.sh")
+    assert_contains(op_script, "rollout_current_clients_with_nomad", "artifacts/deploy_orphan_fc_exporter_to_clients.sh")
+    assert_contains(op_script, 'driver = "raw_exec"', "artifacts/deploy_orphan_fc_exporter_to_clients.sh")
     for directive in service_limits:
         assert_contains(op_script, directive, "artifacts/deploy_orphan_fc_exporter_to_clients.sh")
 
