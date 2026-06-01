@@ -39,6 +39,14 @@ receivers:
             - targets: ['127.0.0.1:9108']
               labels:
                 node_pool: default
+        - job_name: e2b-orphan-fc
+          scrape_interval: 15s
+          scrape_timeout: 5s
+          metrics_path: /metrics
+          static_configs:
+            - targets: ['127.0.0.1:9109']
+              labels:
+                node_pool: default
 
 processors:
   batch:
@@ -91,6 +99,32 @@ processors:
           - "e2b_host_numa_hugepages_total"
           - "e2b_host_numa_hugepages_free"
           - "e2b_host_numa_hugepages_surplus"
+          - "e2b_host_firecracker_processes"
+          - "e2b_host_firecracker_orchestrator_tracked_sandboxes"
+          - "e2b_host_firecracker_orphan_processes"
+          - "e2b_host_firecracker_orphan_oldest_age_seconds"
+          - "e2b_host_firecracker_oldest_age_seconds"
+          - "e2b_host_firecracker_ppid_1_processes"
+          - "e2b_host_firecracker_without_unshare_wrapper"
+          - "e2b_host_unshare_wrappers_total"
+          - "e2b_host_firecracker_orphan_d_state_processes"
+          - "e2b_host_firecracker_orphan_z_state_processes"
+          - "e2b_host_nbd_active_devices"
+          - "e2b_host_nbd_total_devices"
+          - "e2b_host_nbd_pid_devices"
+          - "e2b_host_nbd_nonzero_size_devices"
+          - "e2b_host_nbd_no_pid_nonzero_size_devices"
+          - "e2b_host_tmp_fc_sockets_total"
+          - "e2b_host_tmp_fc_sockets_without_fc"
+          - "e2b_host_netns_total"
+          - "e2b_host_tap_devices_total"
+          - "e2b_host_veth_devices_total"
+          - "e2b_host_unshare_wrappers_without_fc"
+          - "e2b_host_firecracker_d_state_processes"
+          - "e2b_host_firecracker_z_state_processes"
+          - "e2b_host_orphan_control_available"
+          - "e2b_host_orphan_audit_success"
+          - "e2b_host_orphan_audit_duration_seconds"
 
   resourcedetection:
     detectors: [ec2]

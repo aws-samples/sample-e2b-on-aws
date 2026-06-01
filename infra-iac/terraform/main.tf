@@ -38,11 +38,12 @@ locals {
   
   # Calculate file hashes for setup scripts to detect changes and force updates
   file_hash = {
-    "scripts/run-consul.sh"              = substr(filesha256("${path.module}/scripts/run-consul.sh"), 0, 5)
-    "scripts/run-nomad.sh"               = substr(filesha256("${path.module}/scripts/run-nomad.sh"), 0, 5)
-    "scripts/run-api-nomad.sh"           = substr(filesha256("${path.module}/scripts/run-api-nomad.sh"), 0, 5)
-    "scripts/run-build-cluster-nomad.sh" = substr(filesha256("${path.module}/scripts/run-build-cluster-nomad.sh"), 0, 5)
-    "scripts/setup-secrets.sh"           = substr(filesha256("${path.module}/scripts/setup-secrets.sh"), 0, 5)
+    "scripts/run-consul.sh"                 = substr(filesha256("${path.module}/scripts/run-consul.sh"), 0, 5)
+    "scripts/run-nomad.sh"                  = substr(filesha256("${path.module}/scripts/run-nomad.sh"), 0, 5)
+    "scripts/run-api-nomad.sh"              = substr(filesha256("${path.module}/scripts/run-api-nomad.sh"), 0, 5)
+    "scripts/run-build-cluster-nomad.sh"    = substr(filesha256("${path.module}/scripts/run-build-cluster-nomad.sh"), 0, 5)
+    "scripts/setup-secrets.sh"              = substr(filesha256("${path.module}/scripts/setup-secrets.sh"), 0, 5)
+    "scripts/install-orphan-fc-exporter.sh" = substr(filesha256("${path.module}/scripts/install-orphan-fc-exporter.sh"), 0, 5)
   }
 
   # Define common resource tags to be applied to all resources
@@ -669,11 +670,12 @@ resource "aws_iam_instance_profile" "ec2_instance_profile" {
 variable "setup_files" {
   type = map(string)
   default = {
-    "scripts/run-nomad.sh"               = "run-nomad",
-    "scripts/run-api-nomad.sh"           = "run-api-nomad",
-    "scripts/run-build-cluster-nomad.sh" = "run-build-cluster-nomad",
-    "scripts/run-consul.sh"              = "run-consul",
-    "scripts/setup-secrets.sh"           = "setup-secrets"
+    "scripts/run-nomad.sh"                  = "run-nomad",
+    "scripts/run-api-nomad.sh"              = "run-api-nomad",
+    "scripts/run-build-cluster-nomad.sh"    = "run-build-cluster-nomad",
+    "scripts/run-consul.sh"                 = "run-consul",
+    "scripts/setup-secrets.sh"              = "setup-secrets",
+    "scripts/install-orphan-fc-exporter.sh" = "install-orphan-fc-exporter"
   }
 }
 
@@ -987,6 +989,7 @@ resource "aws_launch_template" "client" {
     CONSUL_SECRET_NAME           = aws_secretsmanager_secret.consul_acl_token.name
     RUN_CONSUL_FILE_HASH         = local.file_hash["scripts/run-consul.sh"]
     RUN_NOMAD_FILE_HASH          = local.file_hash["scripts/run-nomad.sh"]
+    ORPHAN_FC_EXPORTER_FILE_HASH = local.file_hash["scripts/install-orphan-fc-exporter.sh"]
     CONSUL_GOSSIP_SECRET_NAME    = aws_secretsmanager_secret.consul_gossip_encryption_key.name
     CONSUL_DNS_SECRET_NAME       = aws_secretsmanager_secret.consul_dns_request_token.name
     NOMAD_TLS_CA_SECRET          = aws_secretsmanager_secret.nomad_tls_ca_cert.name

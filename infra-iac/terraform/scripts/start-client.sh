@@ -37,7 +37,7 @@ configure_apt_for_jfrog
   done
 
 sudo apt-get -o DPkg::Lock::Timeout=300 update
-sudo apt-get -o DPkg::Lock::Timeout=300 install -y amazon-ecr-credential-helper nvme-cli python3 rsync
+sudo apt-get -o DPkg::Lock::Timeout=300 install -y amazon-ecr-credential-helper curl nvme-cli python3 rsync
 
 exec > >(tee /var/log/user-data.log | logger -t user-data -s 2>/dev/console) 2>&1
 
@@ -593,12 +593,24 @@ cat >/etc/systemd/system/e2b-hugepages-metrics.service <<EOF
 [Unit]
 Description=E2B HugePages metrics exporter
 After=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=3
 
 [Service]
 Type=simple
 ExecStart=/usr/bin/python3 $hugepages_metrics_exporter --listen 127.0.0.1 --port $hugepages_metrics_port
 Restart=always
-RestartSec=5
+RestartSec=30
+CPUAccounting=true
+MemoryAccounting=true
+IOAccounting=true
+CPUQuota=20%
+MemoryMax=128M
+TasksMax=32
+Nice=10
+IOSchedulingClass=idle
+NoNewPrivileges=true
+ProtectHome=true
 
 [Install]
 WantedBy=multi-user.target
@@ -606,6 +618,13 @@ EOF
 systemctl daemon-reload
 systemctl enable --now e2b-hugepages-metrics.service
 echo "- HugePages metrics exporter listening on 127.0.0.1:$hugepages_metrics_port"
+
+echo "[Installing orphan Firecracker metrics exporter]"
+orphan_fc_exporter_installer=/opt/e2b/install-orphan-fc-exporter.sh
+aws s3 cp "s3://${SCRIPTS_BUCKET}/install-orphan-fc-exporter-${ORPHAN_FC_EXPORTER_FILE_HASH}.sh" "$orphan_fc_exporter_installer"
+chmod 0755 "$orphan_fc_exporter_installer"
+AWS_REGION="${AWS_REGION}" "$orphan_fc_exporter_installer"
+echo "- Orphan Firecracker metrics exporter listening on 127.0.0.1:9109"
 
 set +x
 get_secret() {

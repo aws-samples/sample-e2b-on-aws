@@ -71,8 +71,49 @@ def main() -> None:
     hugepages_job = hugepages_job_path.read_text()
     assert_contains(hugepages_job, 'node_pool   = "default"', "nomad/origin/otel-hugepages-collector.hcl")
     assert_contains(hugepages_job, "job_name: e2b-hugepages", "nomad/origin/otel-hugepages-collector.hcl")
+    assert_contains(hugepages_job, "job_name: e2b-orphan-fc", "nomad/origin/otel-hugepages-collector.hcl")
     assert_contains(hugepages_job, "node_pool: default", "nomad/origin/otel-hugepages-collector.hcl")
     assert_contains(hugepages_job, "e2b_host_hugepages_free", "nomad/origin/otel-hugepages-collector.hcl")
+    assert_contains(hugepages_job, "e2b_host_firecracker_orphan_processes", "nomad/origin/otel-hugepages-collector.hcl")
+    assert_contains(hugepages_job, "e2b_host_firecracker_ppid_1_processes", "nomad/origin/otel-hugepages-collector.hcl")
+    assert_contains(hugepages_job, "e2b_host_nbd_no_pid_nonzero_size_devices", "nomad/origin/otel-hugepages-collector.hcl")
+    assert_contains(hugepages_job, "e2b_host_orphan_audit_success", "nomad/origin/otel-hugepages-collector.hcl")
+
+    service_limits = [
+        "StartLimitIntervalSec=300",
+        "StartLimitBurst=3",
+        "RestartSec=30",
+        "CPUAccounting=true",
+        "MemoryAccounting=true",
+        "IOAccounting=true",
+        "CPUQuota=20%",
+        "MemoryMax=128M",
+        "TasksMax=32",
+        "Nice=10",
+        "IOSchedulingClass=idle",
+        "NoNewPrivileges=true",
+        "ProtectHome=true",
+    ]
+
+    start_client = read("infra-iac/terraform/scripts/start-client.sh")
+    assert_contains(start_client, "e2b-hugepages-metrics.service", "infra-iac/terraform/scripts/start-client.sh")
+    for directive in service_limits:
+        assert_contains(start_client, directive, "infra-iac/terraform/scripts/start-client.sh")
+
+    orphan_installer = read("infra-iac/terraform/scripts/install-orphan-fc-exporter.sh")
+    assert_contains(orphan_installer, "e2b-orphan-fc-exporter.service", "infra-iac/terraform/scripts/install-orphan-fc-exporter.sh")
+    for directive in service_limits:
+        assert_contains(orphan_installer, directive, "infra-iac/terraform/scripts/install-orphan-fc-exporter.sh")
+
+    op_script = read("artifacts/deploy_orphan_fc_exporter_to_clients.sh")
+    assert_contains(op_script, 'DEPLOY_BRANCH="0303"', "artifacts/deploy_orphan_fc_exporter_to_clients.sh")
+    assert_contains(op_script, "git fetch origin", "artifacts/deploy_orphan_fc_exporter_to_clients.sh")
+    assert_contains(op_script, "git pull --ff-only origin", "artifacts/deploy_orphan_fc_exporter_to_clients.sh")
+    assert_contains(op_script, "ORPHAN_FC_EXPORTER_SCRIPT_SYNCED", "artifacts/deploy_orphan_fc_exporter_to_clients.sh")
+    assert_contains(op_script, 'exec "$script_path" "$@"', "artifacts/deploy_orphan_fc_exporter_to_clients.sh")
+    assert_contains(op_script, "e2b-hugepages-metrics.service.d/resource-limits.conf", "artifacts/deploy_orphan_fc_exporter_to_clients.sh")
+    for directive in service_limits:
+        assert_contains(op_script, directive, "artifacts/deploy_orphan_fc_exporter_to_clients.sh")
 
     event_job_path = ROOT / "nomad/origin/nomad-event-collector.hcl"
     if not event_job_path.exists():
