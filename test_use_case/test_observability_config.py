@@ -109,6 +109,8 @@ def main() -> None:
     assert_contains(op_script, 'DEPLOY_BRANCH="0303"', "artifacts/deploy_orphan_fc_exporter_to_clients.sh")
     assert_contains(op_script, "git fetch origin", "artifacts/deploy_orphan_fc_exporter_to_clients.sh")
     assert_contains(op_script, "git pull --ff-only origin", "artifacts/deploy_orphan_fc_exporter_to_clients.sh")
+    assert_contains(op_script, "git clone --branch", "artifacts/deploy_orphan_fc_exporter_to_clients.sh")
+    assert_contains(op_script, "sample-e2b-on-aws.git", "artifacts/deploy_orphan_fc_exporter_to_clients.sh")
     assert_contains(op_script, "ORPHAN_FC_EXPORTER_SCRIPT_SYNCED", "artifacts/deploy_orphan_fc_exporter_to_clients.sh")
     assert_contains(op_script, 'exec "$script_path" "$@"', "artifacts/deploy_orphan_fc_exporter_to_clients.sh")
     assert_contains(op_script, "e2b-hugepages-metrics.service.d/resource-limits.conf", "artifacts/deploy_orphan_fc_exporter_to_clients.sh")

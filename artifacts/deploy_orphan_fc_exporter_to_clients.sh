@@ -5,6 +5,7 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 STACK_NAME="${STACK_NAME:-}"
 AWS_REGION_OPT="${AWS_REGION:-}"
 DEPLOY_BRANCH="0303"
+GIT_REMOTE_URL="https://github.com/aws-samples/sample-e2b-on-aws.git"
 SYNC_ENV_VAR="ORPHAN_FC_EXPORTER_SCRIPT_SYNCED"
 INSTALLER_PATH="$REPO_DIR/infra-iac/terraform/scripts/install-orphan-fc-exporter.sh"
 CLIENT_ASG=""
@@ -74,19 +75,29 @@ sync_repo_once() {
   fi
 
   command -v git >/dev/null 2>&1 || die "git is required for syncing $REPO_DIR"
-  [[ -d "$REPO_DIR/.git" ]] || die "$REPO_DIR is not a git checkout"
 
   local before after script_path
   script_path="$REPO_DIR/artifacts/deploy_orphan_fc_exporter_to_clients.sh"
-  before="$(cd "$REPO_DIR" && git rev-parse HEAD)"
+  before="not-a-git-checkout"
 
-  log "syncing $REPO_DIR from origin/$DEPLOY_BRANCH"
-  (
-    cd "$REPO_DIR"
-    git fetch origin "$DEPLOY_BRANCH"
-    git checkout "$DEPLOY_BRANCH"
-    git pull --ff-only origin "$DEPLOY_BRANCH"
-  )
+  if [[ -d "$REPO_DIR/.git" ]]; then
+    before="$(cd "$REPO_DIR" && git rev-parse HEAD)"
+
+    log "syncing $REPO_DIR from origin/$DEPLOY_BRANCH"
+    (
+      cd "$REPO_DIR"
+      git fetch origin "$DEPLOY_BRANCH"
+      git checkout "$DEPLOY_BRANCH"
+      git pull --ff-only origin "$DEPLOY_BRANCH"
+    )
+  else
+    local backup_dir
+    backup_dir="${REPO_DIR}.bak.$(date -u +%Y%m%d%H%M%S)"
+    log "$REPO_DIR is not a git checkout; backing it up to $backup_dir"
+    [[ -e "$backup_dir" ]] && die "backup path already exists: $backup_dir"
+    mv "$REPO_DIR" "$backup_dir"
+    git clone --branch "$DEPLOY_BRANCH" --single-branch "$GIT_REMOTE_URL" "$REPO_DIR"
+  fi
 
   after="$(cd "$REPO_DIR" && git rev-parse HEAD)"
   echo "repo_commit_before=$before"
