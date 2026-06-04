@@ -37,6 +37,7 @@ func NewMeterExporter(ctx context.Context, extraOption ...otlpmetricgrpc.Option)
 	opts := []otlpmetricgrpc.Option{
 		otlpmetricgrpc.WithInsecure(),
 		otlpmetricgrpc.WithEndpoint(otelCollectorGRPCEndpoint),
+		otlpmetricgrpc.WithTemporalitySelector(defaultMetricTemporalitySelector),
 	}
 	opts = append(opts, extraOption...)
 
@@ -49,6 +50,15 @@ func NewMeterExporter(ctx context.Context, extraOption ...otlpmetricgrpc.Option)
 	}
 
 	return metricExporter, nil
+}
+
+func defaultMetricTemporalitySelector(kind sdkmetric.InstrumentKind) metricdata.Temporality {
+	switch kind {
+	case sdkmetric.InstrumentKindCounter, sdkmetric.InstrumentKindHistogram, sdkmetric.InstrumentKindObservableCounter:
+		return metricdata.DeltaTemporality
+	default:
+		return metricdata.CumulativeTemporality
+	}
 }
 
 func NewMeterProvider(ctx context.Context, metricsExporter sdkmetric.Exporter, metricExportPeriod time.Duration, serviceName, commitSHA, clientID string, extraOption ...sdkmetric.Option) (metric.MeterProvider, error) {
