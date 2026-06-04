@@ -16,13 +16,13 @@ GRPCURL_VERSION="1.9.3"
 GRPCURL_URL="https://github.com/fullstorydev/grpcurl/releases/download/v${GRPCURL_VERSION}/grpcurl_${GRPCURL_VERSION}_linux_x86_64.tar.gz"
 GRPCURL_SHA256=""
 EXPORTER_PORT="9109"
+MAX_CONCURRENCY="25%"
+MAX_ERRORS="0"
+TIMEOUT_SECONDS="300"
 TERRAFORM_DIR="$REPO_DIR/infra-iac/terraform"
 TERRAFORM_CONFIG_FILE="/opt/config.properties"
 TERRAFORM_PLAN_FILE="tfplan-orphan-fc-exporter"
 NOMAD_WAIT_TIMEOUT="480"
-ROLLOUT_JOB="e2b-orphan-fc-exporter-rollout-$(date -u +%Y%m%d%H%M%S)"
-ROLLOUT_HCL=""
-ROLLOUT_SUBMITTED=0
 
 usage() {
   cat <<'EOF'
@@ -33,9 +33,9 @@ What it does:
   1. Runs a targeted Terraform apply so future client nodes install the exporter
      during boot.
   2. Uploads infra-iac/terraform/scripts/install-orphan-fc-exporter.sh to the
-     cluster software bucket for the current-node rollout.
-  3. Uses a temporary Nomad raw_exec system job to install/restart
-     e2b-orphan-fc-exporter on current default/client nodes.
+     cluster software bucket for the SSM rollout command.
+  3. Uses AWS SSM RunShellScript to install/restart e2b-orphan-fc-exporter on
+     all current instances in <stack>-client-asg.
   4. Verifies http://127.0.0.1:9109/metrics on every targeted node.
   5. Patches and redeploys the otel-hugepages-collector Nomad job so the new
      orphan Firecracker metrics are scraped by the observability pipeline.
@@ -43,7 +43,7 @@ What it does:
 Notes:
   - Run this on the deployment/bastion host for the target cluster.
   - The script reads CFNSTACKNAME and AWSREGION from /opt/config.properties.
-  - AWS/Nomad CLI credentials come from the host environment or instance role.
+  - AWS CLI credentials come from the host environment or instance role.
   - The script is idempotent and safe to rerun.
   - Future client nodes are covered after the Terraform/start-client.sh change
     in this repo is applied, because new nodes download the same installer from
@@ -59,27 +59,6 @@ die() {
 log() {
   printf '[%s] %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"
 }
-
-need_cmd() {
-  command -v "$1" >/dev/null 2>&1 || die "$1 is required"
-}
-
-nomad_cmd() {
-  # shellcheck disable=SC2086
-  nomad ${NOMAD_CLI_EXTRA:-} "$@"
-}
-
-cleanup_on_exit() {
-  if [[ "$ROLLOUT_SUBMITTED" == "1" ]]; then
-    nomad_cmd job stop -purge -yes "$ROLLOUT_JOB" >/dev/null 2>&1 || true
-  fi
-
-  if [[ -n "$ROLLOUT_HCL" && -f "$ROLLOUT_HCL" ]]; then
-    rm -f "$ROLLOUT_HCL"
-  fi
-}
-
-trap cleanup_on_exit EXIT
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -214,6 +193,101 @@ list_server_instances() {
     --output text
 }
 
+wait_for_command() {
+  local command_id="$1"
+  while true; do
+    local summary status target completed error
+    summary="$(aws_cmd ssm list-commands --command-id "$command_id" --output json)"
+    status="$(jq -r '.Commands[0].Status' <<<"$summary")"
+    target="$(jq -r '.Commands[0].TargetCount' <<<"$summary")"
+    completed="$(jq -r '.Commands[0].CompletedCount' <<<"$summary")"
+    error="$(jq -r '.Commands[0].ErrorCount' <<<"$summary")"
+    log "SSM command status=$status completed=$completed/$target errors=$error"
+
+    case "$status" in
+      Success|Cancelled|Failed|TimedOut|Cancelling|Incomplete)
+        break ;;
+    esac
+    sleep 5
+  done
+}
+
+print_invocations() {
+  local command_id="$1"
+  local invocations
+  invocations="$(aws_cmd ssm list-command-invocations --command-id "$command_id" --details --output json)"
+
+  echo
+  echo "== Invocation summary =="
+  jq -r '
+    .CommandInvocations[]
+    | [.InstanceId, .Status, ((.CommandPlugins[0].ResponseCode // "")|tostring)]
+    | @tsv
+  ' <<<"$invocations" | {
+    if command -v column >/dev/null 2>&1; then
+      column -t
+    else
+      cat
+    fi
+  }
+
+  echo
+  echo "== Verification output =="
+  jq -r '
+    .CommandInvocations[]
+    | "---- instance=\(.InstanceId) status=\(.Status) ----\n"
+      + ((.CommandPlugins[0].Output // "") | split("\n") | .[-30:] | join("\n"))
+  ' <<<"$invocations"
+}
+
+send_ssm_preflight() {
+  local scope="$1"
+  shift
+
+  local params output command_id final_status
+  params="$(jq -n '{commands: ["echo e2b-orphan-fc-ssm-preflight-ok"]}')"
+
+  log "checking SSM RunShellScript permission for $scope"
+  if ! output="$(aws_cmd ssm send-command \
+    --document-name AWS-RunShellScript \
+    "$@" \
+    --comment "E2B orphan Firecracker exporter SSM preflight" \
+    --parameters "$params" \
+    --timeout-seconds 60 \
+    --max-concurrency "1" \
+    --max-errors "0" \
+    --query 'Command.CommandId' \
+    --output text 2>&1)"; then
+    die "SSM RunShellScript preflight failed for $scope: $output"
+  fi
+
+  command_id="$output"
+  echo "ssm_preflight_command_id=$command_id scope=$scope"
+  wait_for_command "$command_id"
+
+  final_status="$(aws_cmd ssm list-commands --command-id "$command_id" --query 'Commands[0].Status' --output text)"
+  if [[ "$final_status" != "Success" ]]; then
+    print_invocations "$command_id"
+    die "SSM RunShellScript preflight for $scope ended with status $final_status"
+  fi
+}
+
+run_ssm_preflight() {
+  local server_instances server_instance
+
+  send_ssm_preflight \
+    "client ASG $CLIENT_ASG" \
+    --targets "Key=tag:aws:autoscaling:groupName,Values=${CLIENT_ASG}"
+
+  server_instances="$(list_server_instances)"
+  [[ -n "$server_instances" ]] || die "no instances found in ASG $SERVER_ASG"
+  server_instance="$(awk '{print $1}' <<<"$server_instances")"
+
+  send_ssm_preflight \
+    "server instance $server_instance" \
+    --instance-ids "$server_instance"
+}
+
 resolve_terraform_vars() {
   local environment custom_ami_id
   environment="${TERRAFORM_ENVIRONMENT:-}"
@@ -260,296 +334,53 @@ run_terraform_apply() {
   (cd "$TERRAFORM_DIR" && terraform apply "$TERRAFORM_PLAN_FILE")
 }
 
-setup_nomad_env() {
-  need_cmd nomad
-  need_cmd python3
+redeploy_otel_hugepages_collector() {
+  [[ -n "$STACK_NAME" ]] || die "--stack-name is required for SSM-based collector redeploy"
+  resolve_server_asg
 
-  if [[ -n "${NOMAD_ADDR:-}" ]]; then
-    log "using existing NOMAD_ADDR=$NOMAD_ADDR"
-    nomad_cmd node status -json >/dev/null
-    return
-  fi
+  local server_instances server_instance remote_command params command_id final_status
+  server_instances="$(list_server_instances)"
+  [[ -n "$server_instances" ]] || die "no instances found in ASG $SERVER_ASG"
+  server_instance="$(awk '{print $1}' <<<"$server_instances")"
 
-  if [[ -f "$REPO_DIR/nomad/nomad.sh" ]]; then
-    log "loading Nomad CLI environment from $REPO_DIR/nomad/nomad.sh"
-    if bash "$REPO_DIR/nomad/nomad.sh" >/tmp/e2b-nomad-setup.log 2>&1 && [[ -f /tmp/nomad_env.sh ]]; then
-      # shellcheck source=/dev/null
-      source /tmp/nomad_env.sh
-    else
-      log "nomad/nomad.sh did not produce a usable environment; trying direct fallback"
-      tail -50 /tmp/e2b-nomad-setup.log || true
-    fi
-  fi
-
-  if [[ -z "${NOMAD_ADDR:-}" || -z "${NOMAD_TOKEN:-}" ]]; then
-    local server_instances server_instance server_ip infra_tokens_secret infra_tokens
-    local ca_secret cert_secret key_secret
-
-    server_instances="$(list_server_instances)"
-    [[ -n "$server_instances" ]] || die "no instances found in ASG $SERVER_ASG"
-    server_instance="$(awk '{print $1}' <<<"$server_instances")"
-    server_ip="$(aws_cmd ec2 describe-instances \
-      --instance-ids "$server_instance" \
-      --query 'Reservations[0].Instances[0].PrivateIpAddress' \
-      --output text)"
-    [[ -n "$server_ip" && "$server_ip" != "None" ]] || die "could not resolve private IP for server instance $server_instance"
-
-    infra_tokens_secret="$(config_value infra_tokens_secret_name)"
-    [[ -n "$infra_tokens_secret" ]] || infra_tokens_secret="${STACK_NAME}-infra-tokens"
-    infra_tokens="$(aws_cmd secretsmanager get-secret-value \
-      --secret-id "$infra_tokens_secret" \
-      --query SecretString \
-      --output text)"
-
-    export NOMAD_ADDR="https://${server_ip}:4646"
-    export NOMAD_TLS_SERVER_NAME="server.${AWS_REGION_OPT}.nomad"
-    export NOMAD_TOKEN
-    export CONSUL_HTTP_TOKEN
-    NOMAD_TOKEN="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nomad_acl_token"])' <<<"$infra_tokens")"
-    CONSUL_HTTP_TOKEN="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["consul_http_token"])' <<<"$infra_tokens")"
-
-    ca_secret="$(config_value NOMAD_TLS_CA_SECRET)"
-    cert_secret="$(config_value NOMAD_TLS_CERT_SECRET)"
-    key_secret="$(config_value NOMAD_TLS_KEY_SECRET)"
-    [[ -n "$ca_secret" ]] || ca_secret="${STACK_NAME}-nomad-tls-ca-cert"
-    [[ -n "$cert_secret" ]] || cert_secret="${STACK_NAME}-nomad-tls-client-cert"
-    [[ -n "$key_secret" ]] || key_secret="${STACK_NAME}-nomad-tls-client-key"
-
-    mkdir -p /opt/nomad/tls
-    aws_cmd secretsmanager get-secret-value --secret-id "$ca_secret" --query SecretString --output text > /opt/nomad/tls/ca.pem
-    aws_cmd secretsmanager get-secret-value --secret-id "$cert_secret" --query SecretString --output text > /opt/nomad/tls/cert.pem
-    aws_cmd secretsmanager get-secret-value --secret-id "$key_secret" --query SecretString --output text > /opt/nomad/tls/key.pem
-    chmod 600 /opt/nomad/tls/*.pem
-
-    export NOMAD_CACERT="/opt/nomad/tls/ca.pem"
-    export NOMAD_CLIENT_CERT="/opt/nomad/tls/cert.pem"
-    export NOMAD_CLIENT_KEY="/opt/nomad/tls/key.pem"
-  fi
-
-  log "checking Nomad CLI access at $NOMAD_ADDR"
-  nomad_cmd node status -json >/dev/null
-}
-
-ready_node_count_for_pool() {
-  local node_pool="$1"
-  local node_json
-  node_json="$(mktemp /tmp/e2b-nomad-nodes.XXXXXX.json)"
-  nomad_cmd node status -json > "$node_json"
-
-  python3 - "$node_json" "$node_pool" <<'PY'
-import json
-import sys
-
-with open(sys.argv[1], encoding="utf-8") as fh:
-    nodes = json.load(fh)
-node_pool = sys.argv[2]
-
-count = 0
-for node in nodes:
-    if node.get("Status") != "ready":
-        continue
-    if node.get("SchedulingEligibility") != "eligible":
-        continue
-    if (node.get("NodePool") or "default") != node_pool:
-        continue
-    count += 1
-print(count)
-PY
-  rm -f "$node_json"
-}
-
-datacenters_for_pool_hcl() {
-  local node_pool="$1"
-  local node_json
-  node_json="$(mktemp /tmp/e2b-nomad-nodes.XXXXXX.json)"
-  nomad_cmd node status -json > "$node_json"
-
-  python3 - "$node_json" "$node_pool" <<'PY'
-import json
-import sys
-
-with open(sys.argv[1], encoding="utf-8") as fh:
-    nodes = json.load(fh)
-node_pool = sys.argv[2]
-
-dcs = []
-for node in nodes:
-    if node.get("Status") != "ready":
-        continue
-    if node.get("SchedulingEligibility") != "eligible":
-        continue
-    if (node.get("NodePool") or "default") != node_pool:
-        continue
-    dc = node.get("Datacenter")
-    if dc and dc not in dcs:
-        dcs.append(dc)
-
-if not dcs:
-    raise SystemExit(f"no ready eligible nodes found for node pool {node_pool}")
-
-print(", ".join(json.dumps(dc) for dc in dcs))
-PY
-  rm -f "$node_json"
-}
-
-running_allocs_for_group() {
-  local job="$1"
-  local group="$2"
-  nomad_cmd job status "$job" \
-    | awk -v group="$group" '$3 == group && $5 == "run" && $6 == "running" {print $1}'
-}
-
-print_rollout_debug() {
-  local alloc
-  nomad_cmd job status "$ROLLOUT_JOB" || true
-  while IFS= read -r alloc; do
-    [[ -z "$alloc" ]] && continue
-    echo
-    echo "== alloc $alloc status =="
-    nomad_cmd alloc status "$alloc" || true
-    echo
-    echo "== alloc $alloc logs =="
-    nomad_cmd alloc logs "$alloc" install | tail -120 || true
-    nomad_cmd alloc logs -stderr "$alloc" install | tail -120 || true
-  done < <(running_allocs_for_group "$ROLLOUT_JOB" install || true)
-}
-
-wait_rollout_job() {
-  local expected="$1"
-  local start now allocs alloc running success
-  start="$(date +%s)"
-
-  while true; do
-    allocs="$(running_allocs_for_group "$ROLLOUT_JOB" install || true)"
-    running="$(wc -l <<<"$allocs" | tr -d ' ')"
-    if [[ -z "$allocs" ]]; then
-      running=0
-    fi
-
-    success=0
-    while IFS= read -r alloc; do
-      [[ -z "$alloc" ]] && continue
-      if nomad_cmd alloc logs "$alloc" install 2>/dev/null | grep -q "orphan_fc_rollout_success"; then
-        success=$((success + 1))
-      fi
-    done <<<"$allocs"
-
-    log "$ROLLOUT_JOB/install running=$running success=$success expected=$expected"
-    if (( success >= expected )); then
-      return
-    fi
-
-    now="$(date +%s)"
-    if (( now - start > NOMAD_WAIT_TIMEOUT )); then
-      print_rollout_debug
-      die "timed out waiting for $ROLLOUT_JOB to install exporters on current client nodes"
-    fi
-    sleep 10
-  done
-}
-
-rollout_current_clients_with_nomad() {
-  local s3_uri="$1"
-  local expected_nodes dc_hcl
-
-  setup_nomad_env
-
-  expected_nodes="$(ready_node_count_for_pool default)"
-  [[ "$expected_nodes" =~ ^[0-9]+$ ]] || die "cannot resolve ready default node count: $expected_nodes"
-  (( expected_nodes > 0 )) || die "no ready eligible default nodes found for current client rollout"
-  dc_hcl="$(datacenters_for_pool_hcl default)"
-
-  ROLLOUT_HCL="$(mktemp "/tmp/${ROLLOUT_JOB}.XXXXXX.hcl")"
-  cat > "$ROLLOUT_HCL" <<EOF
-job "$ROLLOUT_JOB" {
-  type        = "system"
-  datacenters = [$dc_hcl]
-  node_pool   = "default"
-  priority    = 100
-
-  group "install" {
-    restart {
-      attempts = 0
-      mode     = "fail"
-    }
-
-    task "install" {
-      driver = "raw_exec"
-
-      config {
-        command = "/bin/bash"
-        args = ["-lc", <<SCRIPT
+  log "redeploying otel-hugepages-collector through server instance $server_instance"
+  remote_command="$(cat <<EOF
+STACK_NAME="$STACK_NAME" AWS_REGION_OPT="$AWS_REGION_OPT" NOMAD_WAIT_TIMEOUT="$NOMAD_WAIT_TIMEOUT" /bin/bash <<'REMOTE'
 set -euo pipefail
-tmp=/tmp/e2b-install-orphan-fc-exporter.sh
-aws s3 cp "$s3_uri" "\$tmp" --region "$AWS_REGION_OPT"
-chmod 0755 "\$tmp"
-export AWS_REGION="$AWS_REGION_OPT"
-export GRPCURL_URL="$GRPCURL_URL"
-export GRPCURL_SHA256="$GRPCURL_SHA256"
-export ORPHAN_FC_EXPORTER_PORT="$EXPORTER_PORT"
-/bin/bash "\$tmp"
-mkdir -p /etc/systemd/system/e2b-hugepages-metrics.service.d
-cat >/etc/systemd/system/e2b-hugepages-metrics.service.d/resource-limits.conf <<'UNIT'
-[Unit]
-StartLimitIntervalSec=300
-StartLimitBurst=3
 
-[Service]
-RestartSec=30
-CPUAccounting=true
-MemoryAccounting=true
-IOAccounting=true
-CPUQuota=20%
-MemoryMax=128M
-TasksMax=32
-Nice=10
-IOSchedulingClass=idle
-NoNewPrivileges=true
-ProtectHome=true
-UNIT
-systemctl daemon-reload
-systemctl restart e2b-hugepages-metrics.service
-systemctl is-active e2b-orphan-fc-exporter.service
-systemctl is-active e2b-hugepages-metrics.service
-curl -fsS --max-time 5 "http://127.0.0.1:${EXPORTER_PORT}/metrics" | grep -E '^(e2b_host_orphan_audit_success|e2b_host_firecracker_orphan_processes|e2b_host_firecracker_ppid_1_processes|e2b_host_nbd_active_devices|e2b_host_nbd_no_pid_nonzero_size_devices|e2b_host_netns_total) '
-curl -fsS --max-time 5 "http://127.0.0.1:9108/metrics" | grep -E '^(e2b_host_hugepages_free|e2b_host_hugepages_total|e2b_host_hugepages_free_sandbox_slots) '
-systemctl show e2b-orphan-fc-exporter.service e2b-hugepages-metrics.service -p CPUQuotaPerSecUSec -p MemoryMax -p TasksMax -p Nice -p IOSchedulingClass -p NoNewPrivileges -p ProtectHome
-echo "orphan_fc_rollout_success node=\$(hostname)"
-sleep 120
-SCRIPT
-        ]
-      }
-
-      resources {
-        cpu    = 100
-        memory = 128
-      }
-    }
+require() {
+  command -v "\$1" >/dev/null 2>&1 || {
+    echo "missing command: \$1" >&2
+    exit 1
   }
 }
-EOF
 
-  log "running temporary Nomad rollout job $ROLLOUT_JOB for $expected_nodes default nodes"
-  nomad_cmd job run -detach "$ROLLOUT_HCL"
-  ROLLOUT_SUBMITTED=1
-  wait_rollout_job "$expected_nodes"
-  print_rollout_debug
-  nomad_cmd job stop -purge -yes "$ROLLOUT_JOB" || true
-  ROLLOUT_SUBMITTED=0
-  rm -f "$ROLLOUT_HCL"
-  ROLLOUT_HCL=""
-}
+require aws
+require nomad
+require python3
 
-redeploy_otel_hugepages_collector() {
-  setup_nomad_env
+infra_tokens="\$(aws secretsmanager get-secret-value \
+  --secret-id "\${STACK_NAME}-infra-tokens" \
+  --region "\${AWS_REGION_OPT}" \
+  --query SecretString \
+  --output text)"
+token="\$(python3 -c 'import json,sys; print(json.load(sys.stdin)["nomad_acl_token"])' <<<"\$infra_tokens")"
+consul_token="\$(python3 -c 'import json,sys; print(json.load(sys.stdin)["consul_http_token"])' <<<"\$infra_tokens")"
 
-  local workdir expected running start now plan_rc
-  workdir="$(mktemp -d /tmp/e2b-otel-hugepages.XXXXXX)"
+export NOMAD_ADDR="https://127.0.0.1:4646"
+export NOMAD_CACERT="/opt/nomad/tls/ca.pem"
+export NOMAD_CLIENT_CERT="/opt/nomad/tls/cert.pem"
+export NOMAD_CLIENT_KEY="/opt/nomad/tls/key.pem"
+export NOMAD_TLS_SERVER_NAME="server.\${AWS_REGION_OPT}.nomad"
+export NOMAD_TOKEN="\$token"
+export CONSUL_HTTP_TOKEN="\$consul_token"
 
-  log "patching live otel-hugepages-collector Nomad job"
-  nomad_cmd job inspect -json otel-hugepages-collector > "$workdir/current.json"
+workdir="\$(mktemp -d /tmp/e2b-otel-hugepages.XXXXXX)"
+trap 'rm -rf "\$workdir"' EXIT
 
-  python3 - "$workdir/current.json" "$workdir/patched.json" <<'PY'
+nomad job inspect -json otel-hugepages-collector > "\$workdir/current.json"
+
+python3 - "\$workdir/current.json" "\$workdir/patched.json" <<'PY'
 import json
 import sys
 
@@ -640,43 +471,68 @@ print("patched_current_job=true")
 print(f"changed={str(changed).lower()}")
 PY
 
-  grep -q 'e2b-orphan-fc' "$workdir/patched.json"
-  grep -q 'e2b_host_firecracker_orphan_processes' "$workdir/patched.json"
+grep -q 'e2b-orphan-fc' "\$workdir/patched.json"
+grep -q 'e2b_host_firecracker_orphan_processes' "\$workdir/patched.json"
 
-  set +e
-  nomad_cmd job plan -json "$workdir/patched.json" > "$workdir/plan.out" 2>&1
-  plan_rc=$?
-  set -e
-  if (( plan_rc > 1 )); then
-    tail -80 "$workdir/plan.out" >&2 || true
-    die "nomad job plan failed with exit code $plan_rc"
+set +e
+nomad job plan -json "\$workdir/patched.json" > "\$workdir/plan.out" 2>&1
+plan_rc=\$?
+set -e
+if (( plan_rc > 1 )); then
+  tail -80 "\$workdir/plan.out" >&2 || true
+  echo "nomad job plan failed with exit code \$plan_rc" >&2
+  exit "\$plan_rc"
+fi
+echo "nomad_plan_exit=\$plan_rc"
+
+nomad job run -json "\$workdir/patched.json"
+
+expected="\$(nomad node status -json | python3 -c 'import json,sys; nodes=json.load(sys.stdin); print(sum(1 for n in nodes if n.get("Status")=="ready" and n.get("SchedulingEligibility")=="eligible" and (n.get("NodePool") or "default")=="default"))')"
+if [[ ! "\$expected" =~ ^[0-9]+$ ]] || (( expected <= 0 )); then
+  echo "cannot resolve ready default node count: \$expected" >&2
+  exit 1
+fi
+
+start="\$(date +%s)"
+while true; do
+  running="\$(nomad job status otel-hugepages-collector | awk '\$3 == "otel-hugepages-collector" && \$5 == "run" && \$6 == "running" {count++} END {print count + 0}')"
+  echo "otel-hugepages-collector/otel-hugepages-collector running=\$running expected>=\$expected"
+  if (( running >= expected )); then
+    break
   fi
-  echo "nomad_plan_exit=$plan_rc"
 
-  nomad_cmd job run -json "$workdir/patched.json"
+  now="\$(date +%s)"
+  if (( now - start > NOMAD_WAIT_TIMEOUT )); then
+    nomad job status otel-hugepages-collector || true
+    echo "timed out waiting for otel-hugepages-collector" >&2
+    exit 1
+  fi
+  sleep 10
+done
 
-  expected="$(ready_node_count_for_pool default)"
-  [[ "$expected" =~ ^[0-9]+$ ]] || die "cannot resolve ready default node count: $expected"
-  (( expected > 0 )) || die "no ready eligible default nodes found for otel-hugepages-collector"
+nomad job status otel-hugepages-collector | sed -n '1,35p'
+REMOTE
+EOF
+)"
+  params="$(jq -n --arg cmd "$remote_command" '{commands: [$cmd]}')"
 
-  start="$(date +%s)"
-  while true; do
-    running="$(nomad_cmd job status otel-hugepages-collector | awk '$3 == "otel-hugepages-collector" && $5 == "run" && $6 == "running" {count++} END {print count + 0}')"
-    echo "otel-hugepages-collector/otel-hugepages-collector running=$running expected>=$expected"
-    if (( running >= expected )); then
-      break
-    fi
+  command_id="$(aws_cmd ssm send-command \
+    --document-name AWS-RunShellScript \
+    --instance-ids "$server_instance" \
+    --comment "Redeploy E2B otel-hugepages-collector with orphan FC metrics" \
+    --parameters "$params" \
+    --timeout-seconds "$NOMAD_WAIT_TIMEOUT" \
+    --max-concurrency "1" \
+    --max-errors "0" \
+    --query 'Command.CommandId' \
+    --output text)"
 
-    now="$(date +%s)"
-    if (( now - start > NOMAD_WAIT_TIMEOUT )); then
-      nomad_cmd job status otel-hugepages-collector || true
-      die "timed out waiting for otel-hugepages-collector"
-    fi
-    sleep 10
-  done
+  echo "otel_redeploy_command_id=$command_id"
+  wait_for_command "$command_id"
+  print_invocations "$command_id"
 
-  nomad_cmd job status otel-hugepages-collector | sed -n '1,35p'
-  rm -rf "$workdir"
+  final_status="$(aws_cmd ssm list-commands --command-id "$command_id" --query 'Commands[0].Status' --output text)"
+  [[ "$final_status" == "Success" ]] || die "otel-hugepages-collector redeploy ended with status $final_status"
 }
 
 main() {
@@ -703,16 +559,77 @@ main() {
   echo "terraform_dir=$TERRAFORM_DIR"
   echo "terraform_config_file=$TERRAFORM_CONFIG_FILE"
   echo "server_asg=${SERVER_ASG:-${STACK_NAME}-server-asg}"
-  echo "current_node_rollout=nomad_raw_exec_system_job"
-  echo "rollout_job=$ROLLOUT_JOB"
   echo "instances=$(tr '\t' ' ' <<<"$instances")"
 
+  run_ssm_preflight
   run_terraform_apply
 
   log "uploading installer to $s3_uri"
   aws_cmd s3 cp "$INSTALLER_PATH" "$s3_uri"
 
-  rollout_current_clients_with_nomad "$s3_uri"
+  local remote_command params command_id
+  remote_command="$(cat <<EOF
+/bin/bash <<'REMOTE'
+set -euo pipefail
+tmp=/tmp/e2b-install-orphan-fc-exporter.sh
+aws s3 cp "$s3_uri" "\$tmp" --region "$AWS_REGION_OPT"
+chmod 0755 "\$tmp"
+export AWS_REGION="$AWS_REGION_OPT"
+export GRPCURL_URL="$GRPCURL_URL"
+export GRPCURL_SHA256="$GRPCURL_SHA256"
+export ORPHAN_FC_EXPORTER_PORT="$EXPORTER_PORT"
+/bin/bash "\$tmp"
+mkdir -p /etc/systemd/system/e2b-hugepages-metrics.service.d
+cat >/etc/systemd/system/e2b-hugepages-metrics.service.d/resource-limits.conf <<'UNIT'
+[Unit]
+StartLimitIntervalSec=300
+StartLimitBurst=3
+
+[Service]
+RestartSec=30
+CPUAccounting=true
+MemoryAccounting=true
+IOAccounting=true
+CPUQuota=20%
+MemoryMax=128M
+TasksMax=32
+Nice=10
+IOSchedulingClass=idle
+NoNewPrivileges=true
+ProtectHome=true
+UNIT
+systemctl daemon-reload
+systemctl restart e2b-hugepages-metrics.service
+systemctl is-active e2b-orphan-fc-exporter.service
+systemctl is-active e2b-hugepages-metrics.service
+curl -fsS --max-time 5 "http://127.0.0.1:${EXPORTER_PORT}/metrics" | grep -E '^(e2b_host_orphan_audit_success|e2b_host_firecracker_orphan_processes|e2b_host_firecracker_ppid_1_processes|e2b_host_nbd_active_devices|e2b_host_nbd_no_pid_nonzero_size_devices|e2b_host_netns_total) '
+curl -fsS --max-time 5 "http://127.0.0.1:9108/metrics" | grep -E '^(e2b_host_hugepages_free|e2b_host_hugepages_total|e2b_host_hugepages_free_sandbox_slots) '
+systemctl show e2b-orphan-fc-exporter.service e2b-hugepages-metrics.service -p CPUQuotaPerSecUSec -p MemoryMax -p TasksMax -p Nice -p IOSchedulingClass -p NoNewPrivileges -p ProtectHome
+REMOTE
+EOF
+)"
+  params="$(jq -n --arg cmd "$remote_command" '{commands: [$cmd]}')"
+
+  log "sending SSM command to ASG tag aws:autoscaling:groupName=$CLIENT_ASG"
+  command_id="$(aws_cmd ssm send-command \
+    --document-name AWS-RunShellScript \
+    --targets "Key=tag:aws:autoscaling:groupName,Values=${CLIENT_ASG}" \
+    --comment "Install E2B orphan Firecracker exporter" \
+    --parameters "$params" \
+    --timeout-seconds "$TIMEOUT_SECONDS" \
+    --max-concurrency "$MAX_CONCURRENCY" \
+    --max-errors "$MAX_ERRORS" \
+    --query 'Command.CommandId' \
+    --output text)"
+
+  echo "command_id=$command_id"
+  wait_for_command "$command_id"
+  print_invocations "$command_id"
+
+  local final_status
+  final_status="$(aws_cmd ssm list-commands --command-id "$command_id" --query 'Commands[0].Status' --output text)"
+  [[ "$final_status" == "Success" ]] || die "SSM command ended with status $final_status"
+
   redeploy_otel_hugepages_collector
 
   log "orphan FC exporter deployment completed"

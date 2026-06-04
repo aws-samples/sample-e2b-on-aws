@@ -564,8 +564,9 @@ func ResumeSandbox(
 
 	sbx.Checks = checks
 
+	sandboxToClose := sbx
 	cleanup.AddPriority(func(ctx context.Context) error {
-		return sbx.Close(ctx, tracer)
+		return sandboxToClose.Close(ctx, tracer)
 	})
 
 	waitEnvdStart := time.Now()

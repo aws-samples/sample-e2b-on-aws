@@ -29,7 +29,7 @@ func NewCleanup() *Cleanup {
 
 func (c *Cleanup) Add(f func(ctx context.Context) error) {
 	if c.hasRun.Load() {
-		err := f(context.Background())
+		err := runCleanupFunc(context.Background(), f)
 		if err != nil {
 			zap.L().Error("failed to run function after cleanup has run", zap.Error(err))
 		}
@@ -44,7 +44,7 @@ func (c *Cleanup) Add(f func(ctx context.Context) error) {
 
 func (c *Cleanup) AddPriority(f func(ctx context.Context) error) {
 	if c.hasRun.Load() {
-		err := f(context.Background())
+		err := runCleanupFunc(context.Background(), f)
 		if err != nil {
 			zap.L().Error("failed to run priority function after cleanup has run", zap.Error(err))
 		}
@@ -73,20 +73,30 @@ func (c *Cleanup) run(ctx context.Context) {
 	var errs []error
 
 	for i := len(c.priorityCleanup) - 1; i >= 0; i-- {
-		err := c.priorityCleanup[i](ctx)
+		err := runCleanupFunc(ctx, c.priorityCleanup[i])
 		if err != nil {
 			errs = append(errs, err)
 		}
 	}
 
 	for i := len(c.cleanup) - 1; i >= 0; i-- {
-		err := c.cleanup[i](ctx)
+		err := runCleanupFunc(ctx, c.cleanup[i])
 		if err != nil {
 			errs = append(errs, err)
 		}
 	}
 
 	c.error = errors.Join(errs...)
+}
+
+func runCleanupFunc(ctx context.Context, f func(ctx context.Context) error) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("cleanup function panicked: %v", r)
+		}
+	}()
+
+	return f(ctx)
 }
 
 func cleanupFiles(files *storage.SandboxFiles) error {
