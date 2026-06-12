@@ -121,6 +121,8 @@ processors:
       include:
         match_type: strict
         metric_names:
+          # scrape target health — required by the NodeDown alert
+          - "up"
           - "nomad_client_host_cpu_total_percent"
           - "nomad_client_host_cpu_idle"
           - "nomad_client_host_disk_available"
@@ -131,6 +133,38 @@ processors:
           - "nomad_client_allocs_memory_allocated"
           - "nomad_client_allocs_cpu_total_percent"
           - "nomad_client_allocs_cpu_allocated"
+          # Nomad scheduler / cluster health (server-side metrics; only
+          # present when scraping a server-mode agent — harmless on clients)
+          - "nomad_nomad_job_status_running"
+          - "nomad_nomad_job_status_pending"
+          - "nomad_nomad_job_status_dead"
+          - "nomad_nomad_job_summary_running"
+          - "nomad_nomad_job_summary_failed"
+          - "nomad_nomad_job_summary_lost"
+          - "nomad_nomad_job_summary_queued"
+          - "nomad_nomad_job_summary_starting"
+          - "nomad_nomad_job_summary_unknown"
+          - "nomad_nomad_plan_queue_depth"
+          - "nomad_nomad_blocked_evals_total_blocked"
+          - "nomad_nomad_blocked_evals_total_escaped"
+          - "nomad_nomad_blocked_evals_total_quota_limit"
+          - "nomad_nomad_broker_total_pending"
+          - "nomad_nomad_broker_total_ready"
+          - "nomad_nomad_broker_total_unacked"
+          - "nomad_nomad_broker_total_waiting"
+          - "nomad_nomad_autopilot_healthy"
+          - "nomad_nomad_autopilot_failure_tolerance"
+          - "nomad_raft_leader_lastContact"
+          - "nomad_raft_leader_oldestLogAge"
+          - "nomad_raft_thread_fsm_saturation"
+          - "nomad_raft_thread_main_saturation"
+          - "nomad_nomad_rpc_request"
+          - "nomad_nomad_rpc_query"
+          - "nomad_nomad_rpc_eval_write"
+          - "nomad_nomad_client_update_status"
+          - "nomad_memberlist_size_local"
+          - "nomad_memberlist_gossip"
+          - "nomad_nomad_heartbeat_active"
 
 
   metricstransform:
