@@ -33,8 +33,9 @@ RUN chmod +x /build/api/bin/api
 
 FROM alpine:3.20
 
-# Install Docker CLI (communicates with host Docker daemon via mounted docker.sock)
-RUN apk add --no-cache docker-cli
+# Install Docker CLI + buildx (communicates with host Docker daemon via mounted docker.sock)
+# buildx is required because template image builds run with DOCKER_BUILDKIT=1
+RUN apk add --no-cache docker-cli docker-cli-buildx
 
 COPY --from=builder /build/api/bin/api .
 
