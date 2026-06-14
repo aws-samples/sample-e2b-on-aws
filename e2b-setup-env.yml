@@ -38,6 +38,7 @@ Metadata:
           default: Domain Configuration
         Parameters:
           - BaseDomain
+          - ExistingCertificateArn
       - Label:
           default: Bastion Configuration
         Parameters:
@@ -91,6 +92,12 @@ Parameters:
       Wildcard certificate will be issued for *.{BaseDomain}
     AllowedPattern: '^([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}$'
     ConstraintDescription: Must be a valid domain (e.g. sub.domain.com)
+
+  # Optional existing ACM certificate - reuse instead of creating a new wildcard certificate
+  ExistingCertificateArn:
+    Type: String
+    Default: ""
+    Description: "ARN of an existing ACM certificate for *.{BaseDomain}. Leave empty to auto-create a new wildcard certificate."
 
   # VPC Configuration - Network address space for the entire infrastructure
   VpcBlock:
@@ -187,6 +194,7 @@ Conditions:
   HasExternalLokiBucket: !Not [!Equals [!Ref ExistingLokiBucketName, ""]]
   CreateE2BBucket: !Equals [!Ref ExistingE2BBucketName, ""]
   CreateLokiBucket: !Equals [!Ref ExistingLokiBucketName, ""]
+  CreateCertificate: !Equals [!Ref ExistingCertificateArn, ""]
 
 # ===================================================================================================
 # Resources - AWS resources to be provisioned for the E2B infrastructure
@@ -716,6 +724,7 @@ Resources:
   # ------------------------------------------------------------------------------------------------
   WildcardCertificate:
     Type: AWS::CertificateManager::Certificate
+    Condition: CreateCertificate
     Properties:
       DomainName: !Sub "*.${BaseDomain}"
       ValidationMethod: DNS
@@ -933,6 +942,7 @@ Resources:
               # Create directory for E2B infrastructure code
               mkdir -p /opt/infra/ && cd /opt/infra/
               git clone https://github.com/aws-samples/sample-e2b-on-aws.git && cd sample-e2b-on-aws
+              git checkout 0614
             - !Sub |
               # Initialize Configuration
               touch /tmp/e2b.log
@@ -1063,13 +1073,15 @@ Outputs:
   # S3 bucket outputs
   CFNE2BBUCKET:
     Description: Unified E2B S3 bucket name
-    Value: !If [HasExternalE2BBucket, !Ref ExistingE2BBucketName, !Ref E2BBucket]
+    Value:
+      !If [HasExternalE2BBucket, !Ref ExistingE2BBucketName, !Ref E2BBucket]
     Export:
       Name: !Sub "${AWS::StackName}-CFNE2BBUCKET"
 
   CFNLOKIBUCKET:
     Description: Loki log storage S3 bucket name
-    Value: !If [HasExternalLokiBucket, !Ref ExistingLokiBucketName, !Ref LokiBucket]
+    Value:
+      !If [HasExternalLokiBucket, !Ref ExistingLokiBucketName, !Ref LokiBucket]
     Export:
       Name: !Sub "${AWS::StackName}-CFNLOKIBUCKET"
 
@@ -1104,7 +1116,7 @@ Outputs:
 
   CFNCERTARN:
     Description: SSL Certificate ARN for HTTPS endpoints
-    Value: !Ref WildcardCertificate
+    Value: !If [CreateCertificate, !Ref WildcardCertificate, !Ref ExistingCertificateArn]
     Export:
       Name: !Sub "${AWS::StackName}-CFNCERTARN"
 
