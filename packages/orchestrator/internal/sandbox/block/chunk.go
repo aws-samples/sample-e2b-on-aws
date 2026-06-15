@@ -133,12 +133,15 @@ func (c *Chunker) fetchToCache(off, length int64) error {
 
 				b := make([]byte, ChunkSize)
 
-				_, err := c.base.ReadAt(b, fetchOff)
+				n, err := c.base.ReadAt(b, fetchOff)
 				if err != nil && !errors.Is(err, io.EOF) {
 					return fmt.Errorf("failed to read chunk from base %d: %w", fetchOff, err)
 				}
 
-				_, cacheErr := c.cache.WriteAtWithoutLock(b, fetchOff)
+				// Only write the bytes actually read. On a short read or EOF the
+				// tail of b is zero-filled; writing it would mark zero pages as
+				// valid cached data and corrupt guest memory.
+				_, cacheErr := c.cache.WriteAtWithoutLock(b[:n], fetchOff)
 				if cacheErr != nil {
 					return fmt.Errorf("failed to write chunk %d to cache: %w", fetchOff, cacheErr)
 				}

@@ -6,7 +6,9 @@ package uffd
 import (
 	"errors"
 	"fmt"
+	"math/rand"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"github.com/loopholelabs/userfaultfd-go/pkg/constants"
@@ -16,6 +18,15 @@ import (
 
 	"github.com/e2b-dev/infra/packages/orchestrator/internal/sandbox/block"
 	"github.com/e2b-dev/infra/packages/shared/pkg/logger"
+)
+
+const (
+	// uffdSliceMaxRetries is the number of retries after the initial attempt
+	// when reading a page from the backing store (total attempts = +1).
+	// Absorbs transient storage (S3) errors instead of killing the sandbox.
+	uffdSliceMaxRetries     = 3
+	uffdSliceRetryBaseDelay = 50 * time.Millisecond
+	uffdSliceRetryMaxDelay  = 500 * time.Millisecond
 )
 
 var ErrUnexpectedEventType = errors.New("unexpected event type")
@@ -163,14 +174,47 @@ outerLoop:
 				}
 			}()
 
-			b, err := src.Slice(offset, pagesize)
-			if err != nil {
+			var b []byte
+			var sliceErr error
+			for attempt := 0; attempt <= uffdSliceMaxRetries; attempt++ {
+				b, sliceErr = src.Slice(offset, pagesize)
+				if sliceErr == nil {
+					break
+				}
 
+				if attempt >= uffdSliceMaxRetries {
+					break
+				}
+
+				zap.L().Warn("UFFD serve slice error, retrying",
+					logger.WithSandboxID(sandboxId),
+					zap.Int("attempt", attempt+1),
+					zap.Int("max_attempts", uffdSliceMaxRetries+1),
+					zap.Int64("offset", offset),
+					zap.Error(sliceErr),
+				)
+
+				delay := uffdSliceRetryBaseDelay << attempt
+				if delay > uffdSliceRetryMaxDelay {
+					delay = uffdSliceRetryMaxDelay
+				}
+				// Add jitter to avoid thundering-herd retries against the store.
+				delay += time.Duration(rand.Int63n(int64(delay)/2 + 1))
+
+				time.Sleep(delay)
+			}
+
+			if sliceErr != nil {
 				stop()
 
-				zap.L().Error("UFFD serve slice error", logger.WithSandboxID(sandboxId), zap.Error(err))
+				zap.L().Error("UFFD serve slice error after retries",
+					logger.WithSandboxID(sandboxId),
+					zap.Int("attempts", uffdSliceMaxRetries+1),
+					zap.Int64("offset", offset),
+					zap.Error(sliceErr),
+				)
 
-				return fmt.Errorf("failed to read from source: %w", err)
+				return fmt.Errorf("failed to read from source after %d attempts: %w", uffdSliceMaxRetries+1, sliceErr)
 			}
 
 			cpy := constants.NewUffdioCopy(
