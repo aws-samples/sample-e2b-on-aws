@@ -303,7 +303,6 @@ deploy_api_job() {
 
 verify_api() {
   log "verifying api health and commit visibility"
-  load_admin_token
 
   local api_base ok=false
   api_base="https://api.${CFNDOMAIN}"
@@ -318,24 +317,57 @@ verify_api() {
   done
   [[ "$ok" == "true" ]] || die "api health did not become ready"
 
+  local expected_image actual_image current_job_version api_count
+  api_count="$(nomad_group_count api api-service 2)"
+  expected_image="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/e2b-orchestration/api:${RELEASE_IMAGE_TAG}"
+  actual_image="$(nomad job inspect -json api | jq -r '.TaskGroups[] | select(.Name == "api-service") | .Tasks[] | select(.Name == "start") | .Config.image' | head -n 1)"
+  printf '%s\n' "$actual_image" | tee "$LOG_DIR/api-job-image.txt" >/dev/null
+  [[ "$actual_image" == "$expected_image" ]] || die "api job image mismatch: expected $expected_image, got ${actual_image:-<empty>}"
+
+  current_job_version="$(curl -fsS --connect-timeout 5 --max-time 30 \
+    --cacert "$NOMAD_CACERT" \
+    --cert "$NOMAD_CLIENT_CERT" \
+    --key "$NOMAD_CLIENT_KEY" \
+    -H "X-Nomad-Token: ${NOMAD_TOKEN}" \
+    "${NOMAD_ADDR}/v1/job/api" | tee "$LOG_DIR/nomad-job-api.raw.json" | jq -r '.Version')"
+  [[ "$current_job_version" =~ ^[0-9]+$ ]] || die "failed to resolve current api job version"
+
   ok=false
   for attempt in {1..20}; do
     if curl -fsS --connect-timeout 5 --max-time 30 \
-      -H "X-Admin-Token: ${ADMIN_TOKEN}" \
-      "$api_base/nodes" | tee "$LOG_DIR/api-nodes.raw.json" | jq '[.[] | {nodeID, status, commit}]' >"$LOG_DIR/api-nodes.json"; then
-      ok=true
-      break
+      --cacert "$NOMAD_CACERT" \
+      --cert "$NOMAD_CLIENT_CERT" \
+      --key "$NOMAD_CLIENT_KEY" \
+      -H "X-Nomad-Token: ${NOMAD_TOKEN}" \
+      "${NOMAD_ADDR}/v1/job/api/allocations" | tee "$LOG_DIR/nomad-api-allocations.raw.json" | \
+      jq --argjson version "$current_job_version" '
+        map({
+          id: .ID,
+          jobVersion: .JobVersion,
+          clientStatus: .ClientStatus,
+          desiredStatus: .DesiredStatus,
+          taskState: (.TaskStates.start.State // ""),
+          nodeID: .NodeID
+        }) as $allocs
+        | {
+            allocations: $allocs,
+            running_current_version: (
+              $allocs
+              | map(select(.jobVersion == $version and .clientStatus == "running" and .desiredStatus == "run" and .taskState == "running"))
+            )
+          }
+      ' >"$LOG_DIR/nomad-api-allocations.json"; then
+      if jq -e --argjson expected "$api_count" '.running_current_version | length >= $expected' "$LOG_DIR/nomad-api-allocations.json" >/dev/null; then
+        ok=true
+        break
+      fi
     fi
-    log "api /nodes not ready yet, retrying in 15s ($attempt/20)"
+    log "api allocations not fully rolled yet, retrying in 15s ($attempt/20)"
     sleep 15
   done
-  [[ "$ok" == "true" ]] || die "api /nodes did not become ready"
+  [[ "$ok" == "true" ]] || die "api allocations did not converge to job version $current_job_version; inspect $LOG_DIR/nomad-api-allocations.json"
 
-  if ! jq -e --arg commit "$RELEASE_IMAGE_TAG" 'map(select(.commit == $commit)) | length > 0' "$LOG_DIR/api-nodes.json" >/dev/null; then
-    die "api nodes do not report commit $RELEASE_IMAGE_TAG yet; inspect $LOG_DIR/api-nodes.json"
-  fi
-
-  log "api deploy verified with commit $RELEASE_IMAGE_TAG"
+  log "api deploy verified with image $RELEASE_IMAGE_TAG and job version $current_job_version"
 }
 
 main() {
