@@ -93,10 +93,7 @@ func (a *APIStore) PostSandboxesSandboxIDResume(c *gin.Context, sandboxID api.Sa
 		}
 	}
 
-	autoPause := instance.InstanceAutoPauseDefault
-	if body.AutoPause != nil {
-		autoPause = *body.AutoPause
-	}
+	autoPause := resolveResumeAutoPause(body.AutoPause)
 
 	requestedClientID, _ := getSandboxIDClient(sandboxID)
 	sandboxID = utils.ShortID(sandboxID)
@@ -237,4 +234,12 @@ func (a *APIStore) PostSandboxesSandboxIDResume(c *gin.Context, sandboxID api.Sa
 	}
 
 	c.JSON(http.StatusCreated, &sbx)
+}
+
+func resolveResumeAutoPause(requestAutoPause *bool) bool {
+	if requestAutoPause != nil {
+		return *requestAutoPause
+	}
+
+	return true
 }

@@ -32,7 +32,7 @@
 
 E2B on AWS 为在您自己的 AWS 账户中运行 AI Agent 沙箱提供了安全、可扩展、可定制的环境。该项目旨在满足组织对 AI 基础设施控制权的需求，同时充分利用 E2B 的沙箱技术进行 AI Agent 开发、测试和部署。
 
-> 基于版本 [`0c35ed5`](https://github.com/e2b-dev/infra/commit/0c35ed5c3b8492f96d1e0bbfb91fff96541a8c74) 构建。如遇问题，请直接提交 PR。特别感谢所有参与项目转型的贡献者。
+> 基于版本 [`ce2d47d`](https://github.com/aws-samples/sample-e2b-on-aws/commit/ce2d47d59cd61994640ea2710759b69935cb1fc1) 构建。如遇问题，请直接提交 PR。特别感谢所有参与项目转型的贡献者。
 
 ---
 

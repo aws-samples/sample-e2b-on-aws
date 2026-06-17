@@ -1,1 +1,2 @@
-artifacts/
+artifacts/*
+!artifacts/dev_deploy_api_resume_autopause.sh

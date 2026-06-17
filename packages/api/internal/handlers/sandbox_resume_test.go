@@ -2,6 +2,38 @@ package handlers
 
 import "testing"
 
+func TestResolveResumeAutoPause(t *testing.T) {
+	tests := []struct {
+		name string
+		got  bool
+		want bool
+	}{
+		{
+			name: "defaults to true when request omits auto pause",
+			got:  resolveResumeAutoPause(nil),
+			want: true,
+		},
+		{
+			name: "preserves explicit true",
+			got:  resolveResumeAutoPause(boolPtr(true)),
+			want: true,
+		},
+		{
+			name: "preserves explicit false",
+			got:  resolveResumeAutoPause(boolPtr(false)),
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.got != tt.want {
+				t.Fatalf("resolveResumeAutoPause() = %v, want %v", tt.got, tt.want)
+			}
+		})
+	}
+}
+
 func TestResolveResumeClientID(t *testing.T) {
 	tests := []struct {
 		name                 string
@@ -41,6 +73,10 @@ func TestResolveResumeClientID(t *testing.T) {
 			}
 		})
 	}
+}
+
+func boolPtr(value bool) *bool {
+	return &value
 }
 
 func stringPtr(value string) *string {
