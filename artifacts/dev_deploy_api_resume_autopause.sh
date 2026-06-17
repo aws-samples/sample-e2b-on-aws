@@ -324,22 +324,13 @@ verify_api() {
   printf '%s\n' "$actual_image" | tee "$LOG_DIR/api-job-image.txt" >/dev/null
   [[ "$actual_image" == "$expected_image" ]] || die "api job image mismatch: expected $expected_image, got ${actual_image:-<empty>}"
 
-  current_job_version="$(curl -fsS --connect-timeout 5 --max-time 30 \
-    --cacert "$NOMAD_CACERT" \
-    --cert "$NOMAD_CLIENT_CERT" \
-    --key "$NOMAD_CLIENT_KEY" \
-    -H "X-Nomad-Token: ${NOMAD_TOKEN}" \
-    "${NOMAD_ADDR}/v1/job/api" | tee "$LOG_DIR/nomad-job-api.raw.json" | jq -r '.Version')"
+  nomad job inspect -json api | tee "$LOG_DIR/nomad-job-api.raw.json" >/dev/null
+  current_job_version="$(jq -r '.Version' "$LOG_DIR/nomad-job-api.raw.json")"
   [[ "$current_job_version" =~ ^[0-9]+$ ]] || die "failed to resolve current api job version"
 
   ok=false
   for attempt in {1..20}; do
-    if curl -fsS --connect-timeout 5 --max-time 30 \
-      --cacert "$NOMAD_CACERT" \
-      --cert "$NOMAD_CLIENT_CERT" \
-      --key "$NOMAD_CLIENT_KEY" \
-      -H "X-Nomad-Token: ${NOMAD_TOKEN}" \
-      "${NOMAD_ADDR}/v1/job/api/allocations" | tee "$LOG_DIR/nomad-api-allocations.raw.json" | \
+    if nomad job allocs -json api | tee "$LOG_DIR/nomad-api-allocations.raw.json" | \
       jq --argjson version "$current_job_version" '
         map({
           id: .ID,
