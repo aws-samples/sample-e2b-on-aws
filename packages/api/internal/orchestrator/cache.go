@@ -20,6 +20,7 @@ import (
 	"github.com/e2b-dev/infra/packages/shared/pkg/grpc/orchestrator"
 	"github.com/e2b-dev/infra/packages/shared/pkg/logger"
 	sbxlogger "github.com/e2b-dev/infra/packages/shared/pkg/logger/sandbox"
+	"github.com/e2b-dev/infra/packages/shared/pkg/pii"
 	"github.com/e2b-dev/infra/packages/shared/pkg/telemetry"
 )
 
@@ -165,7 +166,7 @@ func (o *Orchestrator) syncNode(ctx context.Context, node *Node, nodes []*node.N
 			zap.L().Warn("Deleting orphan sandbox missing from redis store",
 				zap.String("node_id", node.Info.ID),
 				zap.String("sandbox_id", orphan.Instance.SandboxID),
-				zap.String("team_id", orphan.TeamID.String()),
+				zap.String("team_id", pii.Tag(orphan.TeamID.String())),
 				zap.String("execution_id", orphan.ExecutionID),
 				zap.Time("start_time", orphan.StartTime),
 			)
@@ -174,7 +175,7 @@ func (o *Orchestrator) syncNode(ctx context.Context, node *Node, nodes []*node.N
 				zap.L().Error("Error deleting orphan sandbox",
 					zap.String("node_id", node.Info.ID),
 					zap.String("sandbox_id", orphan.Instance.SandboxID),
-					zap.String("team_id", orphan.TeamID.String()),
+					zap.String("team_id", pii.Tag(orphan.TeamID.String())),
 					zap.String("execution_id", orphan.ExecutionID),
 					zap.Error(err),
 				)
@@ -264,7 +265,7 @@ func (o *Orchestrator) getDeleteInstanceFunction(
 				zap.L().Warn("failed to remove sandbox catalog from Redis",
 					zap.Error(err),
 					logger.WithSandboxID(info.Instance.SandboxID),
-					zap.String("team_id", info.TeamID.String()),
+					zap.String("team_id", pii.Tag(info.TeamID.String())),
 					zap.String("execution_id", info.ExecutionID),
 					zap.String("node_id", node.Info.ID),
 					zap.String("catalog_key", catalogKey),
@@ -394,10 +395,10 @@ func (o *Orchestrator) getInsertInstanceFunction(parentCtx context.Context, time
 						zap.L().Error("failed to write sandbox catalog to Redis",
 							zap.Error(setErr),
 							logger.WithSandboxID(info.Instance.SandboxID),
-							zap.String("team_id", info.TeamID.String()),
+							zap.String("team_id", pii.Tag(info.TeamID.String())),
 							zap.String("execution_id", info.ExecutionID),
 							zap.String("node_id", node.Info.ID),
-							zap.String("node_ip", node.Info.IPAddress),
+							zap.String("node_ip", pii.Tag(node.Info.IPAddress)),
 							zap.String("catalog_key", catalogKey),
 							zap.Duration("catalog_ttl", ttl),
 						)
@@ -406,10 +407,10 @@ func (o *Orchestrator) getInsertInstanceFunction(parentCtx context.Context, time
 					zap.L().Error("failed to marshal sandbox catalog entry",
 						zap.Error(jsonErr),
 						logger.WithSandboxID(info.Instance.SandboxID),
-						zap.String("team_id", info.TeamID.String()),
+						zap.String("team_id", pii.Tag(info.TeamID.String())),
 						zap.String("execution_id", info.ExecutionID),
 						zap.String("node_id", node.Info.ID),
-						zap.String("node_ip", node.Info.IPAddress),
+						zap.String("node_ip", pii.Tag(node.Info.IPAddress)),
 					)
 				}
 			}

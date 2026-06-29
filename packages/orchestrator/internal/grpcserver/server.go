@@ -41,7 +41,7 @@ type GRPCServer struct {
 
 func New(tracerProvider trace.TracerProvider, meterProvider metric.MeterProvider, info *service.ServiceInfo) *GRPCServer {
 	opts := []logging.Option{
-		logging.WithLogOnEvents(logging.StartCall, logging.PayloadReceived, logging.PayloadSent, logging.FinishCall),
+		logging.WithLogOnEvents(logging.StartCall, logging.FinishCall),
 		logging.WithLevels(logging.DefaultServerCodeToLevel),
 		logging.WithFieldsFromContext(logging.ExtractFields),
 	}

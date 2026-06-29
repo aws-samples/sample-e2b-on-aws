@@ -16,6 +16,7 @@ import (
 	"github.com/e2b-dev/infra/packages/api/internal/api"
 	"github.com/e2b-dev/infra/packages/api/internal/node"
 	sbxlogger "github.com/e2b-dev/infra/packages/shared/pkg/logger/sandbox"
+	"github.com/e2b-dev/infra/packages/shared/pkg/pii"
 	"github.com/e2b-dev/infra/packages/shared/pkg/smap"
 	"github.com/e2b-dev/infra/packages/shared/pkg/telemetry"
 	"github.com/e2b-dev/infra/packages/shared/pkg/utils"
@@ -194,7 +195,7 @@ func NewCache(
 					instanceCache.cache.Set(instanceInfo.Instance.SandboxID, redisItem)
 					zap.L().Debug("skipping stale local sandbox eviction",
 						zap.String("sandbox_id", instanceInfo.Instance.SandboxID),
-						zap.String("team_id", instanceInfo.TeamID.String()),
+						zap.String("team_id", pii.Tag(instanceInfo.TeamID.String())),
 						zap.String("node_id", instanceInfo.Instance.ClientID),
 						zap.String("local_execution_id", instanceInfo.ExecutionID),
 						zap.String("redis_execution_id", redisItem.ExecutionID),
@@ -207,7 +208,7 @@ func NewCache(
 				zap.L().Error("Error reading instance from redis store before eviction",
 					zap.Error(err),
 					zap.String("sandbox_id", instanceInfo.Instance.SandboxID),
-					zap.String("team_id", instanceInfo.TeamID.String()),
+					zap.String("team_id", pii.Tag(instanceInfo.TeamID.String())),
 					zap.String("node_id", instanceInfo.Instance.ClientID),
 					zap.String("execution_id", instanceInfo.ExecutionID),
 					zap.Time("local_end_time", instanceInfo.GetEndTime()),
@@ -220,7 +221,7 @@ func NewCache(
 				if errors.Is(err, ErrRedisSandboxNotFound) {
 					zap.L().Debug("skipping sandbox eviction already claimed by another api instance",
 						zap.String("sandbox_id", instanceInfo.Instance.SandboxID),
-						zap.String("team_id", instanceInfo.TeamID.String()),
+						zap.String("team_id", pii.Tag(instanceInfo.TeamID.String())),
 						zap.String("node_id", instanceInfo.Instance.ClientID),
 						zap.String("execution_id", instanceInfo.ExecutionID),
 					)
@@ -230,7 +231,7 @@ func NewCache(
 				zap.L().Error("Error removing instance from redis store",
 					zap.Error(err),
 					zap.String("sandbox_id", instanceInfo.Instance.SandboxID),
-					zap.String("team_id", instanceInfo.TeamID.String()),
+					zap.String("team_id", pii.Tag(instanceInfo.TeamID.String())),
 					zap.String("node_id", instanceInfo.Instance.ClientID),
 					zap.String("execution_id", instanceInfo.ExecutionID),
 				)
@@ -244,7 +245,7 @@ func NewCache(
 				}
 				zap.L().Debug("skipping stale sandbox eviction because redis execution changed",
 					zap.String("sandbox_id", instanceInfo.Instance.SandboxID),
-					zap.String("team_id", instanceInfo.TeamID.String()),
+					zap.String("team_id", pii.Tag(instanceInfo.TeamID.String())),
 					zap.String("node_id", instanceInfo.Instance.ClientID),
 					zap.String("execution_id", instanceInfo.ExecutionID),
 				)
@@ -257,7 +258,7 @@ func NewCache(
 			zap.L().Error("Error deleting instance",
 				zap.Error(err),
 				zap.String("sandbox_id", instanceInfo.Instance.SandboxID),
-				zap.String("team_id", instanceInfo.TeamID.String()),
+				zap.String("team_id", pii.Tag(instanceInfo.TeamID.String())),
 				zap.String("node_id", instanceInfo.Instance.ClientID),
 				zap.String("execution_id", instanceInfo.ExecutionID),
 			)

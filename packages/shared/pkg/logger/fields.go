@@ -3,6 +3,8 @@ package logger
 import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
+
+	"github.com/e2b-dev/infra/packages/shared/pkg/pii"
 )
 
 func WithSandboxID(sandboxID string) zap.Field {
@@ -18,7 +20,7 @@ func WithBuildID(buildID string) zap.Field {
 }
 
 func WithTeamID(teamID string) zap.Field {
-	return zap.String("team.id", teamID)
+	return zap.String("team.id", pii.Tag(teamID))
 }
 
 func WithClusterID(clusterId uuid.UUID) zap.Field {

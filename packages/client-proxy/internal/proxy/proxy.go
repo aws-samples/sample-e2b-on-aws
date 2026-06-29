@@ -126,7 +126,6 @@ func NewClientProxy(meterProvider metric.MeterProvider, serviceName string, port
 				zap.String("host", r.Host),
 				l.WithSandboxID(sandboxId),
 				zap.Uint64("sandbox_req_port", port),
-				zap.String("sandbox_req_path", r.URL.Path),
 			)
 
 			var nodeIP string

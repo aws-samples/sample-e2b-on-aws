@@ -11,6 +11,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/e2b-dev/infra/packages/api/internal/api"
+	"github.com/e2b-dev/infra/packages/shared/pkg/pii"
 )
 
 // TODO: this should be removed once we have a better way to handle node sync
@@ -127,7 +128,7 @@ func (c *InstanceCache) reconcileRedis(ctx context.Context, instances []*Instanc
 					zap.Error(err),
 					zap.String("node_id", nodeID),
 					zap.String("sandbox_id", instance.Instance.SandboxID),
-					zap.String("team_id", instance.TeamID.String()),
+					zap.String("team_id", pii.Tag(instance.TeamID.String())),
 					zap.String("execution_id", instance.ExecutionID))
 			}
 			continue

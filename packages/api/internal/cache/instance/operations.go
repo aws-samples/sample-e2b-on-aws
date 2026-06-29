@@ -9,6 +9,7 @@ import (
 	"go.uber.org/zap"
 
 	sbxlogger "github.com/e2b-dev/infra/packages/shared/pkg/logger/sandbox"
+	"github.com/e2b-dev/infra/packages/shared/pkg/pii"
 )
 
 func (c *InstanceCache) Count() int {
@@ -56,7 +57,7 @@ func (c *InstanceCache) Get(instanceID string) (*InstanceInfo, error) {
 		if errors.Is(err, ErrRedisSandboxNotFound) {
 			zap.L().Debug("forgetting stale local sandbox cache after redis miss",
 				zap.String("sandbox_id", instanceID),
-				zap.String("team_id", item.TeamID.String()),
+				zap.String("team_id", pii.Tag(item.TeamID.String())),
 				zap.String("local_execution_id", item.ExecutionID),
 			)
 			c.cache.Forget(instanceID)
@@ -210,7 +211,7 @@ func (c *InstanceCache) Delete(instanceID string, pause bool) bool {
 					}
 					zap.L().Error("error removing sandbox from redis",
 						zap.String("sandbox_id", instanceID),
-						zap.String("team_id", value.TeamID.String()),
+						zap.String("team_id", pii.Tag(value.TeamID.String())),
 						zap.String("execution_id", value.ExecutionID),
 						zap.Error(err),
 					)
@@ -222,7 +223,7 @@ func (c *InstanceCache) Delete(instanceID string, pause bool) bool {
 				}
 				zap.L().Error("error updating sandbox expiration in redis",
 					zap.String("sandbox_id", instanceID),
-					zap.String("team_id", value.TeamID.String()),
+					zap.String("team_id", pii.Tag(value.TeamID.String())),
 					zap.String("execution_id", value.ExecutionID),
 					zap.Error(err),
 				)
@@ -235,7 +236,7 @@ func (c *InstanceCache) Delete(instanceID string, pause bool) bool {
 				if err := c.deleteInstance(value); err != nil {
 					zap.L().Error("error deleting remotely loaded instance",
 						zap.String("sandbox_id", instanceID),
-						zap.String("team_id", value.TeamID.String()),
+						zap.String("team_id", pii.Tag(value.TeamID.String())),
 						zap.String("execution_id", value.ExecutionID),
 						zap.Error(err),
 					)

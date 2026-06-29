@@ -36,7 +36,6 @@ func freeDiskSpace(path string) (free uint64, err error) {
 
 func processFile(r *http.Request, path string, part *multipart.Part, user *user.User, logger zerolog.Logger) (int, error) {
 	logger.Debug().
-		Str("path", path).
 		Msg("File processing")
 
 	uid, gid, err := permissions.GetUserIds(user)
@@ -174,9 +173,8 @@ func (a *API) PostFiles(w http.ResponseWriter, r *http.Request, params PostFiles
 	defer func() {
 		l := a.logger.
 			Err(errMsg).
-			Str("method", r.Method+" "+r.URL.Path).
+			Str("method", r.Method).
 			Str(string(logs.OperationIDKey), operationID).
-			Str("path", path).
 			Str("username", pii.Tag(params.Username))
 
 		if errMsg != nil {

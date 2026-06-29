@@ -37,9 +37,8 @@ func (a *API) GetFiles(w http.ResponseWriter, r *http.Request, params GetFilesPa
 	defer func() {
 		l := a.logger.
 			Err(errMsg).
-			Str("method", r.Method+" "+r.URL.Path).
+			Str("method", r.Method).
 			Str(string(logs.OperationIDKey), operationID).
-			Str("path", path).
 			Str("username", pii.Tag(params.Username))
 
 		if errMsg != nil {

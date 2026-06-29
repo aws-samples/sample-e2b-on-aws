@@ -29,6 +29,7 @@ import (
 	"github.com/e2b-dev/infra/packages/shared/pkg/grpc/orchestrator"
 	"github.com/e2b-dev/infra/packages/shared/pkg/logger"
 	sbxlogger "github.com/e2b-dev/infra/packages/shared/pkg/logger/sandbox"
+	"github.com/e2b-dev/infra/packages/shared/pkg/pii"
 	"github.com/e2b-dev/infra/packages/shared/pkg/storage"
 	"github.com/e2b-dev/infra/packages/shared/pkg/storage/header"
 	"github.com/e2b-dev/infra/packages/shared/pkg/telemetry"
@@ -1052,7 +1053,7 @@ func (s *Sandbox) WaitForEnvd(
 	logResumeTiming("wait_envd_start",
 		logger.WithSandboxID(s.Metadata.Config.SandboxId),
 		zap.Duration("timeout", timeout),
-		zap.String("slot_host_ip", s.Slot.HostIPString()),
+		zap.String("slot_host_ip", pii.Tag(s.Slot.HostIPString())),
 	)
 
 	defer func() {

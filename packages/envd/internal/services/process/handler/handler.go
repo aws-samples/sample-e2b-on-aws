@@ -15,7 +15,6 @@ import (
 	"github.com/creack/pty"
 	"github.com/rs/zerolog"
 
-	"github.com/e2b-dev/infra/packages/envd/internal/logs"
 	"github.com/e2b-dev/infra/packages/envd/internal/permissions"
 	rpc "github.com/e2b-dev/infra/packages/envd/internal/services/spec/process"
 	"github.com/e2b-dev/infra/packages/envd/internal/utils"
@@ -186,12 +185,6 @@ func New(
 		outWg.Add(1)
 		go func() {
 			defer outWg.Done()
-			stdoutLogs := make(chan []byte, outputBufferSize)
-			defer close(stdoutLogs)
-
-			stdoutLogger := logger.With().Str("event_type", "stdout").Logger()
-
-			go logs.LogBufferedDataEvents(stdoutLogs, &stdoutLogger, "data")
 
 			for {
 				buf := make([]byte, stdChunkSize)
@@ -206,8 +199,6 @@ func New(
 							},
 						},
 					}
-
-					stdoutLogs <- buf[:n]
 				}
 
 				if errors.Is(readErr, io.EOF) {
@@ -230,12 +221,6 @@ func New(
 		outWg.Add(1)
 		go func() {
 			defer outWg.Done()
-			stderrLogs := make(chan []byte, outputBufferSize)
-			defer close(stderrLogs)
-
-			stderrLogger := logger.With().Str("event_type", "stderr").Logger()
-
-			go logs.LogBufferedDataEvents(stderrLogs, &stderrLogger, "data")
 
 			for {
 				buf := make([]byte, stdChunkSize)
@@ -250,8 +235,6 @@ func New(
 							},
 						},
 					}
-
-					stderrLogs <- buf[:n]
 				}
 
 				if errors.Is(readErr, io.EOF) {
@@ -342,14 +325,13 @@ func (p *Handler) Start() (uint32, error) {
 
 	adjustErr := adjustOomScore(p.cmd.Process.Pid, defaultOomScore)
 	if adjustErr != nil {
-		fmt.Fprintf(os.Stderr, "error adjusting oom score for process '%s': %s\n", p.cmd, adjustErr)
+		fmt.Fprintf(os.Stderr, "error adjusting oom score for process: %s\n", adjustErr)
 	}
 
 	p.logger.
 		Info().
 		Str("event_type", "process_start").
 		Int("pid", p.cmd.Process.Pid).
-		Str("command", p.cmd.String()).
 		Send()
 
 	return uint32(p.cmd.Process.Pid), nil

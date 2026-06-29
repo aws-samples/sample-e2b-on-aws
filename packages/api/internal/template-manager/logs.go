@@ -49,7 +49,7 @@ func (l *ClusterPlacementLogsProvider) GetLogs(ctx context.Context, buildID stri
 	}
 
 	if res.StatusCode() != 200 {
-		zap.L().Error("failed to get build logs in template manager", zap.String("body", string(res.Body)))
+		zap.L().Error("failed to get build logs in template manager", zap.Int("status_code", res.StatusCode()))
 		return nil, errors.New("failed to get build logs in template manager")
 	}
 
@@ -99,7 +99,7 @@ func (l *LokiPlacementLogsProvider) GetLogs(ctx context.Context, buildID string,
 				line := make(map[string]interface{})
 				err := json.Unmarshal([]byte(entry.Line), &line)
 				if err != nil {
-					zap.L().Error("error parsing log line", zap.Error(err), logger.WithBuildID(buildID), zap.String("line", entry.Line))
+					zap.L().Error("error parsing log line", zap.Error(err), logger.WithBuildID(buildID))
 				}
 
 				logs = append(logs, line["message"].(string))

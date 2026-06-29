@@ -89,7 +89,7 @@ func (w *HTTPExporter) start() {
 
 		mmdsOpts, err := w.getMMDSOpts(w.ctx, token)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "error getting instance logging options from mmds (token %s): %v\n", token, err)
+			fmt.Fprintf(os.Stderr, "error getting instance logging options from mmds: %v\n", err)
 
 			for _, log := range logs {
 				printLog(log)
