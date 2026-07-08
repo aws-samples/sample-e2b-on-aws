@@ -206,14 +206,18 @@ function generate_consul_config {
   else
     # Get region from instance metadata
     local aws_region=$(get_instance_region)
-    # Get prefix from cluster_tag_name (e.g. e2b-us-east-1)
-    local prefix=${cluster_tag_name%-*}
+    # Derive deployment prefix ("myprefix-server-cluster" -> "myprefix") to scope auto-join per deployment
+    local prefix=${cluster_tag_name%-*-cluster}
+    if [[ -z "$prefix" || "$prefix" == *-cluster ]]; then
+      log_error "Could not derive deployment prefix from cluster tag name '$cluster_tag_name'; expected '<prefix>-<type>-cluster'"
+      exit 1
+    fi
     retry_join_json=$(
       cat <<EOF
-"retry_join": ["provider=aws region=$aws_region tag_key=ec2-e2b-key tag_value=ec2-e2b-value"],
+"retry_join": ["provider=aws region=$aws_region tag_key=ec2-e2b-key tag_value=$prefix"],
 EOF
     )
-    log_info "Configuring auto-join with tag: $cluster_tag_name"
+    log_info "Configuring auto-join with tag: ec2-e2b-key=$prefix"
   fi
 
   local recursors_config=""

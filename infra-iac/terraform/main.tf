@@ -439,7 +439,7 @@ resource "aws_launch_template" "server" {
 
   user_data = base64encode(templatefile("${path.module}/scripts/start-server.sh", {
     NUM_SERVERS                  = 3
-    CLUSTER_TAG_NAME             = "server-cluster"
+    CLUSTER_TAG_NAME             = "${var.prefix}-server-cluster"
     E2B_BUCKET                   = var.e2b_bucket
     NOMAD_TOKEN                  = aws_secretsmanager_secret_version.nomad_acl_token.secret_string
     CONSUL_TOKEN                 = aws_secretsmanager_secret_version.consul_acl_token.secret_string
@@ -458,7 +458,7 @@ resource "aws_launch_template" "server" {
       local.common_tags,
       {
         Name        = "server-cluster",
-        ec2-e2b-key = "ec2-e2b-value"
+        ec2-e2b-key = var.prefix
       }
     )
   }
@@ -587,7 +587,7 @@ resource "aws_launch_template" "client" {
   }
 
   user_data = base64encode(templatefile("${path.module}/scripts/start-client.sh", {
-    CLUSTER_TAG_NAME             = "client-cluster"
+    CLUSTER_TAG_NAME             = "${var.prefix}-client-cluster"
     E2B_BUCKET                   = var.e2b_bucket
     AWS_REGION                   = local.aws_region
     AWS_ACCOUNT_ID               = local.account_id
@@ -607,7 +607,7 @@ resource "aws_launch_template" "client" {
       local.common_tags,
       {
         Name        = "client-cluster",
-        ec2-e2b-key = "ec2-e2b-value"
+        ec2-e2b-key = var.prefix
       }
     )
   }
@@ -1036,7 +1036,7 @@ resource "aws_launch_template" "api" {
   }
 
   user_data = base64encode(templatefile("${path.module}/scripts/start-api.sh", {
-    CLUSTER_TAG_NAME             = "api-cluster"
+    CLUSTER_TAG_NAME             = "${var.prefix}-api-cluster"
     E2B_BUCKET                   = var.e2b_bucket
     AWS_REGION                   = local.aws_region
     AWS_ACCOUNT_ID               = local.account_id
@@ -1056,7 +1056,7 @@ resource "aws_launch_template" "api" {
       local.common_tags,
       {
         Name        = "api-cluster",
-        ec2-e2b-key = "ec2-e2b-value"
+        ec2-e2b-key = var.prefix
       }
     )
   }
@@ -1189,7 +1189,7 @@ resource "aws_launch_template" "build" {
   }
 
   user_data = base64encode(templatefile("${path.module}/scripts/start-build-cluster.sh", {
-    CLUSTER_TAG_NAME             = "build-cluster"
+    CLUSTER_TAG_NAME             = "${var.prefix}-build-cluster"
     E2B_BUCKET                   = var.e2b_bucket
     AWS_REGION                   = local.aws_region
     AWS_ACCOUNT_ID               = local.account_id
@@ -1209,7 +1209,7 @@ resource "aws_launch_template" "build" {
       local.common_tags,
       {
         Name        = "build-cluster",
-        ec2-e2b-key = "ec2-e2b-value"
+        ec2-e2b-key = var.prefix
       }
     )
   }
