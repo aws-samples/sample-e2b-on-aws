@@ -574,7 +574,7 @@ resource "aws_launch_template" "client" {
     device_name = "/dev/sda2"
 
     ebs {
-      volume_size           = 1000
+      volume_size           = 4000
       volume_type           = "gp3"
       encrypted             = true
       delete_on_termination = true
