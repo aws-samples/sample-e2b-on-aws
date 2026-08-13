@@ -7,20 +7,26 @@ import (
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/sdk/resource"
-	"go.opentelemetry.io/otel/semconv/v1.21.0"
+	semconv "go.opentelemetry.io/otel/semconv/v1.21.0"
 )
 
 var otelCollectorGRPCEndpoint = os.Getenv("OTEL_COLLECTOR_GRPC_ENDPOINT")
 
-func getResource(ctx context.Context, serviceName, serviceVersion, instanceID string) (*resource.Resource, error) {
+func OTELCollectorGRPCEndpoint() string {
+	return otelCollectorGRPCEndpoint
+}
+
+func GetResource(ctx context.Context, nodeID, serviceName, serviceCommit, serviceVersion, serviceInstanceID string, additional ...attribute.KeyValue) (*resource.Resource, error) {
 	attributes := []attribute.KeyValue{
 		semconv.ServiceName(serviceName),
-		semconv.ServiceVersion(serviceVersion),
-		semconv.ServiceInstanceID(instanceID),
+		semconv.ServiceVersion(fmt.Sprintf("%s-%s", serviceVersion, serviceCommit)),
+		semconv.ServiceInstanceID(serviceInstanceID),
 		semconv.TelemetrySDKName("otel"),
+		semconv.HostID(nodeID),
 		semconv.TelemetrySDKLanguageGo,
 	}
 
+	attributes = append(attributes, additional...)
 	hostname, err := os.Hostname()
 	if err == nil {
 		attributes = append(attributes, semconv.HostName(hostname))

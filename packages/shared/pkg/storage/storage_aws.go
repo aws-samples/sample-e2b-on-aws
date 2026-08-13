@@ -1,11 +1,15 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"slices"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -13,89 +17,197 @@ import (
 	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"go.opentelemetry.io/contrib/instrumentation/github.com/aws/aws-sdk-go-v2/otelaws"
+	"go.uber.org/zap"
+
+	"github.com/e2b-dev/infra/packages/shared/pkg/limit"
+	"github.com/e2b-dev/infra/packages/shared/pkg/logger"
 )
 
 const (
-	awsOperationTimeout = 5 * time.Second
-	awsWriteTimeout     = 120 * time.Second
-	awsReadTimeout      = 15 * time.Second
+	awsOperationTimeout        = 5 * time.Second
+	awsWriteTimeout            = 30 * time.Second
+	awsReadTimeout             = 15 * time.Second
+	awsMultipartUploadPartSize = 10 * 1024 * 1024
 )
 
-type AWSBucketStorageProvider struct {
-	client     *s3.Client
-	bucketName string
-	keyPrefix  string
+type awsStorage struct {
+	client        *s3.Client
+	presignClient *s3.PresignClient
+	bucketName    string
+	limiter       *limit.Limiter
 }
 
-type AWSBucketStorageObjectProvider struct {
+var _ StorageProvider = (*awsStorage)(nil)
+
+type awsObject struct {
 	client     *s3.Client
 	path       string
 	bucketName string
-	ctx        context.Context
+	limiter    *limit.Limiter
 }
 
-func NewAWSBucketStorageProvider(ctx context.Context, bucketName string, keyPrefix string) (*AWSBucketStorageProvider, error) {
+var (
+	_ Seekable = (*awsObject)(nil)
+	_ Blob     = (*awsObject)(nil)
+)
+
+func newAWSStorage(ctx context.Context, spec Spec, limiter *limit.Limiter) (*awsStorage, error) {
 	cfg, err := config.LoadDefaultConfig(ctx)
 	if err != nil {
 		return nil, err
 	}
+	otelaws.AppendMiddlewares(&cfg.APIOptions)
 
-	client := s3.NewFromConfig(cfg)
+	client := s3.NewFromConfig(cfg, func(o *s3.Options) {
+		// Options the spec leaves unset fall back to the AWS SDK's own
+		// resolution (AWS_ENDPOINT_URL, AWS_REGION, credentials, …).
+		if spec.Endpoint != "" {
+			o.BaseEndpoint = aws.String(spec.Endpoint)
+		}
+		if spec.Region != "" {
+			o.Region = spec.Region
+		}
 
-	return &AWSBucketStorageProvider{
-		client:     client,
-		bucketName: bucketName,
-		keyPrefix:  keyPrefix,
+		// Path-style addressing (https://host/bucket/key instead of the SDK's
+		// default virtual-host style https://bucket.host/key) is required by
+		// most S3-compatible backends (MinIO, Ceph, …).
+		o.UsePathStyle = spec.UsePathStyle
+	})
+	presignClient := s3.NewPresignClient(client)
+
+	return &awsStorage{
+		client:        client,
+		presignClient: presignClient,
+		bucketName:    spec.Bucket,
+		limiter:       limiter,
 	}, nil
 }
 
-func (a *AWSBucketStorageProvider) DeleteObjectsWithPrefix(ctx context.Context, prefix string) error {
+func (s *awsStorage) DeleteObjectsWithPrefix(ctx context.Context, prefix string) error {
+	if prefix == "" {
+		return errors.New("refusing to delete objects with an empty prefix")
+	}
+
+	// A large prefix spans many pages, so scope the timeout per round-trip
+	// below instead of wrapping the whole walk.
+	paginator := s3.NewListObjectsV2Paginator(s.client, &s3.ListObjectsV2Input{
+		Bucket: aws.String(s.bucketName),
+		Prefix: aws.String(prefix),
+	})
+
+	deleted := false
+	for paginator.HasMorePages() {
+		pageCtx, cancel := context.WithTimeout(ctx, awsOperationTimeout)
+		list, err := paginator.NextPage(pageCtx)
+		cancel()
+		if err != nil {
+			return err
+		}
+
+		objects := make([]types.ObjectIdentifier, 0, len(list.Contents))
+		for _, obj := range list.Contents {
+			objects = append(objects, types.ObjectIdentifier{Key: obj.Key})
+		}
+
+		// AWS S3 delete operation requires at least one object to delete.
+		if len(objects) == 0 {
+			continue
+		}
+
+		if err := s.deleteObjects(ctx, objects); err != nil {
+			return err
+		}
+
+		deleted = true
+	}
+
+	if !deleted {
+		logger.L().Warn(ctx, "No objects found to delete with the given prefix", zap.String("prefix", prefix), zap.String("bucket", s.bucketName))
+	}
+
+	return nil
+}
+
+func (s *awsStorage) deleteObjects(ctx context.Context, objects []types.ObjectIdentifier) error {
 	ctx, cancel := context.WithTimeout(ctx, awsOperationTimeout)
 	defer cancel()
 
-	fullPrefix := a.keyPrefix + prefix
-	list, err := a.client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{Bucket: &a.bucketName, Prefix: &fullPrefix})
+	output, err := s.client.DeleteObjects(
+		ctx, &s3.DeleteObjectsInput{
+			Bucket: aws.String(s.bucketName),
+			Delete: &types.Delete{Objects: objects},
+		},
+	)
 	if err != nil {
 		return err
 	}
 
-	objects := make([]types.ObjectIdentifier, 0, len(list.Contents))
-	for _, obj := range list.Contents {
-		objects = append(objects, types.ObjectIdentifier{Key: obj.Key})
+	if len(output.Errors) > 0 {
+		var errStr strings.Builder
+		for _, delErr := range output.Errors {
+			fmt.Fprintf(&errStr, "Key: %s, Code: %s, Message: %s; ", aws.ToString(delErr.Key), aws.ToString(delErr.Code), aws.ToString(delErr.Message))
+		}
+
+		return errors.New("errors occurred during deletion: " + errStr.String())
 	}
 
-	_, err = a.client.DeleteObjects(
-		ctx, &s3.DeleteObjectsInput{
-			Bucket: &a.bucketName,
-			Delete: &types.Delete{Objects: objects},
-		},
-	)
+	if len(output.Deleted) != len(objects) {
+		return errors.New("not all objects listed were deleted")
+	}
 
-	return err
+	return nil
 }
 
-func (a *AWSBucketStorageProvider) GetDetails() string {
-	return fmt.Sprintf("[AWS Storage, bucket set to %s]", a.bucketName)
+func (s *awsStorage) GetDetails() string {
+	return fmt.Sprintf("[AWS Storage, bucket set to %s]", s.bucketName)
 }
 
-func (a *AWSBucketStorageProvider) OpenObject(ctx context.Context, path string) (StorageObjectProvider, error) {
-	return &AWSBucketStorageObjectProvider{
-		client:     a.client,
-		bucketName: a.bucketName,
-		path:       a.keyPrefix + path,
-		ctx:        ctx,
+func (s *awsStorage) UploadSignedURL(ctx context.Context, path string, ttl time.Duration) (string, error) {
+	input := &s3.PutObjectInput{
+		Bucket: aws.String(s.bucketName),
+		Key:    aws.String(path),
+	}
+	resp, err := s.presignClient.PresignPutObject(ctx, input, func(opts *s3.PresignOptions) {
+		opts.Expires = ttl
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to presign PUT URL: %w", err)
+	}
+
+	return resp.URL, nil
+}
+
+func (s *awsStorage) OpenSeekable(_ context.Context, path string) (Seekable, error) {
+	return &awsObject{
+		client:     s.client,
+		bucketName: s.bucketName,
+		path:       path,
+		limiter:    s.limiter,
 	}, nil
 }
 
-func (a *AWSBucketStorageObjectProvider) WriteTo(dst io.Writer) (int64, error) {
-	ctx, cancel := context.WithTimeout(a.ctx, awsReadTimeout)
+func (s *awsStorage) OpenBlob(_ context.Context, path string) (Blob, error) {
+	return &awsObject{
+		client:     s.client,
+		bucketName: s.bucketName,
+		path:       path,
+		limiter:    s.limiter,
+	}, nil
+}
+
+func (o *awsObject) WriteTo(ctx context.Context, dst io.Writer) (n int64, err error) {
+	start := time.Now()
+	defer func() { RecordReadBlob(ctx, time.Since(start), n, o.path, SourceAWS, err) }()
+
+	ctx, cancel := context.WithTimeout(ctx, awsReadTimeout)
 	defer cancel()
 
-	resp, err := a.client.GetObject(ctx, &s3.GetObjectInput{Bucket: &a.bucketName, Key: &a.path})
+	resp, err := o.client.GetObject(ctx, &s3.GetObjectInput{Bucket: &o.bucketName, Key: &o.path})
 	if err != nil {
 		var nsk *types.NoSuchKey
 		if errors.As(err, &nsk) {
-			return 0, ErrorObjectNotExist
+			return 0, ErrObjectNotExist
 		}
 
 		return 0, err
@@ -103,106 +215,311 @@ func (a *AWSBucketStorageObjectProvider) WriteTo(dst io.Writer) (int64, error) {
 
 	defer resp.Body.Close()
 
-	return io.Copy(dst, resp.Body)
+	n, err = io.Copy(dst, resp.Body)
+
+	return n, err
 }
 
-func (a *AWSBucketStorageObjectProvider) WriteFromFileSystem(path string) error {
-	ctx, cancel := context.WithTimeout(a.ctx, awsWriteTimeout)
-	defer cancel()
+func (o *awsObject) StoreFile(ctx context.Context, path string, opts ...PutOption) (*FullFrameTable, [32]byte, error) {
+	p := ApplyPutOptions(opts)
 
-	file, err := os.Open(path)
+	release, err := o.limiter.AcquireUploadSlot(ctx)
 	if err != nil {
-		return err
+		return nil, [32]byte{}, err
 	}
-	defer file.Close()
+	defer release()
+
+	cfg := CompressConfigFromOpts(p)
+	if cfg.IsCompressionEnabled() {
+		return storeFileCompressed(ctx, path, cfg, o.limiter.MaxUploadTasks(ctx), p, func(metadata ObjectMetadata) (partUploader, error) {
+			return &awsPartUploader{client: o.client, bucketName: o.bucketName, objectName: o.path, metadata: metadata}, nil
+		})
+	}
+
+	// Inherit the caller's context for the multipart upload. The AWS SDK's
+	// manager.Uploader reuses the same ctx for CreateMultipartUpload, every
+	// UploadPart, and the final Complete/Abort —
+	// a tight static timeout here would cancel an in-flight multi-GB snapshot
+	// upload and surface as "S3: UploadPart ... StatusCode: 0, canceled,
+	// context deadline exceeded". The caller (pkg/server/sandboxes.go) already
+	// scopes a per-attempt deadline (uploadTimeout = 20m) with retry budget on
+	// top, matching the GCP path which also inherits the caller's ctx.
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, [32]byte{}, fmt.Errorf("failed to open file %s: %w", path, err)
+	}
+	defer f.Close()
 
 	uploader := manager.NewUploader(
-		a.client,
+		o.client,
 		func(u *manager.Uploader) {
-			u.PartSize = 10 * 1024 * 1024 // 10 MB
-			u.Concurrency = 8             // eight parts in flight
+			u.PartSize = awsMultipartUploadPartSize
+			u.Concurrency = o.limiter.MaxUploadTasks(ctx)
 		},
 	)
 
 	_, err = uploader.Upload(
 		ctx,
 		&s3.PutObjectInput{
-			Bucket: &a.bucketName,
-			Key:    &a.path,
-			Body:   file,
+			Bucket:   &o.bucketName,
+			Key:      &o.path,
+			Body:     f,
+			Metadata: p.Metadata,
+		},
+	)
+	if err == nil {
+		fi, _ := f.Stat()
+		var size int64
+		if fi != nil {
+			size = fi.Size()
+		}
+
+		logger.L().Debug(ctx, "Uploaded file to S3",
+			zap.String("bucket", o.bucketName),
+			zap.String("object", o.path),
+			zap.String("source", path),
+			zap.Int64("size_uncompressed", size),
+			zap.String("compression", "none"),
+		)
+	}
+
+	return nil, [32]byte{}, err
+}
+
+func (o *awsObject) Put(ctx context.Context, data []byte, opts ...PutOption) error {
+	ctx, cancel := context.WithTimeout(ctx, awsWriteTimeout)
+	defer cancel()
+
+	_, err := o.client.PutObject(
+		ctx,
+		&s3.PutObjectInput{
+			Bucket:   &o.bucketName,
+			Key:      &o.path,
+			Body:     bytes.NewReader(data),
+			Metadata: ApplyPutOptions(opts).Metadata,
+		},
+	)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (o *awsObject) OpenRangeReader(ctx context.Context, off, length int64, frameTable *FrameTable) (_ RangeReader, _ Source, err error) {
+	start := time.Now()
+	objType, _ := seekableObjectType(o.path)
+	defer func() {
+		RecordReadOpen(ctx, time.Since(start), objType, SourceAWS, frameTable.CompressionType(), err)
+	}()
+
+	if !frameTable.IsCompressed() {
+		rc, err := o.openRangeReader(ctx, off, length)
+		if err != nil {
+			return nil, SourceAWS, err
+		}
+
+		return rc, SourceAWS, nil
+	}
+
+	r, err := frameTable.LocateCompressed(off)
+	if err != nil {
+		return nil, SourceAWS, fmt.Errorf("get frame for offset %d, S3:%s: %w", off, o.path, err)
+	}
+
+	raw, err := o.openRangeReader(ctx, r.Offset, int64(r.Length))
+	if err != nil {
+		return nil, SourceAWS, err
+	}
+
+	dec, err := NewDecompressReader(raw, frameTable.CompressionType(), SourceAWS, objType)
+	if err != nil {
+		raw.Close(ctx)
+
+		return nil, SourceAWS, err
+	}
+
+	return dec, SourceAWS, nil
+}
+
+func (o *awsObject) openRangeReader(ctx context.Context, off, length int64) (RangeReader, error) {
+	resp, err := o.client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(o.bucketName),
+		Key:    aws.String(o.path),
+		Range:  aws.String(fmt.Sprintf("bytes=%d-%d", off, off+length-1)),
+	})
+	if err != nil {
+		var nsk *types.NoSuchKey
+		if errors.As(err, &nsk) {
+			return nil, ErrObjectNotExist
+		}
+
+		return nil, fmt.Errorf("failed to create S3 range reader for %q: %w", o.path, err)
+	}
+
+	return NewRangeReader(resp.Body), nil
+}
+
+func (o *awsObject) Size(ctx context.Context) (_ int64, err error) {
+	start := time.Now()
+	objType, _ := seekableObjectType(o.path)
+	defer func() { RecordReadSize(ctx, time.Since(start), objType, SourceAWS, err) }()
+
+	ctx, cancel := context.WithTimeout(ctx, awsOperationTimeout)
+	defer cancel()
+
+	resp, err := o.client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: &o.bucketName, Key: &o.path})
+	if err != nil {
+		var nsk *types.NoSuchKey
+		var nfd *types.NotFound
+		if errors.As(err, &nsk) || errors.As(err, &nfd) {
+			return 0, ErrObjectNotExist
+		}
+
+		return 0, err
+	}
+
+	if size, ok := ObjectMetadata(resp.Metadata).UncompressedSize(); ok {
+		return size, nil
+	}
+
+	return *resp.ContentLength, nil
+}
+
+func (o *awsObject) Exists(ctx context.Context) (bool, error) {
+	_, err := o.Size(ctx)
+
+	return err == nil, ignoreNotExists(err)
+}
+
+func (o *awsObject) Delete(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, awsOperationTimeout)
+	defer cancel()
+
+	_, err := o.client.DeleteObject(
+		ctx, &s3.DeleteObjectInput{
+			Bucket: aws.String(o.bucketName),
+			Key:    aws.String(o.path),
 		},
 	)
 
 	return err
 }
 
-func (a *AWSBucketStorageObjectProvider) ReadFrom(src io.Reader) (int64, error) {
-	ctx, cancel := context.WithTimeout(a.ctx, awsWriteTimeout)
-	defer cancel()
+func ignoreNotExists(err error) error {
+	if errors.Is(err, ErrObjectNotExist) {
+		return nil
+	}
 
-	_, err := a.client.PutObject(
-		ctx,
-		&s3.PutObjectInput{
-			Bucket: &a.bucketName,
-			Key:    &a.path,
-			Body:   src,
+	return err
+}
+
+type awsPartUploader struct {
+	client     *s3.Client
+	bucketName string
+	objectName string
+	metadata   ObjectMetadata
+
+	mu       sync.Mutex
+	uploadID string
+	parts    []types.CompletedPart
+	// completed needs no lock: compressStream calls Complete and the deferred
+	// Close sequentially from one goroutine, after all UploadPart calls finish.
+	completed bool
+}
+
+var _ partUploader = (*awsPartUploader)(nil)
+
+func (m *awsPartUploader) Start(ctx context.Context) error {
+	out, err := m.client.CreateMultipartUpload(ctx, &s3.CreateMultipartUploadInput{
+		Bucket:   aws.String(m.bucketName),
+		Key:      aws.String(m.objectName),
+		Metadata: m.metadata,
+		// The SDK's default integrity protections attach CRC32 checksums to
+		// UploadPart requests; S3 requires the algorithm to be declared at
+		// initiation and echoed per part in Complete. Declare it explicitly on
+		// every call so the flow is consistent regardless of SDK/env config
+		// (manager.Uploader does the same for the uncompressed path).
+		ChecksumAlgorithm: types.ChecksumAlgorithmCrc32,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to initiate multipart upload: %w", err)
+	}
+
+	m.uploadID = aws.ToString(out.UploadId)
+
+	return nil
+}
+
+// UploadPart uploads a single part. Multiple data slices are streamed without
+// copying into a contiguous buffer; the section reader's Seek lets the SDK
+// compute the payload hash/length and rewind on retries.
+func (m *awsPartUploader) UploadPart(ctx context.Context, partIndex int, data ...[]byte) error {
+	body := newMultiSliceReader(data)
+	out, err := m.client.UploadPart(ctx, &s3.UploadPartInput{
+		Bucket:            aws.String(m.bucketName),
+		Key:               aws.String(m.objectName),
+		UploadId:          aws.String(m.uploadID),
+		PartNumber:        aws.Int32(int32(partIndex)),
+		Body:              body,
+		ContentLength:     aws.Int64(body.Size()),
+		ChecksumAlgorithm: types.ChecksumAlgorithmCrc32,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to upload part %d: %w", partIndex, err)
+	}
+
+	m.mu.Lock()
+	m.parts = append(m.parts, types.CompletedPart{
+		ETag:          out.ETag,
+		ChecksumCRC32: out.ChecksumCRC32,
+		PartNumber:    aws.Int32(int32(partIndex)),
+	})
+	m.mu.Unlock()
+
+	return nil
+}
+
+func (m *awsPartUploader) Complete(ctx context.Context) error {
+	m.mu.Lock()
+	parts := make([]types.CompletedPart, len(m.parts))
+	copy(parts, m.parts)
+	m.mu.Unlock()
+
+	slices.SortFunc(parts, func(a, b types.CompletedPart) int {
+		return int(aws.ToInt32(a.PartNumber) - aws.ToInt32(b.PartNumber))
+	})
+
+	_, err := m.client.CompleteMultipartUpload(ctx, &s3.CompleteMultipartUploadInput{
+		Bucket:   aws.String(m.bucketName),
+		Key:      aws.String(m.objectName),
+		UploadId: aws.String(m.uploadID),
+		MultipartUpload: &types.CompletedMultipartUpload{
+			Parts: parts,
 		},
-	)
+	})
 	if err != nil {
-		return 0, err
+		return err
 	}
 
-	return 0, nil
+	m.completed = true
+
+	return nil
 }
 
-func (a *AWSBucketStorageObjectProvider) ReadAt(buff []byte, off int64) (n int, err error) {
-	ctx, cancel := context.WithTimeout(a.ctx, awsReadTimeout)
-	defer cancel()
-
-	readRange := aws.String(fmt.Sprintf("bytes=%d-%d", off, off+int64(len(buff))-1))
-	resp, err := a.client.GetObject(ctx, &s3.GetObjectInput{Bucket: &a.bucketName, Key: &a.path, Range: readRange})
-	if err != nil {
-		var nsk *types.NoSuchKey
-		if errors.As(err, &nsk) {
-			return 0, ErrorObjectNotExist
-		}
-
-		return 0, err
+func (m *awsPartUploader) Close() error {
+	if m.completed || m.uploadID == "" {
+		return nil
 	}
 
-	defer resp.Body.Close()
-
-	// When the object is smaller than requested range there will be unexpected EOF,
-	// but backend expects to return EOF in this case.
-	n, err = io.ReadFull(resp.Body, buff)
-	if errors.Is(err, io.ErrUnexpectedEOF) {
-		err = io.EOF
-	}
-	return n, err
-}
-
-func (a *AWSBucketStorageObjectProvider) Size() (int64, error) {
-	ctx, cancel := context.WithTimeout(a.ctx, awsOperationTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), awsOperationTimeout)
 	defer cancel()
 
-	resp, err := a.client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: &a.bucketName, Key: &a.path})
-	if err != nil {
-		return 0, err
-	}
-
-	return *resp.ContentLength, nil
-}
-
-func (a *AWSBucketStorageObjectProvider) Delete() error {
-	ctx, cancel := context.WithTimeout(a.ctx, awsOperationTimeout)
-	defer cancel()
-
-	_, err := a.client.DeleteObject(
-		ctx, &s3.DeleteObjectInput{
-			Bucket: &a.bucketName,
-			Key:    &a.path,
-		},
-	)
+	_, err := m.client.AbortMultipartUpload(ctx, &s3.AbortMultipartUploadInput{
+		Bucket:   aws.String(m.bucketName),
+		Key:      aws.String(m.objectName),
+		UploadId: aws.String(m.uploadID),
+	})
 
 	return err
 }

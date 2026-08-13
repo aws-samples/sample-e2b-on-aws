@@ -6,9 +6,14 @@ import (
 	"sync"
 	"time"
 
-	"go.opentelemetry.io/otel/trace"
+	"go.opentelemetry.io/otel"
 	"go.uber.org/zap"
+	"golang.org/x/sync/semaphore"
+
+	"github.com/e2b-dev/infra/packages/shared/pkg/logger"
 )
+
+var tracer = otel.Tracer("github.com/e2b-dev/infra/packages/shared/pkg/synchronization")
 
 type Store[SourceItem any, PoolItem any] interface {
 	SourceList(ctx context.Context) ([]SourceItem, error)
@@ -26,33 +31,35 @@ type Store[SourceItem any, PoolItem any] interface {
 type Synchronize[SourceItem any, PoolItem any] struct {
 	store Store[SourceItem, PoolItem]
 
-	tracer           trace.Tracer
 	tracerSpanPrefix string
 	logsPrefix       string
 
 	cancel     chan struct{} // channel for cancellation of synchronization
 	cancelOnce sync.Once
+
+	// syncSem prevents concurrent PoolInsert calls
+	syncSem *semaphore.Weighted
 }
 
-func NewSynchronize[SourceItem any, PoolItem any](tracer trace.Tracer, spanPrefix string, logsPrefix string, store Store[SourceItem, PoolItem]) *Synchronize[SourceItem, PoolItem] {
+func NewSynchronize[SourceItem any, PoolItem any](spanPrefix string, logsPrefix string, store Store[SourceItem, PoolItem]) *Synchronize[SourceItem, PoolItem] {
 	s := &Synchronize[SourceItem, PoolItem]{
-		tracer:           tracer,
 		tracerSpanPrefix: spanPrefix,
 		logsPrefix:       logsPrefix,
 		store:            store,
 		cancel:           make(chan struct{}),
+		syncSem:          semaphore.NewWeighted(1),
 	}
 
 	return s
 }
 
-func (s *Synchronize[SourceItem, PoolItem]) Start(syncInterval time.Duration, syncRoundTimeout time.Duration, runInitialSync bool) {
+func (s *Synchronize[SourceItem, PoolItem]) Start(ctx context.Context, syncInterval time.Duration, syncRoundTimeout time.Duration, runInitialSync bool) {
 	if runInitialSync {
-		initialSyncTimeout, initialSyncCancel := context.WithTimeout(context.Background(), syncRoundTimeout)
-		err := s.sync(initialSyncTimeout)
+		initialSyncTimeout, initialSyncCancel := context.WithTimeout(context.WithoutCancel(ctx), syncRoundTimeout)
+		err := s.Sync(initialSyncTimeout)
 		initialSyncCancel()
 		if err != nil {
-			zap.L().Error(s.getLog("Initial sync failed"), zap.Error(err))
+			logger.L().Error(ctx, s.getLog("Initial sync failed"), zap.Error(err))
 		}
 	}
 
@@ -62,14 +69,15 @@ func (s *Synchronize[SourceItem, PoolItem]) Start(syncInterval time.Duration, sy
 	for {
 		select {
 		case <-s.cancel:
-			zap.L().Info(s.getLog("Background synchronization ended"))
+			logger.L().Info(ctx, s.getLog("Background synchronization ended"))
+
 			return
 		case <-timer.C:
-			syncTimeout, syncCancel := context.WithTimeout(context.Background(), syncRoundTimeout)
-			err := s.sync(syncTimeout)
+			syncTimeout, syncCancel := context.WithTimeout(context.WithoutCancel(ctx), syncRoundTimeout)
+			err := s.Sync(syncTimeout)
 			syncCancel()
 			if err != nil {
-				zap.L().Error(s.getLog("Failed to synchronize"), zap.Error(err))
+				logger.L().Error(ctx, s.getLog("Failed to synchronize"), zap.Error(err))
 			}
 		}
 	}
@@ -81,61 +89,70 @@ func (s *Synchronize[SourceItem, PoolItem]) Close() {
 	)
 }
 
-func (s *Synchronize[SourceItem, PoolItem]) sync(ctx context.Context) error {
-	spanCtx, span := s.tracer.Start(ctx, s.getSpanName("sync-items"))
+// Sync performs periodic sync or it can be done as an on-demand synchronization round against the source.
+func (s *Synchronize[SourceItem, PoolItem]) Sync(ctx context.Context) error {
+	ctx, span := tracer.Start(ctx, s.getSpanName("sync-items"))
 	defer span.End()
+
+	if err := s.syncSem.Acquire(ctx, 1); err != nil {
+		return fmt.Errorf("failed to acquire sync lock: %w", err)
+	}
+	defer s.syncSem.Release(1)
 
 	sourceItems, err := s.store.SourceList(ctx)
 	if err != nil {
 		return err
 	}
 
-	s.syncDiscovered(spanCtx, sourceItems)
-	s.syncOutdated(spanCtx, sourceItems)
+	s.syncDiscovered(ctx, sourceItems)
+	s.syncOutdated(ctx, sourceItems)
 
 	return nil
 }
 
 func (s *Synchronize[SourceItem, PoolItem]) syncDiscovered(ctx context.Context, sourceItems []SourceItem) {
-	spanCtx, span := s.tracer.Start(ctx, s.getSpanName("sync-discovered-items"))
+	ctx, span := tracer.Start(ctx, s.getSpanName("sync-discovered-items"))
 	defer span.End()
 
 	var wg sync.WaitGroup
 	defer wg.Wait()
 
 	for _, item := range sourceItems {
-		// item already exists in the pool, skip it
-		if ok := s.store.PoolExists(ctx, item); ok {
-			continue
-		}
-
 		// initialize newly discovered item
 		wg.Add(1)
 		go func(item SourceItem) {
 			defer wg.Done()
-			s.store.PoolInsert(spanCtx, item)
+
+			// item already exists in the pool, skip it
+			if ok := s.store.PoolExists(ctx, item); ok {
+				return
+			}
+
+			s.store.PoolInsert(ctx, item)
 		}(item)
 	}
 }
 
 func (s *Synchronize[SourceItem, PoolItem]) syncOutdated(ctx context.Context, sourceItems []SourceItem) {
-	spanCtx, span := s.tracer.Start(ctx, s.getSpanName("sync-outdated-items"))
+	spanCtx, span := tracer.Start(ctx, s.getSpanName("sync-outdated-items"))
 	defer span.End()
 
 	var wg sync.WaitGroup
 	defer wg.Wait()
 
 	for _, poolItem := range s.store.PoolList(ctx) {
-		found := s.store.SourceExists(ctx, sourceItems, poolItem)
-		if found {
-			s.store.PoolUpdate(ctx, poolItem)
-			continue
-		}
-
 		// remove the item that is no longer present in the source
 		wg.Add(1)
 		go func(poolItem PoolItem) {
 			defer wg.Done()
+
+			found := s.store.SourceExists(ctx, sourceItems, poolItem)
+			if found {
+				s.store.PoolUpdate(ctx, poolItem)
+
+				return
+			}
+
 			s.store.PoolRemove(spanCtx, poolItem)
 		}(poolItem)
 	}

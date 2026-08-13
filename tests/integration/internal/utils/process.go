@@ -1,0 +1,136 @@
+package utils
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"testing"
+
+	"connectrpc.com/connect"
+
+	"github.com/e2b-dev/infra/packages/shared/pkg/grpc/envd/process"
+	"github.com/e2b-dev/infra/tests/integration/internal/api"
+	"github.com/e2b-dev/infra/tests/integration/internal/setup"
+)
+
+func ExecCommand(tb testing.TB, ctx context.Context, sbx *api.Sandbox, envdClient *setup.EnvdClient, command string, args ...string) error {
+	tb.Helper()
+
+	return ExecCommandWithOptions(tb, ctx, sbx, envdClient, nil, "user", command, args...)
+}
+
+func ExecCommandWithCwd(tb testing.TB, ctx context.Context, sbx *api.Sandbox, envdClient *setup.EnvdClient, cwd *string, command string, args ...string) error {
+	tb.Helper()
+
+	return ExecCommandWithOptions(tb, ctx, sbx, envdClient, cwd, "user", command, args...)
+}
+
+func ExecCommandAsRoot(tb testing.TB, ctx context.Context, sbx *api.Sandbox, envdClient *setup.EnvdClient, command string, args ...string) error {
+	tb.Helper()
+
+	return ExecCommandWithOptions(tb, ctx, sbx, envdClient, nil, "root", command, args...)
+}
+
+func ExecCommandAsRootWithOutput(tb testing.TB, ctx context.Context, sbx *api.Sandbox, envdClient *setup.EnvdClient, command string, args ...string) (string, error) {
+	tb.Helper()
+
+	return ExecCommandWithOutput(tb, ctx, sbx, envdClient, nil, "root", command, args...)
+}
+
+// ExecCommandAsDefaultUserWithOutput runs a command without sending a user
+// header, so envd falls back to the default user set at /init time. This is the
+// path that exercises the template's default user/workdir (it differs from
+// passing an explicit "user").
+func ExecCommandAsDefaultUserWithOutput(tb testing.TB, ctx context.Context, sbx *api.Sandbox, envdClient *setup.EnvdClient, command string, args ...string) (string, error) {
+	tb.Helper()
+
+	return ExecCommandWithOutput(tb, ctx, sbx, envdClient, nil, "", command, args...)
+}
+
+func ExecCommandWithOptions(tb testing.TB, ctx context.Context, sbx *api.Sandbox, envdClient *setup.EnvdClient, cwd *string, user string, command string, args ...string) error {
+	tb.Helper()
+
+	_, err := ExecCommandWithOutput(tb, ctx, sbx, envdClient, cwd, user, command, args...)
+
+	return err
+}
+
+func ExecCommandWithOutput(tb testing.TB, ctx context.Context, sbx *api.Sandbox, envdClient *setup.EnvdClient, cwd *string, user string, command string, args ...string) (string, error) {
+	tb.Helper()
+
+	f := false
+	req := connect.NewRequest(&process.StartRequest{
+		Process: &process.ProcessConfig{
+			Cmd:  command,
+			Args: args,
+			Cwd:  cwd,
+		},
+		Stdin: &f,
+	})
+
+	setup.SetSandboxHeader(tb, req.Header(), sbx.SandboxID)
+	// An empty user omits the auth header so envd uses its default user.
+	if user != "" {
+		setup.SetUserHeader(tb, req.Header(), user)
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	stream, err := envdClient.ProcessClient.Start(ctx, req)
+	if err != nil {
+		return "", err
+	}
+	contextInfo := ""
+	if cwd != nil {
+		contextInfo += fmt.Sprintf(" (cwd: %s)", *cwd)
+	}
+	if user != "user" {
+		contextInfo += fmt.Sprintf(" (user: %s)", user)
+	}
+	fmt.Printf("Executing command %s in sandbox %s%s\n", command, sbx.SandboxID, contextInfo)
+	defer func() {
+		cancel()
+		streamErr := stream.Close()
+		if streamErr != nil {
+			tb.Logf("Error closing stream: %v", streamErr)
+		}
+	}()
+
+	var output strings.Builder
+	for stream.Receive() {
+		select {
+		case <-ctx.Done():
+			// Context canceled, exit the goroutine
+			return "", ctx.Err()
+		default:
+			msg := stream.Msg()
+			tb.Logf("Command [%s] output: %s", command, msg.String())
+
+			// Capture stdout
+			if msg.GetEvent().GetData() != nil {
+				if stdout := msg.GetEvent().GetData().GetStdout(); stdout != nil {
+					output.Write(stdout)
+				}
+
+				if stderr := msg.GetEvent().GetData().GetStderr(); stderr != nil {
+					output.Write(stderr)
+				}
+			}
+
+			if msg.GetEvent().GetEnd() != nil {
+				if msg.GetEvent().GetEnd().GetExitCode() != 0 {
+					return output.String(), fmt.Errorf("command %s in sandbox %s failed with exit code %d", command, sbx.SandboxID, msg.GetEvent().GetEnd().GetExitCode())
+				}
+				tb.Logf("Command [%s] completed successfully in sandbox %s", command, sbx.SandboxID)
+
+				return output.String(), nil
+			}
+		}
+	}
+
+	if err := stream.Err(); err != nil {
+		return output.String(), fmt.Errorf("failed to execute command %s in sandbox %s: %w", command, sbx.SandboxID, err)
+	}
+
+	return output.String(), nil
+}

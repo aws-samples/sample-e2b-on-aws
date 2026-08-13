@@ -1,0 +1,529 @@
+//go:build linux
+
+package network
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"net"
+	"path/filepath"
+	"strconv"
+	"sync/atomic"
+
+	"github.com/containernetworking/plugins/pkg/ns"
+	"github.com/coreos/go-iptables/iptables"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
+	netutils "k8s.io/utils/net"
+
+	"github.com/e2b-dev/infra/packages/shared/pkg/env"
+	"github.com/e2b-dev/infra/packages/shared/pkg/grpc/orchestrator"
+)
+
+var tracer = otel.Tracer("github.com/e2b-dev/infra/packages/orchestrator/pkg/sandbox/network")
+
+const (
+	defaultHostNetworkCIDR = "10.11.0.0/16"
+	defaultVrtNetworkCIDR  = "10.12.0.0/16"
+
+	hostMask          = 32
+	vrtMask           = 31                  // 2 usable ips per block (vpeer and veth)
+	vrtAddressPerSlot = 1 << (32 - vrtMask) // vrt addresses per slot (vpeer and veth)
+
+	tapMask          = 30
+	tapInterfaceName = "tap0"
+	tapIp            = "169.254.0.22"
+	tapMAC           = "02:FC:00:00:00:05"
+	tapHostMAC       = "02:FC:00:00:00:06"
+)
+
+var (
+	hostNetworkCIDR     = getHostNetworkCIDR()
+	vrtNetworkCIDR      = getVrtNetworkCIDR()
+	vrtSlotsSize        = GetVrtSlotsSize()
+	tapHostHardwareAddr = getTapHostHardwareAddr()
+)
+
+// Slot network allocation
+//
+// For each slot, we allocate three IP addresses:
+// Host IP - used to access the sandbox from the host machine
+// Vpeer and Veth IPs - used by the sandbox to communicate with the host
+//
+// Host default namespace creates a /16 CIDR block for the host IPs.
+// Slot with Idx 1 will receive 10.11.0.1 and so on. Its allocated incrementally by slot Idx.
+// Host mask is /32 because we only use one IP per slot.
+//
+// Vrt addresses (vpeer and veth) are allocated from a /31 CIDR block so we can use CIDR for network link routing.
+// By default, they are using 10.12.0.0/16 CIDR block, that can be configured via environment variable.
+// Vpeer receives the first IP in the block, and Veth receives the second IP. Block is calculated as (slot index * addresses per slot allocation).
+// Vrt address per slot is always 2, so we can allocate /31 CIDR block for each slot.
+type Slot struct {
+	Key string
+	Idx int
+
+	Firewall *Firewall
+
+	// firewallCustomRules is used to track if custom firewall rules are set for the slot and need a cleanup.
+	firewallCustomRules atomic.Bool
+
+	// egressDSCP is the class the slot's rule currently stamps (0 = no rule).
+	// Not a synchronization point: callers need exclusive slot ownership,
+	// which the pool guarantees between Get and the recycle give-back.
+	egressDSCP atomic.Uint32
+
+	vPeerIp net.IP
+	vEthIp  net.IP
+	vrtMask net.IPMask
+
+	tapIp   net.IP
+	tapMask net.IPMask
+
+	// HostIP is IP address for the sandbox from the host machine.
+	// You can use it to make requests to the sandbox.
+	HostIP   net.IP
+	hostNet  *net.IPNet
+	hostCIDR string
+
+	hyperloopPort string
+
+	egressProxy EgressProxy
+	config      Config
+}
+
+func NewSlot(key string, idx int, config Config, egressProxy EgressProxy) (*Slot, error) {
+	if idx < 1 || idx > vrtSlotsSize {
+		return nil, fmt.Errorf("slot index %d is out of range [1, %d]", idx, vrtSlotsSize)
+	}
+
+	vEthIp, err := netutils.GetIndexedIP(vrtNetworkCIDR, idx*vrtAddressPerSlot)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get veth indexed IP: %w", err)
+	}
+
+	vPeerIp, err := netutils.GetIndexedIP(vrtNetworkCIDR, idx*vrtAddressPerSlot+1)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get vpeer indexed IP: %w", err)
+	}
+
+	vrtCIDR := fmt.Sprintf("%s/%d", vPeerIp.String(), vrtMask)
+	_, vrtNet, err := net.ParseCIDR(vrtCIDR)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse vrt CIDR: %w", err)
+	}
+
+	hostIp, err := netutils.GetIndexedIP(hostNetworkCIDR, idx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get host IP: %w", err)
+	}
+
+	hostCIDR := fmt.Sprintf("%s/%d", hostIp.String(), hostMask)
+	_, hostNet, err := net.ParseCIDR(hostCIDR)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse host CIDR: %w", err)
+	}
+
+	tapCIDR := fmt.Sprintf("%s/%d", tapIp, tapMask)
+	tapIp, tapNet, err := net.ParseCIDR(tapCIDR)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse tap CIDR: %w", err)
+	}
+
+	slot := &Slot{
+		Key: key,
+		Idx: idx,
+
+		vPeerIp: vPeerIp,
+		vEthIp:  vEthIp,
+		vrtMask: vrtNet.Mask,
+
+		tapIp:   tapIp,
+		tapMask: tapNet.Mask,
+
+		HostIP:   hostIp,
+		hostNet:  hostNet,
+		hostCIDR: hostCIDR,
+
+		hyperloopPort: strconv.FormatUint(uint64(config.HyperloopProxyPort), 10),
+
+		config:      config,
+		egressProxy: egressProxy,
+	}
+
+	return slot, nil
+}
+
+func (s *Slot) VpeerName() string {
+	return "eth0"
+}
+
+func (s *Slot) VpeerIP() net.IP {
+	return s.vPeerIp
+}
+
+func (s *Slot) VethIP() net.IP {
+	return s.vEthIp
+}
+
+func (s *Slot) VethName() string {
+	return fmt.Sprintf("veth-%d", s.Idx)
+}
+
+func (s *Slot) VrtMask() net.IPMask {
+	return s.vrtMask
+}
+
+func (s *Slot) HostIPString() string {
+	return s.HostIP.String()
+}
+
+func (s *Slot) HostMask() net.IPMask {
+	return s.hostNet.Mask
+}
+
+func (s *Slot) HostNet() *net.IPNet {
+	return s.hostNet
+}
+
+func (s *Slot) HostCIDR() string {
+	return s.hostCIDR
+}
+
+func (s *Slot) NamespaceIP() string {
+	return "169.254.0.21"
+}
+
+func (s *Slot) NamespaceID() string {
+	return fmt.Sprintf("ns-%d", s.Idx)
+}
+
+func (s *Slot) TapName() string {
+	return tapInterfaceName
+}
+
+func (s *Slot) TapIP() net.IP {
+	return s.tapIp
+}
+
+func (s *Slot) TapIPString() string {
+	return s.tapIp.String()
+}
+
+func (s *Slot) TapMask() int {
+	return tapMask
+}
+
+func (s *Slot) TapMaskString() string {
+	mask := net.CIDRMask(s.TapMask(), 32)
+
+	return net.IP(mask).String()
+}
+
+func (s *Slot) TapCIDR() net.IPMask {
+	return s.tapMask
+}
+
+func (s *Slot) TapMAC() string {
+	return tapMAC
+}
+
+func (s *Slot) InitializeFirewall() error {
+	if s.Firewall != nil {
+		return fmt.Errorf("firewall is already initialized for slot %s", s.Key)
+	}
+
+	fw, err := NewFirewall(s.TapName(), s.config.OrchestratorInSandboxIPAddress, s.config.AllowSandboxInternalCIDRs)
+	if err != nil {
+		return fmt.Errorf("error initializing firewall: %w", err)
+	}
+	s.Firewall = fw
+
+	return nil
+}
+
+func (s *Slot) CloseFirewall() error {
+	if s.Firewall == nil {
+		return nil
+	}
+
+	if err := s.Firewall.Close(); err != nil {
+		return fmt.Errorf("error closing firewall: %w", err)
+	}
+	s.Firewall = nil
+
+	return nil
+}
+
+// dscpMangleRuleArgs builds the mangle/POSTROUTING rule that stamps the given
+// DSCP class on everything leaving the sandbox netns through the vpeer uplink.
+func (s *Slot) dscpMangleRuleArgs(dscp uint8) []string {
+	return []string{"-o", s.VpeerName(), "-j", "DSCP", "--set-dscp", strconv.Itoa(int(dscp))}
+}
+
+// Without a timeout go-iptables emits a bare --wait, which blocks forever on
+// the legacy backend's host-wide lock.
+const iptablesLockTimeout = 5 // seconds
+
+// One handle for the package: New() execs `iptables --version` per call, and
+// commands run in the calling thread's netns regardless of where New() ran.
+// Cached on success only — a transient New() failure (fork EAGAIN/ENOMEM)
+// must not poison the process. A racing duplicate New() is harmless.
+var cachedIptables atomic.Pointer[iptables.IPTables]
+
+func iptablesHandle() (*iptables.IPTables, error) {
+	if t := cachedIptables.Load(); t != nil {
+		return t, nil
+	}
+
+	t, err := iptables.New(iptables.Timeout(iptablesLockTimeout))
+	if err != nil {
+		return nil, err
+	}
+	cachedIptables.Store(t)
+
+	return t, nil
+}
+
+// applyEgressDSCP re-stamps the slot's egress rule so a build can be marked
+// differently from a regular sandbox. 0 removes the rule; returns without
+// entering the netns when the class already matches.
+func (s *Slot) applyEgressDSCP(ctx context.Context, dscp uint8) error {
+	current := uint8(s.egressDSCP.Load())
+	if current == dscp {
+		return nil
+	}
+
+	_, span := tracer.Start(ctx, "slot-egress-dscp-apply", trace.WithAttributes(
+		attribute.String("namespace_id", s.NamespaceID()),
+		attribute.Int("dscp", int(dscp)),
+	))
+	defer span.End()
+
+	n, err := ns.GetNS(filepath.Join(NetNamespacesDir, s.NamespaceID()))
+	if err != nil {
+		return fmt.Errorf("failed to get slot network namespace '%s': %w", s.NamespaceID(), err)
+	}
+	defer n.Close()
+
+	err = n.Do(func(_ ns.NetNS) error {
+		tables, err := iptablesHandle()
+		if err != nil {
+			return fmt.Errorf("error initializing iptables: %w", err)
+		}
+
+		// Append before delete: DSCP is non-terminal, so the appended (last)
+		// entry wins while both rules exist and egress is never unmarked.
+		// After a partial failure AppendUnique may keep an earlier duplicate
+		// in place instead of moving it last, but every such path errors into
+		// cleanupWith, so no tenant runs on that slot.
+		if dscp > 0 {
+			if err := tables.AppendUnique("mangle", "POSTROUTING", s.dscpMangleRuleArgs(dscp)...); err != nil {
+				return fmt.Errorf("error creating DSCP %d mangle rule on vpeer: %w", dscp, err)
+			}
+
+			s.egressDSCP.Store(uint32(dscp))
+		}
+
+		if current > 0 {
+			if err := tables.DeleteIfExists("mangle", "POSTROUTING", s.dscpMangleRuleArgs(current)...); err != nil {
+				return fmt.Errorf("error removing DSCP %d mangle rule on vpeer: %w", current, err)
+			}
+		}
+
+		if dscp == 0 {
+			s.egressDSCP.Store(0)
+		}
+
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("failed execution in network namespace '%s': %w", s.NamespaceID(), err)
+	}
+
+	return nil
+}
+
+func (s *Slot) ConfigureInternet(ctx context.Context, network *orchestrator.SandboxNetworkConfig) (e error) {
+	ctx, span := tracer.Start(ctx, "slot-internet-configure", trace.WithAttributes(
+		attribute.String("namespace_id", s.NamespaceID()),
+	))
+	defer span.End()
+
+	egress := network.GetEgress()
+	hasUserRules := len(egress.GetAllowedCidrs()) != 0 ||
+		len(egress.GetDeniedCidrs()) != 0 ||
+		len(egress.GetAllowedDomains()) != 0
+	hasBYOP := egress.GetEgressProxyAddress() != ""
+
+	if !hasUserRules && !hasBYOP {
+		// Internet access is allowed by default.
+		return nil
+	}
+
+	s.firewallCustomRules.Store(true)
+
+	n, err := ns.GetNS(filepath.Join(NetNamespacesDir, s.NamespaceID()))
+	if err != nil {
+		return fmt.Errorf("failed to get slot network namespace '%s': %w", s.NamespaceID(), err)
+	}
+	defer n.Close()
+
+	err = n.Do(func(_ ns.NetNS) error {
+		return s.Firewall.ApplyRules(ctx, hasBYOP, egress.GetAllowedCidrs(), egress.GetDeniedCidrs())
+	})
+	if err != nil {
+		return fmt.Errorf("failed execution in network namespace '%s': %w", s.NamespaceID(), err)
+	}
+
+	return nil
+}
+
+// UpdateInternet replaces all user firewall rules atomically in a single nftables flush.
+func (s *Slot) UpdateInternet(ctx context.Context, egress *orchestrator.SandboxNetworkEgressConfig) error {
+	ctx, span := tracer.Start(ctx, "slot-internet-update", trace.WithAttributes(
+		attribute.String("namespace_id", s.NamespaceID()),
+	))
+	defer span.End()
+
+	allowedCIDRs := egress.GetAllowedCidrs()
+	deniedCIDRs := egress.GetDeniedCidrs()
+	hasBYOP := egress.GetEgressProxyAddress() != ""
+
+	n, err := ns.GetNS(filepath.Join(NetNamespacesDir, s.NamespaceID()))
+	if err != nil {
+		return fmt.Errorf("failed to get slot network namespace '%s': %w", s.NamespaceID(), err)
+	}
+	defer n.Close()
+
+	// Set before mutating: a partial failure must still trigger cleanup.
+	s.firewallCustomRules.Store(true)
+
+	err = n.Do(func(_ ns.NetNS) error {
+		return s.Firewall.ApplyRules(ctx, hasBYOP, allowedCIDRs, deniedCIDRs)
+	})
+	if err != nil {
+		return fmt.Errorf("failed execution in network namespace '%s': %w", s.NamespaceID(), err)
+	}
+
+	return nil
+}
+
+// DenyEgress drops all guest-originated traffic except the orchestrator control
+// path, isolating a throwaway sandbox (the pause-resume prefetch harvest) so its
+// envd init cannot reach the network. Like UpdateInternet it marks custom rules
+// so the slot's cleanup resets the firewall before reuse.
+func (s *Slot) DenyEgress(ctx context.Context) error {
+	ctx, span := tracer.Start(ctx, "slot-internet-deny-egress", trace.WithAttributes(
+		attribute.String("namespace_id", s.NamespaceID()),
+	))
+	defer span.End()
+
+	// Guard against an uninitialized firewall before marking custom rules: a
+	// stored flag with a nil firewall would also panic the cleanup (ResetInternet).
+	if s.Firewall == nil {
+		return fmt.Errorf("firewall is not initialized for slot '%s'", s.NamespaceID())
+	}
+
+	n, err := ns.GetNS(filepath.Join(NetNamespacesDir, s.NamespaceID()))
+	if err != nil {
+		return fmt.Errorf("failed to get slot network namespace '%s': %w", s.NamespaceID(), err)
+	}
+	defer n.Close()
+
+	// Set before mutating: a partial failure must still trigger cleanup.
+	s.firewallCustomRules.Store(true)
+
+	err = n.Do(func(_ ns.NetNS) error {
+		return s.Firewall.DenyEgress(ctx)
+	})
+	if err != nil {
+		return fmt.Errorf("failed execution in network namespace '%s': %w", s.NamespaceID(), err)
+	}
+
+	return nil
+}
+
+func (s *Slot) ResetInternet(ctx context.Context) error {
+	ctx, span := tracer.Start(ctx, "slot-internet-reset", trace.WithAttributes(
+		attribute.String("namespace_id", s.NamespaceID()),
+	))
+	defer span.End()
+
+	if !s.firewallCustomRules.Load() {
+		return nil
+	}
+
+	n, err := ns.GetNS(filepath.Join(NetNamespacesDir, s.NamespaceID()))
+	if err != nil {
+		return fmt.Errorf("failed to get slot network namespace '%s': %w", s.NamespaceID(), err)
+	}
+	defer n.Close()
+
+	err = n.Do(func(_ ns.NetNS) error {
+		// Revert BYOP so the next tenant can't inherit non-TCP-only deny rules.
+		return s.Firewall.ApplyRules(ctx, false, nil, nil)
+	})
+	if err != nil {
+		return fmt.Errorf("failed execution in network namespace '%s': %w", s.NamespaceID(), err)
+	}
+
+	s.firewallCustomRules.Store(false)
+
+	return nil
+}
+
+func getHostNetworkCIDR() *net.IPNet {
+	cidr := env.GetEnv("SANDBOXES_HOST_NETWORK_CIDR", defaultHostNetworkCIDR)
+
+	_, subnet, err := net.ParseCIDR(cidr)
+	if err != nil {
+		log.Fatalf("Failed to parse network CIDR %s: %v", cidr, err)
+	}
+
+	log.Println("Using host network cidr", "cidr", cidr)
+
+	return subnet
+}
+
+// getTapHostHardwareAddr parses the fixed tapHostMAC constant once at package
+// init, so CreateNetwork doesn't reparse a value that can never change or
+// fail at runtime.
+func getTapHostHardwareAddr() net.HardwareAddr {
+	addr, err := net.ParseMAC(tapHostMAC)
+	if err != nil {
+		log.Fatalf("Failed to parse tap host MAC address %s: %v", tapHostMAC, err)
+	}
+
+	return addr
+}
+
+func getVrtNetworkCIDR() *net.IPNet {
+	cidr := env.GetEnv("SANDBOXES_VRT_NETWORK_CIDR", defaultVrtNetworkCIDR)
+
+	_, subnet, err := net.ParseCIDR(cidr)
+	if err != nil {
+		log.Fatalf("Failed to parse network CIDR %s: %v", cidr, err)
+	}
+
+	log.Printf("Using vrt network cidr %s", cidr)
+
+	return subnet
+}
+
+func GetVrtSlotsSize() int {
+	ones, _ := getVrtNetworkCIDR().Mask.Size()
+
+	// total IPs in the CIDR block
+	totalIPs := 1 << (32 - ones)
+
+	// total slots that we can allocate
+	// we need to divide total IPs by number of addresses per slot (vpeer and veth)
+	// then we subtract the number of addresses so it will not overflow, because we are adding them incrementally by slot index
+	totalSlots := (totalIPs / vrtAddressPerSlot) - vrtAddressPerSlot
+
+	log.Printf("Using network slot size: %d", totalSlots)
+
+	return totalSlots
+}

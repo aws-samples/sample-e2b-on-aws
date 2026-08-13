@@ -5,14 +5,13 @@ import (
 	"fmt"
 
 	"connectrpc.com/connect"
-	"github.com/rs/zerolog"
 
 	"github.com/e2b-dev/infra/packages/envd/internal/logs"
 	"github.com/e2b-dev/infra/packages/envd/internal/services/process/handler"
 	rpc "github.com/e2b-dev/infra/packages/envd/internal/services/spec/process"
 )
 
-func handleInput(ctx context.Context, process *handler.Handler, in *rpc.ProcessInput, logger *zerolog.Logger) error {
+func handleInput(process *handler.Handler, in *rpc.ProcessInput) error {
 	switch in.GetInput().(type) {
 	case *rpc.ProcessInput_Pty:
 		err := process.WriteTty(in.GetPty())
@@ -26,26 +25,20 @@ func handleInput(ctx context.Context, process *handler.Handler, in *rpc.ProcessI
 			return connect.NewError(connect.CodeInternal, fmt.Errorf("error writing to stdin: %w", err))
 		}
 
-		logger.Debug().
-			Str("event_type", "stdin").
-			Interface("stdin", in.GetStdin()).
-			Str(string(logs.OperationIDKey), ctx.Value(logs.OperationIDKey).(string)).
-			Send()
-
 	default:
-		return connect.NewError(connect.CodeUnimplemented, fmt.Errorf("invalid input type %T", in.Input))
+		return connect.NewError(connect.CodeUnimplemented, fmt.Errorf("invalid input type %T", in.GetInput()))
 	}
 
 	return nil
 }
 
-func (s *Service) SendInput(ctx context.Context, req *connect.Request[rpc.SendInputRequest]) (*connect.Response[rpc.SendInputResponse], error) {
+func (s *Service) SendInput(_ context.Context, req *connect.Request[rpc.SendInputRequest]) (*connect.Response[rpc.SendInputResponse], error) {
 	proc, err := s.getProcess(req.Msg.GetProcess())
 	if err != nil {
 		return nil, err
 	}
 
-	err = handleInput(ctx, proc, req.Msg.GetInput(), s.logger)
+	err = handleInput(proc, req.Msg.GetInput())
 	if err != nil {
 		return nil, err
 	}
@@ -57,7 +50,7 @@ func (s *Service) StreamInput(ctx context.Context, stream *connect.ClientStream[
 	return logs.LogClientStreamWithoutEvents(ctx, s.logger, stream, s.streamInputHandler)
 }
 
-func (s *Service) streamInputHandler(ctx context.Context, stream *connect.ClientStream[rpc.StreamInputRequest]) (*connect.Response[rpc.StreamInputResponse], error) {
+func (s *Service) streamInputHandler(_ context.Context, stream *connect.ClientStream[rpc.StreamInputRequest]) (*connect.Response[rpc.StreamInputResponse], error) {
 	var proc *handler.Handler
 
 	for stream.Receive() {
@@ -72,14 +65,13 @@ func (s *Service) streamInputHandler(ctx context.Context, stream *connect.Client
 
 			proc = p
 		case *rpc.StreamInputRequest_Data:
-			err := handleInput(ctx, proc, req.GetData().GetInput(), s.logger)
+			err := handleInput(proc, req.GetData().GetInput())
 			if err != nil {
 				return nil, err
 			}
 		case *rpc.StreamInputRequest_Keepalive:
-			break
 		default:
-			return nil, connect.NewError(connect.CodeUnimplemented, fmt.Errorf("invalid event type %T", req.Event))
+			return nil, connect.NewError(connect.CodeUnimplemented, fmt.Errorf("invalid event type %T", req.GetEvent()))
 		}
 	}
 
@@ -89,4 +81,20 @@ func (s *Service) streamInputHandler(ctx context.Context, stream *connect.Client
 	}
 
 	return connect.NewResponse(&rpc.StreamInputResponse{}), nil
+}
+
+func (s *Service) CloseStdin(
+	_ context.Context,
+	req *connect.Request[rpc.CloseStdinRequest],
+) (*connect.Response[rpc.CloseStdinResponse], error) {
+	handler, err := s.getProcess(req.Msg.GetProcess())
+	if err != nil {
+		return nil, err
+	}
+
+	if err := handler.CloseStdin(); err != nil {
+		return nil, connect.NewError(connect.CodeUnknown, fmt.Errorf("error closing stdin: %w", err))
+	}
+
+	return connect.NewResponse(&rpc.CloseStdinResponse{}), nil
 }

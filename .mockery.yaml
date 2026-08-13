@@ -1,0 +1,89 @@
+packages:
+  github.com/e2b-dev/infra/packages/envd/internal/services/spec/filesystem/filesystemconnect:
+    config:
+      include-auto-generated: true
+    interfaces:
+      FilesystemHandler:
+        config:
+          dir: packages/envd/internal/services/spec/filesystem/filesystemconnect/mocks
+          filename: mocks.go
+          pkgname: filesystemconnectmocks
+
+  github.com/e2b-dev/infra/packages/shared/pkg/grpc/orchestrator:
+    config:
+      include-auto-generated: true
+    interfaces:
+      ChunkServiceClient:
+        config:
+          dir: packages/shared/pkg/grpc/orchestrator/mocks
+          filename: mockchunkserviceclient.go
+          pkgname: orchestratormocks
+      ChunkService_ReadAtBuildSeekableClient:
+        config:
+          dir: packages/shared/pkg/grpc/orchestrator/mocks
+          filename: mockchunkservicereadatbuildseekableclient.go
+          pkgname: orchestratormocks
+      ChunkService_ReadAtBuildSeekableServer:
+        config:
+          dir: packages/shared/pkg/grpc/orchestrator/mocks
+          filename: mockchunkservicereadatbuildseekableserver.go
+          pkgname: orchestratormocks
+      ChunkService_GetBuildBlobClient:
+        config:
+          dir: packages/shared/pkg/grpc/orchestrator/mocks
+          filename: mockchunkservicegetbuildblobclient.go
+          pkgname: orchestratormocks
+
+  github.com/e2b-dev/infra/packages/shared/pkg/storage:
+    interfaces:
+      featureFlagsClient:
+        config:
+          dir: packages/shared/pkg/storage
+          filename: mock_featureflagsclient.go
+          pkgname: storage
+          inpackage: true
+          structname: MockFeatureFlagsClient
+      Blob:
+        config:
+          dir: packages/shared/pkg/storage
+          filename: mock_blob.go
+          pkgname: storage
+          inpackage: true
+      Seekable:
+        config:
+          dir: packages/shared/pkg/storage
+          filename: mock_seekable.go
+          pkgname: storage
+          inpackage: true
+      StorageProvider:
+        config:
+          dir: packages/shared/pkg/storage
+          filename: mock_storageprovider.go
+          pkgname: storage
+          inpackage: true
+
+  io:
+    interfaces:
+      Reader:
+        config:
+          dir: packages/shared/pkg/storage
+          filename: mock_ioreader.go
+          pkgname: storage
+          inpackage: true
+
+  github.com/e2b-dev/infra/packages/shared/pkg/utils:
+    interfaces:
+      fileOps:
+        config:
+          dir: packages/shared/pkg/utils
+          filename: mocks_test.go
+          pkgname: utils
+
+  github.com/e2b-dev/infra/packages/api/internal/handlers:
+    interfaces:
+      featureFlagsClient:
+        config:
+          dir: packages/api/internal/handlers/mocks
+          filename: mockfeatureflagsclient.go
+          pkgname: handlersmocks
+          structname: MockFeatureFlagsClient

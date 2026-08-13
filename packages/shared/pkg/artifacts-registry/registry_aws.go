@@ -45,7 +45,7 @@ func NewAWSArtifactsRegistry(ctx context.Context) (*AWSArtifactsRegistry, error)
 	}, nil
 }
 
-func (g *AWSArtifactsRegistry) Delete(ctx context.Context, templateId string, buildId string) error {
+func (g *AWSArtifactsRegistry) Delete(ctx context.Context, _ string, buildId string) error {
 	imageIds := []types.ImageIdentifier{
 		{ImageTag: &buildId},
 	}
@@ -67,9 +67,8 @@ func (g *AWSArtifactsRegistry) Delete(ctx context.Context, templateId string, bu
 	return nil
 }
 
-func (g *AWSArtifactsRegistry) GetTag(ctx context.Context, templateId string, buildId string) (string, error) {
-	repositoryNameWithTemplate := fmt.Sprintf("%s/%s", g.repositoryName, templateId)
-	res, err := g.client.DescribeRepositories(ctx, &ecr.DescribeRepositoriesInput{RepositoryNames: []string{repositoryNameWithTemplate}})
+func (g *AWSArtifactsRegistry) GetTag(ctx context.Context, _ string, buildId string) (string, error) {
+	res, err := g.client.DescribeRepositories(ctx, &ecr.DescribeRepositoriesInput{RepositoryNames: []string{g.repositoryName}})
 	if err != nil {
 		return "", fmt.Errorf("failed to describe aws ecr repository: %w", err)
 	}
@@ -97,27 +96,13 @@ func (g *AWSArtifactsRegistry) GetImage(ctx context.Context, templateId string, 
 		return nil, fmt.Errorf("failed to get auth: %w", err)
 	}
 
-	// Try with platform selector first (for multi-arch manifest lists)
-	img, err := remote.Image(ref, remote.WithAuth(auth), remote.WithPlatform(platform))
-	if err == nil {
-		return img, nil
-	}
-
-	// Fall back to direct pull for single-arch manifests (e.g. images pushed by docker CLI)
-	img, err = remote.Image(ref, remote.WithAuth(auth))
+	img, err := remote.Image(ref, remote.WithAuth(auth), remote.WithPlatform(platform), remote.WithContext(ctx))
 	if err != nil {
 		return nil, fmt.Errorf("error pulling image: %w", err)
 	}
 
-	// Verify architecture matches to avoid silently using wrong-arch images
-	cfg, cfgErr := img.ConfigFile()
-	if cfgErr == nil && cfg.Architecture != platform.Architecture {
-		return nil, fmt.Errorf("image architecture mismatch: want %s, got %s", platform.Architecture, cfg.Architecture)
-	}
-
 	return img, nil
 }
-
 
 func (g *AWSArtifactsRegistry) getAuthToken(ctx context.Context) (*authn.Basic, error) {
 	res, err := g.client.GetAuthorizationToken(ctx, &ecr.GetAuthorizationTokenInput{})
@@ -126,7 +111,7 @@ func (g *AWSArtifactsRegistry) getAuthToken(ctx context.Context) (*authn.Basic, 
 	}
 
 	if len(res.AuthorizationData) == 0 {
-		return nil, fmt.Errorf("no aws ecr auth token found")
+		return nil, errors.New("no aws ecr auth token found")
 	}
 
 	authData := res.AuthorizationData[0]
@@ -138,7 +123,7 @@ func (g *AWSArtifactsRegistry) getAuthToken(ctx context.Context) (*authn.Basic, 
 	// split into username and password
 	parts := strings.SplitN(string(decodedToken), ":", 2)
 	if len(parts) != 2 {
-		return nil, fmt.Errorf("invalid aws ecr auth token")
+		return nil, errors.New("invalid aws ecr auth token")
 	}
 
 	username := parts[0]

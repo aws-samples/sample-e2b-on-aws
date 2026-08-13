@@ -12,18 +12,24 @@ import (
 	"github.com/e2b-dev/infra/packages/shared/pkg/consts"
 )
 
+// StreamToChannel pumps messages from stream into the returned message
+// channel. The error channel holds the terminal status of the stream (stream
+// error or ctx cancellation), if any, before the message channel is closed:
+// after observing the closed message channel, callers must drain the error
+// channel to learn how the stream ended.
 func StreamToChannel[Res any](ctx context.Context, stream *connect.ServerStreamForClient[Res]) (<-chan *Res, <-chan error) {
 	out := make(chan *Res)
+	// Buffered so the terminal send never blocks.
 	errCh := make(chan error, 1)
 
 	go func() {
 		defer close(out)
-		defer close(errCh)
 
 		for stream.Receive() {
 			select {
 			case <-ctx.Done():
-				// Context canceled, exit the goroutine
+				errCh <- ctx.Err()
+
 				return
 			case out <- stream.Msg():
 				// Send the message to the channel
@@ -32,6 +38,7 @@ func StreamToChannel[Res any](ctx context.Context, stream *connect.ServerStreamF
 
 		if err := stream.Err(); err != nil {
 			errCh <- err
+
 			return
 		}
 	}()

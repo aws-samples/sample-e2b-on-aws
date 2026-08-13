@@ -1,66 +1,574 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
+	"net/netip"
+	"os/exec"
+	"slices"
+	"strings"
+	"time"
+
+	"github.com/awnumar/memguard"
+	"github.com/rs/zerolog"
+	"github.com/txn2/txeh"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/e2b-dev/infra/packages/envd/internal/host"
 	"github.com/e2b-dev/infra/packages/envd/internal/logs"
+	"github.com/e2b-dev/infra/packages/envd/internal/logs/ratelimit"
+	"github.com/e2b-dev/infra/packages/envd/pkg"
+	"github.com/e2b-dev/infra/packages/shared/pkg/keys"
 )
+
+// /init is hammered by the orchestrator's infinite retry loop, so a
+// persistent pin failure would otherwise flood the log.
+var pinMMDSWarnLimit = ratelimit.New(10 * time.Second)
+
+var (
+	ErrAccessTokenMismatch           = errors.New("access token validation failed")
+	ErrAccessTokenResetNotAuthorized = errors.New("access token reset not authorized")
+)
+
+const (
+	maxTimeInPast   = 50 * time.Millisecond
+	maxTimeInFuture = 5 * time.Second
+)
+
+// validateInitAccessToken validates the access token for /init requests.
+// Token is valid if it matches the existing token OR the MMDS hash.
+// If neither exists, first-time setup is allowed.
+func (a *API) validateInitAccessToken(ctx context.Context, requestToken *SecureToken) error {
+	requestTokenSet := requestToken.IsSet()
+
+	// Fast path: token matches existing
+	if a.accessToken.IsSet() && requestTokenSet && a.accessToken.EqualsSecure(requestToken) {
+		return nil
+	}
+
+	// Check MMDS only if token didn't match existing
+	matchesMMDS, mmdsExists := a.checkMMDSHash(ctx, requestToken)
+
+	switch {
+	case matchesMMDS:
+		return nil
+	case !a.accessToken.IsSet() && !mmdsExists:
+		return nil // first-time setup
+	case !requestTokenSet:
+		return ErrAccessTokenResetNotAuthorized
+	default:
+		return ErrAccessTokenMismatch
+	}
+}
+
+// checkMMDSHash checks if the request token matches the MMDS hash.
+// Returns (matches, mmdsExists).
+//
+// The MMDS hash is set by the orchestrator during Resume:
+//   - hash(token): requires this specific token
+//   - hash(""): explicitly allows nil token (token reset authorized)
+//   - "": MMDS not properly configured, no authorization granted
+func (a *API) checkMMDSHash(ctx context.Context, requestToken *SecureToken) (bool, bool) {
+	if a.isNotFC {
+		return false, false
+	}
+
+	mmdsHash, err := a.mmdsClient.GetAccessTokenHash(ctx)
+	if err != nil {
+		// Self-heal: a user-installed PREROUTING/OUTPUT redirect on
+		// 169.254.169.254:80 in the same netns can shadow our route.
+		// Re-pin our RETURN rule at position 1 of nat PREROUTING and
+		// OUTPUT, then retry once.
+		if pinErr := host.PinMMDSRoute(ctx); pinErr != nil {
+			if ok, suppressed := pinMMDSWarnLimit.Allow(); ok {
+				a.logger.Warn().Err(pinErr).Int64("suppressed", suppressed).Msg("failed to pin MMDS iptables route")
+			}
+		}
+		mmdsHash, err = a.mmdsClient.GetAccessTokenHash(ctx)
+	}
+	if err != nil {
+		return false, false
+	}
+
+	if mmdsHash == "" {
+		return false, false
+	}
+
+	if !requestToken.IsSet() {
+		return mmdsHash == keys.HashAccessToken(""), true
+	}
+
+	tokenBytes, err := requestToken.Bytes()
+	if err != nil {
+		return false, true
+	}
+	defer memguard.WipeBytes(tokenBytes)
+
+	return keys.HashAccessTokenBytes(tokenBytes) == mmdsHash, true
+}
 
 func (a *API) PostInit(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
+
+	// Report the running envd version on every /init response (even error/stale
+	// ones) so the orchestrator can read the live version off the resume-path
+	// call it already makes — no extra round-trip. Set before any WriteHeader.
+	w.Header().Set("X-Envd-Version", pkg.Version)
+
+	// If this envd booted from a live-upgrade handover, advertise its outcome on
+	// /init so the orchestrator can record it — the envd-side result (re-adopted
+	// procs, restored retained exits, watcher re-arm success/failures) is
+	// otherwise only logged in-guest and invisible fleet-wide. Set before any
+	// WriteHeader.
+	if a.handover != nil {
+		if b, err := json.Marshal(a.handover); err == nil {
+			w.Header().Set("X-Envd-Handover", string(b))
+		}
+	}
+
+	ctx := r.Context()
 
 	operationID := logs.AssignOperationID()
 	logger := a.logger.With().Str(string(logs.OperationIDKey), operationID).Logger()
 
 	if r.Body != nil {
-		var initRequest PostInitJSONBody
-
-		err := json.NewDecoder(r.Body).Decode(&initRequest)
-		if err != nil && err != io.EOF {
-			logger.Error().Msgf("Failed to decode request: %v", err)
+		// Read raw body so we can wipe it after parsing
+		body, err := io.ReadAll(r.Body)
+		// Ensure body is wiped after we're done
+		defer memguard.WipeBytes(body)
+		if err != nil {
+			logger.Error().Msgf("Failed to read request body: %v", err)
 			w.WriteHeader(http.StatusBadRequest)
 
 			return
 		}
 
-		if initRequest.EnvVars != nil {
-			logger.Debug().Msg(fmt.Sprintf("Setting %d env vars", len(*initRequest.EnvVars)))
+		var initRequest PostInitJSONBody
+		if len(body) > 0 {
+			err = json.Unmarshal(body, &initRequest)
+			if err != nil {
+				logger.Error().Msgf("Failed to decode request: %v", err)
+				w.WriteHeader(http.StatusBadRequest)
 
-			for key, value := range *initRequest.EnvVars {
-				logger.Debug().Msgf("Setting env var for %s", key)
-				a.envVars.Store(key, value)
-			}
-		}
-
-		if initRequest.AccessToken != nil {
-			if a.accessToken != nil && *initRequest.AccessToken != *a.accessToken {
-				logger.Error().Msg("Access token is already set and cannot be changed")
-				w.WriteHeader(http.StatusConflict)
 				return
 			}
-
-			logger.Debug().Msg("Setting access token")
-			a.accessToken = initRequest.AccessToken
 		}
+
+		// Ensure request token is destroyed if not transferred via TakeFrom.
+		// This handles: validation failures, timestamp-based skips, and any early returns.
+		// Safe because Destroy() is nil-safe and TakeFrom clears the source.
+		defer initRequest.AccessToken.Destroy()
+
+		if err := a.initLock.Acquire(ctx, 1); err != nil {
+			w.WriteHeader(http.StatusServiceUnavailable)
+
+			return
+		}
+		defer a.initLock.Release(1)
+
+		// Validate auth before installing the unfreeze defer or running SetData,
+		// so stale/replayed but unauthorized requests can't thaw cgroups.
+		if err := a.validateInitAccessToken(ctx, initRequest.AccessToken); err != nil {
+			writeInitError(w, logger, err)
+
+			return
+		}
+
+		// Run on every /init regardless of the Timestamp guard, so stale/replayed
+		// requests still thaw cgroups after pre-pause freeze.
+		defer a.unfreezeUserCgroups(ctx, logger)
+
+		// Restore the access token (and env) BEFORE marking the envd initialized.
+		// On a live-upgraded envd, WithAuthorization only fails CLOSED while
+		// !initialized; flipping initialized first, with the token not yet
+		// restored, falls through to the fail-OPEN path and lets a re-adopted
+		// (and possibly hostile) guest process reach control endpoints — including
+		// /upgrade — unauthenticated in that window. Update only if the request is
+		// newer (or carries no timestamp); a stale/replayed /init keeps the token
+		// already set by the first one.
+		if initRequest.Timestamp == nil || a.lastSetTime.SetToGreater(initRequest.Timestamp.UnixNano()) {
+			if err := a.SetData(ctx, logger, initRequest); err != nil {
+				writeInitError(w, logger, err)
+
+				return
+			}
+		}
+
+		// Auth passed and token restored: mark the envd initialized so the
+		// live-upgrade /upgrade endpoint and the post-upgrade fallback thaw open
+		// up — a guest process that can't pass auth can't flip this and drive an
+		// unauthenticated upgrade.
+		a.initialized.Store(true)
 	}
 
-	logger.Debug().Msg("Syncing host")
-
-	go func() {
-		err := host.Sync()
-		if err != nil {
-			logger.Error().Msgf("Failed to sync clock: %v", err)
-		} else {
-			logger.Trace().Msg("Clock synced")
-		}
+	go func() { //nolint:contextcheck // TODO: fix this later
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		host.PollForMMDSOpts(ctx, a.mmdsChan, a.defaults.EnvVars)
 	}()
 
 	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Content-Type", "")
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *API) SetData(ctx context.Context, logger zerolog.Logger, data PostInitJSONBody) error {
+	if data.Timestamp != nil {
+		// Check if current time differs significantly from the received timestamp
+		if shouldSetSystemTime(time.Now(), *data.Timestamp) {
+			logger.Debug().Msgf("Setting sandbox start time to: %v", *data.Timestamp)
+			if err := setSystemTime(*data.Timestamp); err != nil {
+				logger.Error().Msgf("Failed to set system time: %v", err)
+			}
+		} else {
+			logger.Debug().Msgf("Current time is within acceptable range of timestamp %v, not setting system time", *data.Timestamp)
+		}
+	}
+
+	if data.EnvVars != nil {
+		keys := slices.Collect(maps.Keys(*data.EnvVars))
+		logger.Debug().Msgf("Setting %d env vars: %s", len(keys), strings.Join(keys, ", "))
+		a.defaults.EnvVars.ReplaceUserVars(*data.EnvVars)
+	}
+
+	if data.AccessToken.IsSet() {
+		logger.Debug().Msg("Setting access token")
+		a.accessToken.TakeFrom(data.AccessToken)
+	} else if a.accessToken.IsSet() {
+		logger.Debug().Msg("Clearing access token")
+		a.accessToken.Destroy()
+	}
+
+	if data.HyperloopIP != nil {
+		go a.SetupHyperloop(*data.HyperloopIP)
+	}
+
+	if data.DefaultUser != nil && *data.DefaultUser != "" {
+		logger.Debug().Msgf("Setting default user to: %s", *data.DefaultUser)
+		a.defaults.User = *data.DefaultUser
+	}
+
+	if data.DefaultWorkdir != nil && *data.DefaultWorkdir != "" {
+		logger.Debug().Msgf("Setting default workdir to: %s", *data.DefaultWorkdir)
+		a.defaults.Workdir = data.DefaultWorkdir
+	}
+
+	if data.CaBundle != nil && *data.CaBundle != "" {
+		if err := a.caCertInstaller.Install(ctx, *data.CaBundle); err != nil {
+			return fmt.Errorf("failed to install CA bundle: %w", err)
+		}
+	}
+
+	if data.VolumeMounts != nil {
+		if err := a.setupNFS(ctx, logger, data.LifecycleID, *data.VolumeMounts); err != nil {
+			return fmt.Errorf("failed to setup NFS volumes: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// userCgroupsToFreeze is the cgroup set frozen pre-pause and thawed on /init.
+// PostFreeze freezes user/pty cgroups directly (no Process.Start / shell).
+// Orchestrator calls this just before pause; the frozen state persists into the
+// snapshot and /init thaws on resume. Best-effort: tries every cgroup even if
+// one fails so we freeze as many as possible before the snapshot.
+func (a *API) PostFreeze(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+
+	logger := a.logger.With().Str(string(logs.OperationIDKey), logs.AssignOperationID()).Logger()
+
+	if err := a.workloadFreezer.Freeze(r.Context()); err != nil {
+		// A failed lock acquire means the request ctx was cancelled; a failed
+		// sweep leaves ctx intact.
+		if r.Context().Err() != nil {
+			w.WriteHeader(http.StatusServiceUnavailable)
+
+			return
+		}
+		logger.Error().Err(err).Msg("freeze workload cgroups")
+		jsonError(w, http.StatusInternalServerError, err)
+
+		return
+	}
+
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// PostUnfreeze thaws user/pty cgroups directly. Exists ONLY for the
+// orchestrator's pause-failure rollback path; the resume thaw runs via /init's
+// deferred unfreeze and must not be replaced by this endpoint. Best-effort: tries
+// every cgroup even if one fails so a partial failure cannot leave the rest frozen.
+func (a *API) PostUnfreeze(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+
+	logger := a.logger.With().Str(string(logs.OperationIDKey), logs.AssignOperationID()).Logger()
+
+	if err := a.workloadFreezer.Unfreeze(r.Context()); err != nil {
+		logger.Error().Err(err).Msg("unfreeze workload cgroups")
+		jsonError(w, http.StatusInternalServerError, err)
+
+		return
+	}
+
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// unfreezeUserCgroups unfreezes user/pty cgroups (idempotent if not frozen).
+// The freezer detaches the wait from ctx cancellation so the unfreeze always
+// completes.
+func (a *API) unfreezeUserCgroups(ctx context.Context, logger zerolog.Logger) {
+	if err := a.workloadFreezer.Unfreeze(ctx); err != nil {
+		logger.Warn().Err(err).Msg("unfreeze workload cgroups")
+	}
+}
+
+func writeInitError(w http.ResponseWriter, logger zerolog.Logger, err error) {
+	switch {
+	case errors.Is(err, ErrAccessTokenMismatch), errors.Is(err, ErrAccessTokenResetNotAuthorized):
+		w.WriteHeader(http.StatusUnauthorized)
+	case errors.Is(err, host.ErrCAInstallInProgress):
+		// Not a failure, a concurrent install still holds the CA lock.
+		logger.Warn().Err(err).Msg("CA initialization still in progress, retrying")
+		w.WriteHeader(http.StatusServiceUnavailable)
+	default:
+		logger.Error().Msgf("Failed to set data: %v", err)
+		w.WriteHeader(http.StatusBadRequest)
+	}
+	w.Write([]byte(err.Error()))
+}
+
+var nfsOptions = strings.Join([]string{
+	// wait for data to be sent to proxy server before returning.
+	// async might cause issues if the sandbox is shut down suddenly.
+	"sync",
+
+	"rsize=1048576",  // 1 MB read buffer
+	"wsize=1048576",  // 1 MB write buffer
+	"mountproto=tcp", // nfs proxy only supports tcp
+	"mountport=2049", // nfs proxy only supports mounting on port 2049
+	"proto=tcp",      // nfs proxy only supports tcp
+	"port=2049",      // nfs proxy only supports mounting on port 2049
+	"nfsvers=3",      // nfs proxy is nfs version 3
+	"noacl",          // no reason for acl in the sandbox
+
+	// disable caching so that pause/resume works correctly
+	"noac",
+	"lookupcache=none",
+}, ",")
+
+const nfsMountTimeout = 10 * time.Second
+
+func (a *API) setupNFS(ctx context.Context, logger zerolog.Logger, lifecycleID *string, mounts []VolumeMount) (e error) {
+	// Prevent concurrent mounting attempts
+	if !a.isMountingNFS.CompareAndSwap(false, true) {
+		logger.Debug().Msg("NFS volumes already mounting")
+
+		return e
+	}
+	defer a.isMountingNFS.Store(false)
+
+	logger.Debug().Msg("Setting up NFS volumes")
+
+	ctx = context.WithoutCancel(ctx)                         // don't allow request context cancellation to propagate
+	ctx, cancel := context.WithTimeout(ctx, nfsMountTimeout) // don't let the nfs mount run forever
+	defer cancel()
+
+	wg, wgCtx := errgroup.WithContext(ctx)
+
+	requestLifecycleID := derefString(lifecycleID)
+
+	for _, volume := range mounts {
+		// Check if this path is already mounted for the current lifecycle
+		mountedLifecycle, isMounted := a.mountedPaths.Load(volume.Path)
+		mountedLifecycleID := asString(mountedLifecycle)
+		if !shouldRemountNFS(isMounted, mountedLifecycleID, requestLifecycleID) {
+			logger.Debug().Msgf("Skipping %q, already mounted for lifecycle %q", volume.Path, requestLifecycleID)
+
+			continue
+		}
+
+		if isMounted {
+			logger.Debug().Msgf("Lifecycle changed for %q: %q -> %q", volume.Path, mountedLifecycleID, requestLifecycleID)
+		}
+
+		logger.Debug().Msgf("Setting up %s at %q", volume.NfsTarget, volume.Path)
+
+		wg.Go(func() error {
+			// Unmount if currently mounted (handles stale mounts from previous lifecycle)
+			if err := a.unmountNFS(wgCtx, logger, volume.Path); err != nil {
+				return fmt.Errorf("failed to unmount stale NFS mount at %q: %w", volume.Path, err)
+			}
+
+			if err := a.mountNFS(wgCtx, volume.NfsTarget, volume.Path); err != nil {
+				return fmt.Errorf("failed to mount NFS at %q: %w", volume.Path, err)
+			}
+
+			a.mountedPaths.Store(volume.Path, requestLifecycleID)
+
+			return nil
+		})
+	}
+
+	return wg.Wait()
+}
+
+func (a *API) unmountNFS(ctx context.Context, logger zerolog.Logger, path string) error {
+	// Check if actually mounted before trying to unmount.
+	// findmnt returns exit code 1 when path is not a mount point - that's not an error.
+	data, err := exec.CommandContext(ctx, "findmnt", "--noheadings", "--output", "SOURCE", path).CombinedOutput()
+	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+			// Not mounted - nothing to unmount
+			return nil
+		}
+
+		return fmt.Errorf("failed to check if %q is mounted: %w", path, err)
+	}
+
+	source := strings.TrimSpace(string(data))
+	if source == "" {
+		return nil // already unmounted
+	}
+
+	logger.Debug().Msgf("Unmounting stale NFS mount at %q (was: %s)", path, source)
+
+	if data, err = exec.CommandContext(ctx, "umount", "--force", path).CombinedOutput(); err != nil {
+		logger.Warn().Err(err).Str("path", path).Str("output", string(data)).Msg("Forced NFS umount failed, falling back to lazy")
+		// Fresh ctx so the forced umount running out of budget doesn't kill the fallback.
+		lazyCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+		defer cancel()
+		if data, err = exec.CommandContext(lazyCtx, "umount", "--lazy", path).CombinedOutput(); err != nil {
+			return fmt.Errorf("failed to unmount stale NFS mount at %q: %w\n%s", path, err, string(data))
+		}
+	}
+
+	a.mountedPaths.Delete(path)
+
+	return nil
+}
+
+func (a *API) mountNFS(ctx context.Context, nfsTarget, path string) error {
+	commands := [][]string{
+		{"mkdir", "-p", path},
+		{"mount", "-v", "-t", "nfs", "-o", "fg,hard," + nfsOptions, nfsTarget, path},
+	}
+
+	for _, command := range commands {
+		data, err := exec.CommandContext(ctx, command[0], command[1:]...).CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("`%s` failed: %w\n%s", strings.Join(command, " "), err, string(data))
+		}
+	}
+
+	return nil
+}
+
+// shouldRemountNFS determines if an NFS volume should be remounted based on lifecycle IDs.
+// Returns true if remount is needed, false if we should skip (already mounted for this lifecycle).
+//
+// Truth table (treating nil/empty as equivalent):
+//   - mounted="" + request="" → false (no remount - would cause infinite loop)
+//   - mounted="abc" + request="" → true (remount - lifecycle cleared)
+//   - mounted="" + request="abc" → true (remount - new lifecycle)
+//   - mounted="abc" + request="abc" → false (no remount - same lifecycle)
+//   - mounted="abc" + request="xyz" → true (remount - different lifecycle)
+func shouldRemountNFS(isMounted bool, mountedLifecycleID, requestLifecycleID string) bool {
+	if !isMounted {
+		return true // not mounted yet, need to mount
+	}
+
+	return mountedLifecycleID != requestLifecycleID
+}
+
+func derefString(p *string) string {
+	if p == nil {
+		return ""
+	}
+
+	return *p
+}
+
+func asString(v any) string {
+	if v == nil {
+		return ""
+	}
+
+	s, _ := v.(string)
+
+	return s
+}
+
+func (a *API) SetupHyperloop(address string) {
+	a.hyperloopLock.Lock()
+	defer a.hyperloopLock.Unlock()
+
+	if err := rewriteHostsFile(address, "/etc/hosts"); err != nil {
+		a.logger.Error().Err(err).Msg("failed to modify hosts file")
+	} else {
+		a.defaults.EnvVars.Store("E2B_EVENTS_ADDRESS", fmt.Sprintf("http://%s", address))
+	}
+}
+
+const eventsHost = "events.e2b.local"
+
+func rewriteHostsFile(address, path string) error {
+	hosts, err := txeh.NewHosts(&txeh.HostsConfig{
+		ReadFilePath:  path,
+		WriteFilePath: path,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create hosts: %w", err)
+	}
+
+	// Update /etc/hosts to point events.e2b.local to the hyperloop IP
+	// This will remove any existing entries for events.e2b.local first
+	ipFamily, err := getIPFamily(address)
+	if err != nil {
+		return fmt.Errorf("failed to get ip family: %w", err)
+	}
+
+	if ok, current, _ := hosts.HostAddressLookup(eventsHost, ipFamily); ok && current == address {
+		return nil // nothing to be done
+	}
+
+	hosts.AddHost(address, eventsHost)
+
+	return hosts.Save()
+}
+
+var (
+	ErrInvalidAddress       = errors.New("invalid IP address")
+	ErrUnknownAddressFormat = errors.New("unknown IP address format")
+)
+
+func getIPFamily(address string) (txeh.IPFamily, error) {
+	addressIP, err := netip.ParseAddr(address)
+	if err != nil {
+		return txeh.IPFamilyV4, fmt.Errorf("failed to parse IP address: %w", err)
+	}
+
+	switch {
+	case addressIP.Is4():
+		return txeh.IPFamilyV4, nil
+	case addressIP.Is6():
+		return txeh.IPFamilyV6, nil
+	default:
+		return txeh.IPFamilyV4, fmt.Errorf("%w: %s", ErrUnknownAddressFormat, address)
+	}
+}
+
+// shouldSetSystemTime returns true if the current time differs significantly from the received timestamp,
+// indicating the system clock should be adjusted. Returns true when the sandboxTime is more than
+// maxTimeInPast before the hostTime or more than maxTimeInFuture after the hostTime.
+func shouldSetSystemTime(sandboxTime, hostTime time.Time) bool {
+	return sandboxTime.Before(hostTime.Add(-maxTimeInPast)) || sandboxTime.After(hostTime.Add(maxTimeInFuture))
 }

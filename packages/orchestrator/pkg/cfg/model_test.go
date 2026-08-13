@@ -1,0 +1,181 @@
+//go:build linux
+
+//nolint:paralleltest // many tests set env, which may cause issues
+package cfg
+
+import (
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestParse(t *testing.T) {
+	t.Run("embedded structs get defaults", func(t *testing.T) {
+		config, err := Parse()
+		require.NoError(t, err)
+
+		assert.Equal(t, "/fc-vm", config.SandboxDir)
+	})
+
+	t.Run("embedded structs get overrides", func(t *testing.T) {
+		t.Setenv("SANDBOX_DIR", "/fc-vm2")
+
+		config, err := Parse()
+		require.NoError(t, err)
+
+		assert.Equal(t, "/fc-vm2", config.SandboxDir)
+	})
+
+	t.Run("multiple services parses correctly", func(t *testing.T) {
+		t.Setenv("ORCHESTRATOR_SERVICES", "service1,service2")
+
+		config, err := Parse()
+		require.NoError(t, err)
+
+		assert.Equal(t, []string{"service1", "service2"}, config.Services)
+	})
+
+	t.Run("env defaults get defaults before expansion", func(t *testing.T) {
+		config, err := Parse()
+		require.NoError(t, err)
+		assert.Equal(t, "/orchestrator/build", config.DefaultCacheDir)
+	})
+
+	t.Run("env defaults get expanded", func(t *testing.T) {
+		t.Setenv("ORCHESTRATOR_BASE_PATH", "/a/b/c")
+		config, err := Parse()
+		require.NoError(t, err)
+		assert.Equal(t, "/a/b/c/build", config.DefaultCacheDir)
+		assert.Equal(t, "/a/b/c/sandbox", config.StorageConfig.SandboxCacheDir)
+	})
+
+	t.Run("nfs proxy metrics is enabled by default", func(t *testing.T) {
+		config, err := Parse()
+		require.NoError(t, err)
+		assert.True(t, config.NFSProxyMetrics)
+	})
+
+	t.Run("nfs proxy metrics can be disabled", func(t *testing.T) {
+		t.Setenv("NFS_PROXY_METRICS", "false")
+
+		config, err := Parse()
+		require.NoError(t, err)
+		assert.False(t, config.NFSProxyMetrics)
+	})
+
+	t.Run("startup reclaim can be disabled", func(t *testing.T) {
+		t.Setenv("DISABLE_STARTUP_RECLAIM", "true")
+
+		config, err := Parse()
+		require.NoError(t, err)
+		assert.True(t, config.DisableStartupReclaim)
+	})
+}
+
+func TestAdditionalClickhouseEndpoints(t *testing.T) {
+	t.Run("returns nil when neither var is set", func(t *testing.T) {
+		c := Config{}
+		endpoints, dropped := c.AdditionalClickhouseEndpoints()
+		assert.Nil(t, endpoints)
+		assert.Nil(t, dropped)
+	})
+
+	t.Run("singular only — returns nil", func(t *testing.T) {
+		c := Config{ClickhouseConnectionString: "A"}
+		endpoints, dropped := c.AdditionalClickhouseEndpoints()
+		assert.Nil(t, endpoints)
+		assert.Nil(t, dropped)
+	})
+
+	t.Run("plural only", func(t *testing.T) {
+		c := Config{ClickhouseConnectionStrings: []string{"B", "C"}}
+		endpoints, dropped := c.AdditionalClickhouseEndpoints()
+		assert.Equal(t, []string{"B", "C"}, endpoints)
+		assert.Nil(t, dropped)
+	})
+
+	t.Run("singular filters matching plural entry, reported as dropped", func(t *testing.T) {
+		c := Config{
+			ClickhouseConnectionString:  "A",
+			ClickhouseConnectionStrings: []string{"A", "B"},
+		}
+		endpoints, dropped := c.AdditionalClickhouseEndpoints()
+		assert.Equal(t, []string{"B"}, endpoints)
+		assert.Equal(t, []string{"A"}, dropped)
+	})
+
+	t.Run("plural internal duplicates deduped, reported as dropped", func(t *testing.T) {
+		c := Config{ClickhouseConnectionStrings: []string{"A", "B", "A"}}
+		endpoints, dropped := c.AdditionalClickhouseEndpoints()
+		assert.Equal(t, []string{"A", "B"}, endpoints)
+		assert.Equal(t, []string{"A"}, dropped)
+	})
+
+	t.Run("blank/whitespace entries dropped silently (not reported)", func(t *testing.T) {
+		c := Config{ClickhouseConnectionStrings: []string{"A", "", "  ", "B"}}
+		endpoints, dropped := c.AdditionalClickhouseEndpoints()
+		assert.Equal(t, []string{"A", "B"}, endpoints)
+		assert.Nil(t, dropped)
+	})
+
+	t.Run("whitespace-trimmed duplicate of singular dropped, reported", func(t *testing.T) {
+		c := Config{
+			ClickhouseConnectionString:  "A",
+			ClickhouseConnectionStrings: []string{"  A  ", "B"},
+		}
+		endpoints, dropped := c.AdditionalClickhouseEndpoints()
+		assert.Equal(t, []string{"B"}, endpoints)
+		assert.Equal(t, []string{"A"}, dropped)
+	})
+
+	t.Run("env-var parse: basic split", func(t *testing.T) {
+		t.Setenv("CLICKHOUSE_CONNECTION_STRING", "")
+		t.Setenv("CLICKHOUSE_CONNECTION_STRINGS", "dsn1;dsn2;dsn3")
+		config, err := Parse()
+		require.NoError(t, err)
+		endpoints, dropped := config.AdditionalClickhouseEndpoints()
+		assert.Equal(t, []string{"dsn1", "dsn2", "dsn3"}, endpoints)
+		assert.Nil(t, dropped)
+	})
+
+	t.Run("env-var parse: empty tokens and trailing/leading separators", func(t *testing.T) {
+		t.Setenv("CLICKHOUSE_CONNECTION_STRING", "")
+		t.Setenv("CLICKHOUSE_CONNECTION_STRINGS", ";dsn1;;dsn2;")
+		config, err := Parse()
+		require.NoError(t, err)
+		endpoints, dropped := config.AdditionalClickhouseEndpoints()
+		assert.Equal(t, []string{"dsn1", "dsn2"}, endpoints)
+		assert.Nil(t, dropped)
+	})
+
+	t.Run("env-var parse: whitespace around entries trimmed", func(t *testing.T) {
+		t.Setenv("CLICKHOUSE_CONNECTION_STRING", "")
+		t.Setenv("CLICKHOUSE_CONNECTION_STRINGS", " dsn1 ; dsn2 ")
+		config, err := Parse()
+		require.NoError(t, err)
+		endpoints, dropped := config.AdditionalClickhouseEndpoints()
+		assert.Equal(t, []string{"dsn1", "dsn2"}, endpoints)
+		assert.Nil(t, dropped)
+	})
+
+	t.Run("env-var parse: all-blank yields nil", func(t *testing.T) {
+		t.Setenv("CLICKHOUSE_CONNECTION_STRING", "")
+		t.Setenv("CLICKHOUSE_CONNECTION_STRINGS", ";;  ;;")
+		config, err := Parse()
+		require.NoError(t, err)
+		endpoints, dropped := config.AdditionalClickhouseEndpoints()
+		assert.Nil(t, endpoints)
+		assert.Nil(t, dropped)
+	})
+
+	t.Run("env-var parse: dup of singular reported, dup of earlier plural reported", func(t *testing.T) {
+		t.Setenv("CLICKHOUSE_CONNECTION_STRING", "dsn1")
+		t.Setenv("CLICKHOUSE_CONNECTION_STRINGS", "dsn1;dsn2;dsn2")
+		config, err := Parse()
+		require.NoError(t, err)
+		endpoints, dropped := config.AdditionalClickhouseEndpoints()
+		assert.Equal(t, []string{"dsn2"}, endpoints)
+		assert.Equal(t, []string{"dsn1", "dsn2"}, dropped)
+	})
+}

@@ -5,53 +5,16 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os/user"
 	"strconv"
 	"time"
 
 	"connectrpc.com/connect"
 
-	"github.com/e2b-dev/infra/packages/envd/internal/host"
 	"github.com/e2b-dev/infra/packages/envd/internal/logs"
 	"github.com/e2b-dev/infra/packages/envd/internal/permissions"
 	"github.com/e2b-dev/infra/packages/envd/internal/services/process/handler"
 	rpc "github.com/e2b-dev/infra/packages/envd/internal/services/spec/process"
 )
-
-func (s *Service) InitializeStartProcess(ctx context.Context, user *user.User, req *rpc.StartRequest) error {
-	var err error
-
-	ctx = logs.AddRequestIDToContext(ctx)
-
-	defer s.logger.
-		Err(err).
-		Interface("request", req).
-		Str(string(logs.OperationIDKey), ctx.Value(logs.OperationIDKey).(string)).
-		Msg("Initialized startCmd")
-
-	handlerL := s.logger.With().Str(string(logs.OperationIDKey), ctx.Value(logs.OperationIDKey).(string)).Logger()
-
-	startProcCtx, startProcCancel := context.WithCancel(ctx)
-	proc, err := handler.New(startProcCtx, user, req, &handlerL, nil, startProcCancel)
-	if err != nil {
-		return err
-	}
-
-	pid, err := proc.Start()
-	if err != nil {
-		return err
-	}
-
-	s.processes.Store(pid, proc)
-
-	go func() {
-		defer s.processes.Delete(pid)
-
-		proc.Wait()
-	}()
-
-	return nil
-}
 
 func (s *Service) Start(ctx context.Context, req *connect.Request[rpc.StartRequest], stream *connect.ServerStream[rpc.StartResponse]) error {
 	return logs.LogServerStreamWithoutEvents(ctx, s.logger, req, stream, s.handleStart)
@@ -61,18 +24,14 @@ func (s *Service) handleStart(ctx context.Context, req *connect.Request[rpc.Star
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
 
-	s.logger.Trace().Str(string(logs.OperationIDKey), ctx.Value(logs.OperationIDKey).(string)).Msg("Process start: Waiting for clock to sync")
-	host.WaitForSync()
-	s.logger.Trace().Str(string(logs.OperationIDKey), ctx.Value(logs.OperationIDKey).(string)).Msg("Process start: Clock synced")
-
 	handlerL := s.logger.With().Str(string(logs.OperationIDKey), ctx.Value(logs.OperationIDKey).(string)).Logger()
 
-	u, err := permissions.GetAuthUser(ctx)
+	u, err := permissions.GetAuthUser(ctx, s.defaults.User)
 	if err != nil {
 		return err
 	}
 
-	timeout, err := determineTimeoutFromHeader(stream.Conn().RequestHeader())
+	requestTimeout, err := determineTimeoutFromHeader(stream.Conn().RequestHeader())
 	if err != nil {
 		return connect.NewError(connect.CodeInvalidArgument, err)
 	}
@@ -80,12 +39,30 @@ func (s *Service) handleStart(ctx context.Context, req *connect.Request[rpc.Star
 	// Create a new context with a timeout if provided.
 	// We do not want the command to be killed if the request context is cancelled
 	procCtx, cancelProc := context.Background(), func() {}
-	if timeout > 0 { // zero timeout means no timeout
-		procCtx, cancelProc = context.WithTimeout(procCtx, timeout)
+	if requestTimeout > 0 { // zero timeout means no timeout
+		procCtx, cancelProc = context.WithTimeout(procCtx, requestTimeout)
 	}
 
-	proc, err := handler.New(procCtx, u, req.Msg, &handlerL, s.envs, cancelProc)
+	// Hold snapshotMu.RLock across the whole fork+register span so a live-upgrade
+	// snapshot (Upgrade takes the write lock) can never observe a child spawned
+	// but not yet in s.processes — which would leave it surviving the execve with
+	// no carried handler. It must be taken BEFORE handler.New: for a PTY,
+	// handler.New's pty.StartWithSize already forks the child, so acquiring it
+	// only before proc.Start would miss that fork. RLock so concurrent Starts
+	// don't serialize with each other, only against the (rare) upgrade.
+	s.snapshotMu.RLock()
+
+	proc, err := handler.New( //nolint:contextcheck // TODO: fix this later
+		procCtx,
+		u,
+		req.Msg,
+		&handlerL,
+		s.defaults,
+		s.cgroupManager,
+		cancelProc,
+	)
 	if err != nil {
+		s.snapshotMu.RUnlock()
 		// Ensure the process cancel is called to cleanup resources.
 		cancelProc()
 
@@ -94,11 +71,9 @@ func (s *Service) handleStart(ctx context.Context, req *connect.Request[rpc.Star
 
 	exitChan := make(chan struct{})
 
-	startMultiplexer := handler.NewMultiplexedChannel[rpc.ProcessEvent_Start](0)
-	defer close(startMultiplexer.Source)
-
-	start, startCancel := startMultiplexer.Fork()
-	defer startCancel()
+	// Buffered so the send below never blocks when the receiver
+	// goroutine has already exited on a cancelled context.
+	start := make(chan rpc.ProcessEvent_Start, 1)
 
 	data, dataCancel := proc.DataEvent.Fork()
 	defer dataCancel()
@@ -114,13 +89,7 @@ func (s *Service) handleStart(ctx context.Context, req *connect.Request[rpc.Star
 			cancel(ctx.Err())
 
 			return
-		case event, ok := <-start:
-			if !ok {
-				cancel(connect.NewError(connect.CodeUnknown, errors.New("start event channel closed before sending start event")))
-
-				return
-			}
-
+		case event := <-start:
 			streamErr := stream.Send(&rpc.StartResponse{
 				Event: &rpc.ProcessEvent{
 					Event: &event,
@@ -149,10 +118,12 @@ func (s *Service) handleStart(ctx context.Context, req *connect.Request[rpc.Star
 				})
 				if streamErr != nil {
 					cancel(connect.NewError(connect.CodeUnknown, fmt.Errorf("error sending keepalive: %w", streamErr)))
+
 					return
 				}
 			case <-ctx.Done():
 				cancel(ctx.Err())
+
 				return
 			case event, ok := <-data:
 				if !ok {
@@ -166,6 +137,7 @@ func (s *Service) handleStart(ctx context.Context, req *connect.Request[rpc.Star
 				})
 				if streamErr != nil {
 					cancel(connect.NewError(connect.CodeUnknown, fmt.Errorf("error sending data event: %w", streamErr)))
+
 					return
 				}
 
@@ -198,12 +170,33 @@ func (s *Service) handleStart(ctx context.Context, req *connect.Request[rpc.Star
 		}
 	}()
 
-	pid, err := proc.Start()
+	pid, err := proc.Start(requestTimeout)
 	if err != nil {
+		s.snapshotMu.RUnlock()
+
 		return connect.NewError(connect.CodeInvalidArgument, err)
 	}
 
+	// Drop any retained exit left over from a previous process that used this
+	// PID, so a Connect to the new process can't be served the old exit code.
+	s.terminated.Delete(pid)
+	// A Connect can also resolve by tag (lookupTerminated returns the first tag
+	// match), so if this process reuses a tag, drop any predecessor's retained
+	// exit under that tag too — else a late Connect-by-tag could get a stale code.
+	if proc.Tag != nil {
+		s.clearTerminatedForTag(*proc.Tag)
+	}
 	s.processes.Store(pid, proc)
+	s.snapshotMu.RUnlock()
+
+	// Retain the terminal event synchronously when the process exits — Wait
+	// invokes this hook before it closes EndEvent, so a late Connect that falls
+	// back to the retention cache is guaranteed to find the exit (no race with an
+	// async retain). Set before the reaper goroutine below can run. Same
+	// mechanism the re-adopt path uses.
+	proc.OnExit = func(end *rpc.ProcessEvent_EndEvent) {
+		s.finalizeTermination(pid, proc, end)
+	}
 
 	start <- rpc.ProcessEvent_Start{
 		Start: &rpc.ProcessEvent_StartEvent{
@@ -212,17 +205,18 @@ func (s *Service) handleStart(ctx context.Context, req *connect.Request[rpc.Star
 	}
 
 	go func() {
-		defer s.processes.Delete(pid)
-
+		// Reap the process. Removal from s.processes is owned solely by
+		// finalizeTermination (invoked via proc.OnExit above), which retains the
+		// exit code BEFORE deleting and is identity-guarded against PID reuse.
+		// Deleting here too would race that retention away and lose the exit for a
+		// late Connect or the pre-upgrade handover.
 		proc.Wait()
 	}()
 
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-exitChan:
-		return nil
-	}
+	// Wait for the sender goroutine; returning early panics envd.
+	<-exitChan
+
+	return ctx.Err()
 }
 
 func determineTimeoutFromHeader(header http.Header) (time.Duration, error) {
