@@ -154,8 +154,11 @@ leave_on_terminate = true
 client {
   enabled = true
   node_pool = "build"
+  # node_labels feeds template-manager's NODE_LABELS env via
+  # $${meta.node_labels} in the Nomad jobspec. Empty means "no labels".
   meta {
-    "node_pool" = "build"
+    "node_pool"   = "build"
+    "node_labels" = "${NODE_LABELS:-}"
   }
   max_kill_timeout = "24h"
 }
@@ -176,8 +179,9 @@ plugin "docker" {
 
 plugin "raw_exec" {
   config {
+    # Removed from the raw_exec driver in Nomad 1.7; keeping it makes the 1.8.4
+    # agent reject the whole config. See run-nomad.sh for the full story.
     enabled = true
-    no_cgroups = true
   }
 }
 

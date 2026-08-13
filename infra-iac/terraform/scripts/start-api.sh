@@ -49,13 +49,14 @@ chmod +x /opt/consul/bin/run-consul.sh /opt/nomad/bin/run-nomad.sh
 
 mkdir -p /root/docker
 touch /root/docker/config.json
-# export ECR_AUTH_TOKEN=$(aws ecr get-authorization-token --output text --query 'authorizationData[].authorizationToken')
+# Delegate ECR auth to amazon-ecr-credential-helper (installed in the AMI), which
+# mints tokens from the instance profile on demand instead of baking a 12-hour
+# token into this file at boot. The api and client-proxy jobs pull from ECR, so a
+# stale token here previously broke every restart past the 12-hour mark.
 cat <<EOF >/root/docker/config.json
 {
-    "auths": {
-        "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com": {
-            "auth": "$(aws ecr get-authorization-token --output text --query 'authorizationData[].authorizationToken')"
-        }
+    "credHelpers": {
+        "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com": "ecr-login"
     }
 }
 EOF

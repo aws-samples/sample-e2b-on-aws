@@ -54,6 +54,8 @@ Metadata:
         Parameters:
           - ExistingE2BBucketName
           - ExistingLokiBucketName
+          - ExistingTemplatesBucketName
+          - ExistingBuildCacheBucketName
       - Label:
           default: Custom Configuration
         Parameters:
@@ -167,6 +169,19 @@ Parameters:
     Default: ""
     Description: "Name of an existing Loki log storage S3 bucket. Leave empty to auto-create."
 
+  # Dedicated buckets required by the orchestrator storage layer.
+  # Upstream removed TEMPLATE_BUCKET_PREFIX, so these roles cannot share the
+  # unified E2B bucket via key prefixes any more - each needs its own bucket.
+  ExistingTemplatesBucketName:
+    Type: String
+    Default: ""
+    Description: "Name of an existing sandbox template S3 bucket (TEMPLATE_BUCKET_NAME). Leave empty to auto-create."
+
+  ExistingBuildCacheBucketName:
+    Type: String
+    Default: ""
+    Description: "Name of an existing template build cache S3 bucket (BUILD_CACHE_BUCKET_NAME). Leave empty to auto-create."
+
   # Custom Script Configuration
   CFNCustomScriptUrl:
     Type: String
@@ -185,6 +200,10 @@ Conditions:
   HasExternalLokiBucket: !Not [!Equals [!Ref ExistingLokiBucketName, ""]]
   CreateE2BBucket: !Equals [!Ref ExistingE2BBucketName, ""]
   CreateLokiBucket: !Equals [!Ref ExistingLokiBucketName, ""]
+  HasExternalTemplatesBucket: !Not [!Equals [!Ref ExistingTemplatesBucketName, ""]]
+  HasExternalBuildCacheBucket: !Not [!Equals [!Ref ExistingBuildCacheBucketName, ""]]
+  CreateTemplatesBucket: !Equals [!Ref ExistingTemplatesBucketName, ""]
+  CreateBuildCacheBucket: !Equals [!Ref ExistingBuildCacheBucketName, ""]
 
 # ===================================================================================================
 # Resources - AWS resources to be provisioned for the E2B infrastructure
@@ -396,6 +415,11 @@ Resources:
                   - "arn:aws:s3:::terraform-*/*"
                   - "arn:aws:s3:::software-*"
                   - "arn:aws:s3:::software-*/*"
+                  # Covers every bucket this stack creates, including the
+                  # templates / build-cache buckets whose names do not
+                  # necessarily contain "e2b".
+                  - !Sub "arn:aws:s3:::${AWS::StackName}-*"
+                  - !Sub "arn:aws:s3:::${AWS::StackName}-*/*"
               - Sid: SecretsManagerAccess
                 Effect: Allow
                 Action:
@@ -590,6 +614,29 @@ Resources:
                   - ssm:DeleteParameter
                   - ssm:DescribeParameters
                 Resource: !Sub "arn:aws:ssm:*:${AWS::AccountId}:parameter/*e2b*"
+              # Run Command against the cluster nodes. The bastion drives the
+              # deploy chain but has no SSH key for the nodes, so this is the
+              # only way to read /var/log/cloud-init-output.log or a failing
+              # nomad/consul unit when a node does not join the cluster.
+              - Sid: SSMRunCommandInstances
+                Effect: Allow
+                Action:
+                  - ssm:SendCommand
+                Resource: !Sub "arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:instance/*"
+                Condition:
+                  StringLike:
+                    ssm:resourceTag/Name: !Sub "${AWS::StackName}-*"
+              - Sid: SSMRunCommandDocument
+                Effect: Allow
+                Action:
+                  - ssm:SendCommand
+                Resource: !Sub "arn:aws:ssm:${AWS::Region}::document/AWS-RunShellScript"
+              - Sid: SSMRunCommandResults
+                Effect: Allow
+                Action:
+                  - ssm:GetCommandInvocation
+                  - ssm:ListCommandInvocations
+                Resource: "*"
               - Sid: STSAccess
                 Effect: Allow
                 Action:
@@ -629,7 +676,14 @@ Resources:
           ValidationDomain: !Ref BaseDomain
 
   # ------------------------------------------------------------------------------------------------
-  # S3 Buckets - Unified E2B bucket and Loki log storage bucket
+  # S3 Buckets - Unified E2B bucket, Loki log storage, and the two dedicated
+  # orchestrator storage buckets (templates / build cache).
+  #
+  # The unified E2B bucket still serves everything addressed by our own boot
+  # scripts via key prefixes (fc-env-pipeline/, fc-kernels/, fc-versions/,
+  # fc-busybox/, software/, cluster-setup/). The template and build-cache roles
+  # are addressed by the Go storage layer instead, which no longer supports a
+  # key prefix, so they each require a dedicated bucket.
   # ------------------------------------------------------------------------------------------------
   E2BBucket:
     Type: AWS::S3::Bucket
@@ -648,6 +702,27 @@ Resources:
       Tags:
         - Key: Name
           Value: !Sub "${AWS::StackName}-loki-bucket"
+
+  # TEMPLATE_BUCKET_NAME - sandbox template snapshots written by orchestrator
+  # and template-manager.
+  TemplatesBucket:
+    Type: AWS::S3::Bucket
+    Condition: CreateTemplatesBucket
+    Properties:
+      BucketName: !Sub "${AWS::StackName}-templates-${AWS::AccountId}"
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-templates-bucket"
+
+  # BUILD_CACHE_BUCKET_NAME - layer cache for template builds.
+  BuildCacheBucket:
+    Type: AWS::S3::Bucket
+    Condition: CreateBuildCacheBucket
+    Properties:
+      BucketName: !Sub "${AWS::StackName}-build-cache-${AWS::AccountId}"
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-build-cache-bucket"
 
   # ------------------------------------------------------------------------------------------------
   # RDS Database - PostgreSQL database for E2B platform data persistence
@@ -807,14 +882,14 @@ Resources:
                 wget -O /root/.docker/cli-plugins/docker-buildx https://github.com/docker/buildx/releases/download/v0.21.1/buildx-v0.21.1.linux-amd64
                 wget -O /opt/awscli.zip https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip
                 wget -O /opt/packer.zip https://releases.hashicorp.com/packer/1.12.0/packer_1.12.0_linux_amd64.zip
-                wget -O /opt/terraform.zip https://releases.hashicorp.com/terraform/1.5.7/terraform_1.5.7_linux_amd64.zip
-                wget -O /opt/nomad.zip https://releases.hashicorp.com/nomad/1.6.2/nomad_1.6.2_linux_amd64.zip
+                wget -O /opt/terraform.zip https://releases.hashicorp.com/terraform/1.7.5/terraform_1.7.5_linux_amd64.zip
+                wget -O /opt/nomad.zip https://releases.hashicorp.com/nomad/1.8.4/nomad_1.8.4_linux_amd64.zip
               - |
                 wget -O /root/.docker/cli-plugins/docker-buildx https://github.com/docker/buildx/releases/download/v0.21.1/buildx-v0.21.1.linux-arm64
                 wget -O /opt/awscli.zip https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip
                 wget -O /opt/packer.zip https://releases.hashicorp.com/packer/1.12.0/packer_1.12.0_linux_arm64.zip
-                wget -O /opt/terraform.zip https://releases.hashicorp.com/terraform/1.5.7/terraform_1.5.7_linux_arm64.zip
-                wget -O /opt/nomad.zip https://releases.hashicorp.com/nomad/1.6.2/nomad_1.6.2_linux_arm64.zip
+                wget -O /opt/terraform.zip https://releases.hashicorp.com/terraform/1.7.5/terraform_1.7.5_linux_arm64.zip
+                wget -O /opt/nomad.zip https://releases.hashicorp.com/nomad/1.8.4/nomad_1.8.4_linux_arm64.zip
             - |
               chmod +x /root/.docker/cli-plugins/docker-buildx
             - |
@@ -826,65 +901,79 @@ Resources:
               # Configure AWS CLI default region
               aws configure set region ${AWS::Region}
             - |
-              # Install HashiCorp Packer for creating machine images
-              unzip packer.zip && mv packer /usr/local/bin/packer && rm packer.zip
-            - |
-              # Install HashiCorp Terraform for infrastructure as code
-              unzip terraform.zip && mv terraform /usr/local/bin/terraform && rm terraform.zip
-            - |
-              # Install HashiCorp Nomad for workload orchestration
-              unzip nomad.zip && mv nomad /usr/local/bin/ && rm nomad.zip
+              # Install the HashiCorp tools.
+              #
+              # -o overwrites without prompting and the steps are not chained on
+              # &&: unzip exits 1 on non-fatal warnings, which silently aborted
+              # the rest of the chain and left the binary sitting in /opt
+              # instead of on PATH.
+              install_hashicorp_tool() {
+                TOOL=$1
+                unzip -o "/opt/$TOOL.zip" "$TOOL" -d /opt
+                install -m 0755 "/opt/$TOOL" "/usr/local/bin/$TOOL"
+                rm -f "/opt/$TOOL.zip" "/opt/$TOOL"
+                "/usr/local/bin/$TOOL" version | head -1
+              }
+              install_hashicorp_tool packer
+              install_hashicorp_tool terraform
+              install_hashicorp_tool nomad
             - |
               # Create directory for E2B infrastructure code
               mkdir -p /opt/infra/ && cd /opt/infra/
               git clone https://github.com/aws-samples/sample-e2b-on-aws.git && cd sample-e2b-on-aws
+              git checkout feat/code-sync-0811
             - !Sub |
               # Initialize Configuration
               touch /tmp/e2b.log
               echo "StackName=${AWS::StackName}" >> /tmp/e2b.log
               BUILD=$(git rev-parse --short HEAD)
               echo "BUILD=$BUILD" >> /tmp/e2b.log
+
+              # Each deployment step records a marker on success so a re-run
+              # (after fixing whatever failed) resumes instead of starting the
+              # whole chain over. Remove /opt/.e2b-step-*.done to force a
+              # full replay.
+              CKPT_DIR=/opt
+              run_step() {
+                STEP_NAME=$1
+                shift
+                MARKER=$CKPT_DIR/.e2b-step-$STEP_NAME.done
+                echo "========================================" >> /tmp/e2b.log
+                if [ -f "$MARKER" ]; then
+                  echo "Step $STEP_NAME already completed, skipping" >> /tmp/e2b.log
+                  echo "========================================" >> /tmp/e2b.log
+                  return 0
+                fi
+                echo "Start to execute $STEP_NAME" >> /tmp/e2b.log
+                echo "========================================" >> /tmp/e2b.log
+                if "$@" >> /tmp/e2b.log 2>&1; then
+                  touch "$MARKER"
+                  echo "Step $STEP_NAME OK" >> /tmp/e2b.log
+                  return 0
+                fi
+                echo "Step $STEP_NAME FAILED, aborting deploy chain" >> /tmp/e2b.log
+                return 1
+              }
+
               while true; do
                 STACK_STATUS=$(aws cloudformation describe-stacks --stack-name ${AWS::StackName} --query "Stacks[0].StackStatus" --output text)
                 echo "$(date '+%Y-%m-%d %H:%M:%S') - Stack current state: $STACK_STATUS" >> /tmp/e2b.log
                 case $STACK_STATUS in
                   CREATE_COMPLETE)
-                    echo "========================================" >> /tmp/e2b.log
-                    echo "Start to execute init.sh" >> /tmp/e2b.log
-                    echo "========================================" >> /tmp/e2b.log
-                    bash infra-iac/init.sh >> /tmp/e2b.log 2>&1
-                    echo "========================================" >> /tmp/e2b.log
-                    echo "Start to execute packer.sh" >> /tmp/e2b.log
-                    echo "========================================" >> /tmp/e2b.log
-                    HOME=/root bash -l infra-iac/packer/packer.sh >> /tmp/e2b.log 2>&1
-                    echo "========================================" >> /tmp/e2b.log
-                    echo "Start to execute terraform" >> /tmp/e2b.log
-                    echo "========================================" >> /tmp/e2b.log
-                    bash infra-iac/terraform/start.sh >> /tmp/e2b.log 2>&1
-                    echo "========================================" >> /tmp/e2b.log
-                    echo "Start to execute init-db.sh" >> /tmp/e2b.log
-                    echo "========================================" >> /tmp/e2b.log
-                    bash infra-iac/db/init-db.sh >> /tmp/e2b.log 2>&1
-                    echo "========================================" >> /tmp/e2b.log
-                    echo "Start to execute build.sh" >> /tmp/e2b.log
-                    echo "========================================" >> /tmp/e2b.log
-                    HOME=/root bash packages/build.sh >> /tmp/e2b.log 2>&1
+                    run_step init bash infra-iac/init.sh || exit 1
+                    run_step packer env HOME=/root bash -l infra-iac/packer/packer.sh || exit 1
+                    run_step terraform bash infra-iac/terraform/start.sh || exit 1
+                    run_step init-db bash infra-iac/db/init-db.sh || exit 1
+                    run_step build env HOME=/root bash tools/build-and-upload.sh || exit 1
+                    # nomad.sh must be sourced: it exports NOMAD_ADDR/NOMAD_TOKEN
+                    # into this shell for the deploy step below.
                     echo "========================================" >> /tmp/e2b.log
                     echo "Start to execute nomad.sh" >> /tmp/e2b.log
                     echo "========================================" >> /tmp/e2b.log
                     source nomad/nomad.sh >> /tmp/e2b.log 2>&1
-                    echo "========================================" >> /tmp/e2b.log
-                    echo "Start to execute prepare.sh" >> /tmp/e2b.log
-                    echo "========================================" >> /tmp/e2b.log
-                    bash nomad/prepare.sh >> /tmp/e2b.log 2>&1
-                    echo "========================================" >> /tmp/e2b.log
-                    echo "Start to execute deploy.sh" >> /tmp/e2b.log
-                    echo "========================================" >> /tmp/e2b.log
-                    bash nomad/deploy.sh >> /tmp/e2b.log 2>&1
-                    echo "========================================" >> /tmp/e2b.log
-                    echo "Start to execute create_template.sh" >> /tmp/e2b.log
-                    echo "========================================" >> /tmp/e2b.log
-                    bash packages/create_template.sh >> /tmp/e2b.log 2>&1
+                    run_step prepare bash nomad/prepare.sh || exit 1
+                    run_step deploy bash nomad/deploy.sh || exit 1
+                    run_step create-template bash tools/legacy/create_template.sh || exit 1
                     echo "========================================" >> /tmp/e2b.log
                     echo "E2B Deploy Done!" >> /tmp/e2b.log
                     echo "========================================" >> /tmp/e2b.log
@@ -979,6 +1068,28 @@ Outputs:
       !If [HasExternalLokiBucket, !Ref ExistingLokiBucketName, !Ref LokiBucket]
     Export:
       Name: !Sub "${AWS::StackName}-CFNLOKIBUCKET"
+
+  CFNTEMPLATESBUCKET:
+    Description: Sandbox template S3 bucket name (orchestrator TEMPLATE_BUCKET_NAME)
+    Value:
+      !If [
+        HasExternalTemplatesBucket,
+        !Ref ExistingTemplatesBucketName,
+        !Ref TemplatesBucket,
+      ]
+    Export:
+      Name: !Sub "${AWS::StackName}-CFNTEMPLATESBUCKET"
+
+  CFNBUILDCACHEBUCKET:
+    Description: Template build cache S3 bucket name (orchestrator BUILD_CACHE_BUCKET_NAME)
+    Value:
+      !If [
+        HasExternalBuildCacheBucket,
+        !Ref ExistingBuildCacheBucketName,
+        !Ref BuildCacheBucket,
+      ]
+    Export:
+      Name: !Sub "${AWS::StackName}-CFNBUILDCACHEBUCKET"
 
   # SSH key output
   CFNSSHKEY:

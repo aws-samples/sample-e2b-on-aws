@@ -110,10 +110,23 @@ processors:
           - "template.*"
           - "api.*"
           - "client_proxy.*"
+          - "batcher.*"                  # event/metric batching pipeline
           - "e2b\\.sandbox\\..*"      # per-sandbox cpu/ram gauges
           - "http\\..*"                  # api HTTP middleware histograms
           - "rpc\\..*"                   # otelgrpc client/server histograms
+          - "grpc\\..*"                  # grpc-go native instrumentation
+          - "db\\.sql\\.connection\\..*" # DB pool, sized by DB_*_CONNECTIONS
+          - "db\\.client\\..*"           # DB client query instrumentation
+          - "pgxpool.*"                  # pgx connection pool
+          - "go\\..*"                    # Go runtime (heap, goroutines, GC)
           - "otelcol_.*"                   # collector self-metrics
+      # Payload-size histograms are the highest-volume series here and were
+      # never queried; rpc.client.call.duration already covers latency.
+      exclude:
+        match_type: regexp
+        metric_names:
+          - "rpc\\.client\\.request\\.size.*"
+          - "rpc\\.client\\.response\\.size.*"
 
 
   filter/prometheus:

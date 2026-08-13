@@ -89,6 +89,38 @@ variable "loki_bucket" {
   default     = "${CFNLOKIBUCKET}"
 }
 
+# Dedicated orchestrator storage buckets.
+# The Go storage layer resolves TEMPLATE_BUCKET_NAME / BUILD_CACHE_BUCKET_NAME
+# into a bare s3:// destination and no longer honours a key prefix, so these
+# two roles cannot be served out of the unified E2B bucket.
+variable "templates_bucket" {
+  description = "Name of the sandbox template S3 bucket (TEMPLATE_BUCKET_NAME)"
+  default     = "${CFNTEMPLATESBUCKET}"
+}
+
+variable "build_cache_bucket" {
+  description = "Name of the template build cache S3 bucket (BUILD_CACHE_BUCKET_NAME)"
+  default     = "${CFNBUILDCACHEBUCKET}"
+}
+
+# Node labels exposed to Nomad as meta.node_labels and consumed by the
+# orchestrator / template-manager jobs as NODE_LABELS.
+#
+# Not driven by CloudFormation: label-based sandbox scheduling is opt-in and
+# empty is the correct default. Override with -var when you need it, e.g.
+#   terraform apply -var 'client_node_labels=gpu,large-mem'
+variable "client_node_labels" {
+  description = "Comma-separated labels applied to client nodes for sandbox scheduling"
+  type        = string
+  default     = ""
+}
+
+variable "build_node_labels" {
+  description = "Comma-separated labels applied to build nodes for sandbox scheduling"
+  type        = string
+  default     = ""
+}
+
 variable "custom_script_url" {
   description = "URL of custom script to run on instances after startup"
   default     = "${CFNCustomScriptUrl}"

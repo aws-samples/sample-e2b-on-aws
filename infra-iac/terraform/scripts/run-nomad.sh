@@ -180,20 +180,28 @@ EOF
 
   local client_config=""
   if [[ "$client" == "true" ]]; then
+    # node_labels feeds the orchestrator's NODE_LABELS env via
+    # $${meta.node_labels} in the Nomad jobspec, which drives label-based
+    # sandbox scheduling. Empty is valid and means "no labels".
     client_config=$(
       cat <<EOF
 client {
   enabled = true
   node_pool = "default"
   meta {
-    node_pool = "default"
+    node_pool   = "default"
+    node_labels = "${NODE_LABELS:-}"
   }
 }
 
 plugin "raw_exec" {
   config {
+    # no_cgroups was removed from the raw_exec driver in Nomad 1.7. Leaving it
+    # in made the 1.8.4 client agent refuse the config outright ("Invalid
+    # label: No argument or block type is named \"no_cgroups\"") and exit
+    # before registering, which supervisord then retried into FATAL. Only the
+    # client branch carried it, which is why the servers came up fine.
     enabled = true
-    no_cgroups = true
   }
 }
 
