@@ -46,8 +46,8 @@ specific to this repository.
 | 2026-08-10 | [`91f3173`](https://github.com/e2b-dev/infra/commit/91f3173aee86e39913cd19b0069f8b3617f1c47c) | Adds the `auth`, `clickhouse` and `otel-collector` packages; drops `docker-reverse-proxy`. Requires dedicated template and build-cache buckets, because upstream removed `TEMPLATE_BUCKET_PREFIX`. |
 | 2025-05-24 | [`0c35ed5`](https://github.com/e2b-dev/infra/commit/0c35ed5c3b8492f96d1e0bbfb91fff96541a8c74) | Initial import. |
 
-There is no shared git ancestry with upstream, so a sync replaces the code layer
-wholesale rather than merging. To see what a newer upstream commit would bring:
+A sync replaces the code layer wholesale rather than merging into it. To see what
+a newer upstream commit would bring:
 
 ```bash
 git remote add e2b-upstream https://github.com/e2b-dev/infra.git   # once

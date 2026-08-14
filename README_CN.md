@@ -45,7 +45,7 @@ E2B on AWS 为在您自己的 AWS 账户中运行 AI Agent 沙箱提供了安全
 | 2026-08-10 | [`91f3173`](https://github.com/e2b-dev/infra/commit/91f3173aee86e39913cd19b0069f8b3617f1c47c) | 新增 `auth`、`clickhouse`、`otel-collector` 包；移除 `docker-reverse-proxy`。上游删除了 `TEMPLATE_BUCKET_PREFIX`，因此模板与 build-cache 需各用独立 bucket。 |
 | 2025-05-24 | [`0c35ed5`](https://github.com/e2b-dev/infra/commit/0c35ed5c3b8492f96d1e0bbfb91fff96541a8c74) | 首次导入。 |
 
-本仓库与上游**没有共同 git 祖先**，因此同步是整体替换代码层而非合并。查看更新的上游 commit 会带来哪些变化：
+同步的做法是整体替换代码层，而不是往里合并。查看更新的上游 commit 会带来哪些变化：
 
 ```bash
 git remote add e2b-upstream https://github.com/e2b-dev/infra.git   # 仅需一次
