@@ -400,10 +400,10 @@ echo $overcommitment_hugepages >/proc/sys/vm/nr_overcommit_hugepages
     --gossip-encryption-key "${CONSUL_GOSSIP_ENCRYPTION_KEY}" \
     --dns-request-token "${CONSUL_DNS_REQUEST_TOKEN}" &
 
-# run-nomad.sh is uploaded verbatim (not templated), so the labels are handed
-# over through the environment and land in the Nomad client's meta.node_labels.
-export NODE_LABELS="${NODE_LABELS}"
-/opt/nomad/bin/run-nomad.sh --client --consul-token "${CONSUL_TOKEN}" &
+# run-nomad.sh is the verbatim upstream 91f3173ae script (one shared copy for
+# every pool), so the pool name and labels are passed as flags; they land in the
+# Nomad client's node_pool and meta.node_labels.
+/opt/nomad/bin/run-nomad.sh --client --node-pool "default" --node-labels "${NODE_LABELS}" --consul-token "${CONSUL_TOKEN}" &
 
 # Add alias for ssh-ing to sbx
 echo '_sbx_ssh() {

@@ -40,8 +40,6 @@ locals {
   file_hash = {
     "scripts/run-consul.sh"              = substr(filesha256("${path.module}/scripts/run-consul.sh"), 0, 5)
     "scripts/run-nomad.sh"               = substr(filesha256("${path.module}/scripts/run-nomad.sh"), 0, 5)
-    "scripts/run-api-nomad.sh"           = substr(filesha256("${path.module}/scripts/run-api-nomad.sh"), 0, 5)
-    "scripts/run-build-cluster-nomad.sh" = substr(filesha256("${path.module}/scripts/run-build-cluster-nomad.sh"), 0, 5)
     "scripts/run-custom-script.sh"       = substr(filesha256("${path.module}/scripts/run-custom-script.sh"), 0, 5)
   }
 
@@ -426,8 +424,6 @@ variable "setup_files" {
   type = map(string)
   default = {
     "scripts/run-nomad.sh"               = "run-nomad",
-    "scripts/run-api-nomad.sh"           = "run-api-nomad",
-    "scripts/run-build-cluster-nomad.sh" = "run-build-cluster-nomad",
     "scripts/run-consul.sh"              = "run-consul",
     # Every start-*.sh downloads this by RUN_CUSTOM_SCRIPT_FILE_HASH and runs
     # under `set -euo pipefail`, so leaving it out of this map made the fetch
@@ -1134,7 +1130,7 @@ resource "aws_launch_template" "api" {
     NOMAD_TOKEN                  = aws_secretsmanager_secret_version.nomad_acl_token.secret_string
     CONSUL_TOKEN                 = aws_secretsmanager_secret_version.consul_acl_token.secret_string
     RUN_CONSUL_FILE_HASH         = local.file_hash["scripts/run-consul.sh"]
-    RUN_NOMAD_FILE_HASH          = local.file_hash["scripts/run-api-nomad.sh"]
+    RUN_NOMAD_FILE_HASH          = local.file_hash["scripts/run-nomad.sh"]
     RUN_CUSTOM_SCRIPT_FILE_HASH  = local.file_hash["scripts/run-custom-script.sh"]
     CUSTOM_SCRIPT_URL            = var.custom_script_url
     CONSUL_GOSSIP_ENCRYPTION_KEY = aws_secretsmanager_secret_version.consul_gossip_encryption_key.secret_string
@@ -1293,7 +1289,7 @@ resource "aws_launch_template" "build" {
     NOMAD_TOKEN                  = aws_secretsmanager_secret_version.nomad_acl_token.secret_string
     CONSUL_TOKEN                 = aws_secretsmanager_secret_version.consul_acl_token.secret_string
     RUN_CONSUL_FILE_HASH         = local.file_hash["scripts/run-consul.sh"]
-    RUN_NOMAD_FILE_HASH          = local.file_hash["scripts/run-build-cluster-nomad.sh"]
+    RUN_NOMAD_FILE_HASH          = local.file_hash["scripts/run-nomad.sh"]
     RUN_CUSTOM_SCRIPT_FILE_HASH  = local.file_hash["scripts/run-custom-script.sh"]
     CUSTOM_SCRIPT_URL            = var.custom_script_url
     CONSUL_GOSSIP_ENCRYPTION_KEY = aws_secretsmanager_secret_version.consul_gossip_encryption_key.secret_string
