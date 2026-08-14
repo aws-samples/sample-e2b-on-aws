@@ -32,7 +32,28 @@
 
 E2B on AWS 为在您自己的 AWS 账户中运行 AI Agent 沙箱提供了安全、可扩展、可定制的环境。该项目旨在满足组织对 AI 基础设施控制权的需求，同时充分利用 E2B 的沙箱技术进行 AI Agent 开发、测试和部署。
 
-> 基于版本 [`0c35ed5`](https://github.com/e2b-dev/infra/commit/0c35ed5c3b8492f96d1e0bbfb91fff96541a8c74) 构建。如遇问题，请直接提交 PR。特别感谢所有参与项目转型的贡献者。
+> 如遇问题，请直接提交 PR。特别感谢所有参与项目转型的贡献者。
+
+### 上游版本
+
+代码层（`packages/`、`spec/`、`scripts/`、`tests/`、`firecracker/`）是
+[e2b-dev/infra](https://github.com/e2b-dev/infra) 在下表 commit 处的逐字节副本；
+部署层（CloudFormation、`infra-iac/`、`nomad/`）为本仓库自研。
+
+| 同步时间 | 上游 commit | 说明 |
+|---|---|---|
+| 2026-08-10 | [`91f3173`](https://github.com/e2b-dev/infra/commit/91f3173aee86e39913cd19b0069f8b3617f1c47c) | 新增 `auth`、`clickhouse`、`otel-collector` 包；移除 `docker-reverse-proxy`。上游删除了 `TEMPLATE_BUCKET_PREFIX`，因此模板与 build-cache 需各用独立 bucket。 |
+| 2025-05-24 | [`0c35ed5`](https://github.com/e2b-dev/infra/commit/0c35ed5c3b8492f96d1e0bbfb91fff96541a8c74) | 首次导入。 |
+
+本仓库与上游**没有共同 git 祖先**，因此同步是整体替换代码层而非合并。查看更新的上游 commit 会带来哪些变化：
+
+```bash
+git remote add e2b-upstream https://github.com/e2b-dev/infra.git   # 仅需一次
+git fetch e2b-upstream main
+git diff 91f3173ae..e2b-upstream/main -- packages/ spec/ scripts/ tests/
+```
+
+**每次重新同步代码层，请在上表新增一行。**
 
 ---
 

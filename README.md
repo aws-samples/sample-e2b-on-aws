@@ -32,7 +32,30 @@
 
 E2B on AWS provides a secure, scalable, and customizable environment for running AI agent sandboxes in your own AWS account. This project addresses the growing need for organizations to maintain control over their AI infrastructure while leveraging the power of E2B's sandbox technology for AI agent development, testing, and deployment.
 
-> Built based on version [`91f3173`](https://github.com/e2b-dev/infra/commit/91f3173aee86e39913cd19b0069f8b3617f1c47c). If you encounter any issues, please submit a PR directly. Special thanks to all contributors involved in the project transformation.
+> If you encounter any issues, please submit a PR directly. Special thanks to all contributors involved in the project transformation.
+
+### Upstream version
+
+The code layer (`packages/`, `spec/`, `scripts/`, `tests/`, `firecracker/`) is a
+byte-for-byte copy of [e2b-dev/infra](https://github.com/e2b-dev/infra) at the
+commit below. The deployment layer (CloudFormation, `infra-iac/`, `nomad/`) is
+specific to this repository.
+
+| Synced on | Upstream commit | Notes |
+|---|---|---|
+| 2026-08-10 | [`91f3173`](https://github.com/e2b-dev/infra/commit/91f3173aee86e39913cd19b0069f8b3617f1c47c) | Adds the `auth`, `clickhouse` and `otel-collector` packages; drops `docker-reverse-proxy`. Requires dedicated template and build-cache buckets, because upstream removed `TEMPLATE_BUCKET_PREFIX`. |
+| 2025-05-24 | [`0c35ed5`](https://github.com/e2b-dev/infra/commit/0c35ed5c3b8492f96d1e0bbfb91fff96541a8c74) | Initial import. |
+
+There is no shared git ancestry with upstream, so a sync replaces the code layer
+wholesale rather than merging. To see what a newer upstream commit would bring:
+
+```bash
+git remote add e2b-upstream https://github.com/e2b-dev/infra.git   # once
+git fetch e2b-upstream main
+git diff 91f3173ae..e2b-upstream/main -- packages/ spec/ scripts/ tests/
+```
+
+**Add a row to the table above whenever the code layer is re-synced.**
 
 ---
 
