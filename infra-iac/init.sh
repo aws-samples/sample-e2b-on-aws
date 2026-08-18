@@ -3,8 +3,13 @@
 # Environment Configuration Section
 # ==================================================
 setup_environment() {
-  # Get CloudFormation stack ID
-  STACK_ID=$(grep "^StackName=" /tmp/e2b.log | cut -d'=' -f2)
+  # Get CloudFormation stack ID.
+  #
+  # tail -1 because the log is appended to, not truncated: a second StackName=
+  # line (a re-run, or a tree reused against another stack) would otherwise make
+  # STACK_ID two lines and every describe-stacks call below fail on a stack name
+  # that does not exist. The most recent line is the current stack.
+  STACK_ID=$(grep "^StackName=" /tmp/e2b.log | tail -1 | cut -d'=' -f2)
   
   # Validate stack existence
   [[ -z "$STACK_ID" ]] && { echo "Error: Failed to get CloudFormation Stack ID"; exit 1; }

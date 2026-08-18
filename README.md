@@ -127,12 +127,44 @@ ssh -i your-key.pem ubuntu@<instance-ip>
 # Option B: AWS Session Manager from the EC2 console
 ```
 
-### Step 4 — Watch Deployment Logs
+### Step 4 — Run the Deployment (or Watch It Run)
+
+The whole bootstrap writes to a single log, `/tmp/e2b.log` — the toolchain
+install, every deployment step, and the output of each step:
 
 ```bash
 sudo su root
 tail -f /tmp/e2b.log
 ```
+
+**If you launched the stack with `AutoDeploy=true`**, the chain is already
+running and there is nothing to start.
+
+**If you left `AutoDeploy=false`** (the default), the stack installed the
+toolchain and cloned this repository, but ran nothing. One command does the rest:
+
+```bash
+cd /opt/infra/sample-e2b-on-aws
+sudo bash deploy-all.sh
+```
+
+It runs the same steps, in the same order, that `AutoDeploy=true` would:
+`init` → `packer` → `terraform` → `init-db` → `build` → `prepare` → `deploy` →
+`create-template`. Each step that succeeds writes `/opt/.e2b-step-<name>.done`,
+so if one fails you can fix the cause and re-run the script — it resumes at the
+step that broke instead of repeating the work before it.
+
+```bash
+sudo bash deploy-all.sh --list             # steps, and which are already done
+sudo bash deploy-all.sh --skip-template    # stop after deploy, no test template
+sudo bash deploy-all.sh --only terraform   # re-run one step, ignoring its marker
+sudo bash deploy-all.sh --force            # clear all markers and start over
+sudo bash deploy-all.sh --help
+```
+
+> **Note:** the full chain took about 45 minutes on an `x86_64` `dev` stack.
+> `build` (compiling and pushing the service images, ~19 min) and `packer`
+> (the AMI, ~14 min) dominate; everything else is minutes.
 
 ### Step 5 — Configure DNS Records (Cloudflare)
 

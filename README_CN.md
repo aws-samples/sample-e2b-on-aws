@@ -125,12 +125,35 @@ ssh -i your-key.pem ubuntu@<instance-ip>
 # 方式 B：通过 EC2 控制台使用 AWS Session Manager
 ```
 
-### 步骤 4 — 查看部署日志
+### 步骤 4 — 执行部署（或查看部署进度）
+
+整个引导过程只写一个日志文件 `/tmp/e2b.log`：工具链安装、每一个部署步骤、以及每步的完整输出都在里面：
 
 ```bash
 sudo su root
 tail -f /tmp/e2b.log
 ```
+
+**如果创建栈时选择了 `AutoDeploy=true`**，部署链已经在跑，无需再做任何事。
+
+**如果保持 `AutoDeploy=false`**（默认值），栈只安装了工具链并克隆了本仓库，没有执行任何部署步骤。剩下的全部步骤由一条命令完成：
+
+```bash
+cd /opt/infra/sample-e2b-on-aws
+sudo bash deploy-all.sh
+```
+
+它执行的步骤与顺序和 `AutoDeploy=true` 完全一致：`init` → `packer` → `terraform` → `init-db` → `build` → `prepare` → `deploy` → `create-template`。每个成功的步骤会写下 `/opt/.e2b-step-<name>.done`，因此某一步失败时，修好原因后直接重跑脚本即可 —— 它会从失败的那一步继续，不会重复已完成的工作。
+
+```bash
+sudo bash deploy-all.sh --list             # 列出各步骤及完成情况
+sudo bash deploy-all.sh --skip-template    # 部署到 deploy 为止，不构建测试模板
+sudo bash deploy-all.sh --only terraform   # 忽略标记，只重跑某一步
+sudo bash deploy-all.sh --force            # 清空所有标记，从头再来
+sudo bash deploy-all.sh --help
+```
+
+> **说明：** 在 `x86_64` 的 `dev` 栈上，完整链约耗时 45 分钟。其中 `build`（编译并推送服务镜像，约 19 分钟）和 `packer`（构建 AMI，约 14 分钟）占绝大部分，其余步骤都在分钟级。
 
 ### 步骤 5 — 配置 DNS 记录（Cloudflare）
 
