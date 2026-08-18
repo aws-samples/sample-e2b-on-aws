@@ -1,6 +1,6 @@
 job "template-manager" {
   type = "service"
-  datacenters = ["${aws_az1}", "${aws_az2}"]
+  datacenters = ["${aws_az1}", "${aws_az2}", "${aws_az3}"]
   # Its own pool, like upstream. Sharing a host with the orchestrator does not
   # work: both allocate host-global network slots (veth-<idx>, 10.11.0.x) and
   # both program the nftables rules that redirect sandbox egress to their own

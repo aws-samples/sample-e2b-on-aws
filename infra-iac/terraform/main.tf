@@ -872,219 +872,39 @@ resource "aws_security_group" "api_sg" {
   )
 }
 
-# Create Application Load Balancer
-resource "aws_lb" "alb" {
-  name               = "${var.prefix}-alb"
-  internal           = var.publicaccess == "private" ? true : false
-  load_balancer_type = "application"
-  security_groups    = [aws_security_group.alb_sg.id]
-  subnets            = var.publicaccess == "private" ? var.VPC.private_subnets : var.VPC.public_subnets
-  enable_deletion_protection = var.environment == "prod" ? true : false
-  idle_timeout               = 120
-
-  tags = merge(
-    local.common_tags,
-    {
-      Name = "${var.prefix}-alb"
-    }
-  )
-}
-
-# Security group for ALB
-resource "aws_security_group" "alb_sg" {
-  name        = "${var.prefix}-alb-sg"
-  description = "Security group for ALB"
-  vpc_id      = var.VPC.id
-
-  # HTTP
-  ingress {
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  # HTTPS
-  ingress {
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  # Allow all outbound traffic
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  tags = merge(
-    local.common_tags,
-    {
-      Name = "${var.prefix}-alb-sg"
-    }
-  )
-}
-
-# Create target group for Nomad server UI
-resource "aws_lb_target_group" "nomad-server" {
-  name     = "${var.prefix}-nomad-server"
-  port     = 4646
-  protocol = "HTTP"
-  vpc_id   = var.VPC.id
-
-  health_check {
-    enabled             = true
-    path                = "/ui/"
-    interval            = 30
-    protocol            = "HTTP"
-    timeout             = 5
-    healthy_threshold   = 2
-    unhealthy_threshold = 2
-    matcher             = "200"
-  }
-
-  lifecycle {
-    create_before_destroy = true
-  }
-  
-  tags = local.common_tags
-}
-
-# Attach server ASG to Nomad server target group
-resource "aws_autoscaling_attachment" "nomad-server" {
-  autoscaling_group_name = aws_autoscaling_group.server.name
-  lb_target_group_arn    = aws_lb_target_group.nomad-server.arn
-}
-
-# Create target group for E2B API
-resource "aws_lb_target_group" "e2b-api" {
-  name     = "${var.prefix}-e2b-api"
-  port     = 50001
-  protocol = "HTTP"
-  vpc_id   = var.VPC.id
-
-  health_check {
-    enabled             = true
-    path                = "/health"
-    interval            = 30
-    protocol            = "HTTP"
-    timeout             = 5
-    healthy_threshold   = 2
-    unhealthy_threshold = 2
-    matcher             = "200"
-  }
-
-  lifecycle {
-    create_before_destroy = true
-  }
-  
-  tags = local.common_tags
-}
-
-# Attach API ASG to E2B API target group
-resource "aws_autoscaling_attachment" "e2b-api" {
-  autoscaling_group_name = aws_autoscaling_group.api.name
-  lb_target_group_arn    = aws_lb_target_group.e2b-api.arn
-}
-
-# Create target group for client proxy service
-resource "aws_lb_target_group" "client-proxy" {
-  name     = "${var.prefix}-client-proxy"
-  port     = 3002
-  protocol = "HTTP"
-  vpc_id   = var.VPC.id
-
-  health_check {
-    port                = 3001
-    enabled             = true
-    path                = "/health"
-    interval            = 30
-    protocol            = "HTTP"
-    timeout             = 5
-    healthy_threshold   = 2
-    unhealthy_threshold = 2
-    matcher             = "200"
-  }
-
-  lifecycle {
-    create_before_destroy = true
-  }
-  
-  tags = local.common_tags
-}
-
-# Attach API ASG to client proxy target group
-resource "aws_autoscaling_attachment" "client-proxy" {
-  autoscaling_group_name = aws_autoscaling_group.api.name
-  lb_target_group_arn    = aws_lb_target_group.client-proxy.arn
-}
-
+# =========================================================
+# LOAD BALANCER ATTACHMENTS
+# =========================================================
+#
+# The load balancer, its security group, the three target groups, the HTTPS
+# listener and its host-header rules all live in the CloudFormation stack, not
+# here. They used to be Terraform resources, which meant every terraform
+# destroy/apply produced a load balancer with a new DNS name and the wildcard
+# DNS record had to be re-pointed by hand - the only manual step in an otherwise
+# unattended deployment. Putting them on the same lifecycle as the wildcard
+# certificate (also CloudFormation-owned) makes that record a one-time setup.
+#
+# What stays here is the part that genuinely belongs to Terraform: attaching the
+# autoscaling groups it owns to those target groups. The ARNs arrive through
+# infra-iac/init.sh -> /opt/config.properties -> prepare.sh -> var.tf.
+#
 # NOTE: the docker-proxy target group, its ASG attachment and the
 # docker.<domain> listener rule were removed together with the
 # docker-reverse-proxy component, which upstream deprecated and deleted.
 
-# Create HTTP listener for ALB with default action to client-proxy
-resource "aws_lb_listener" "http" {
-  load_balancer_arn = aws_lb.alb.arn
-  port              = 443
-  protocol          = "HTTPS"
-  ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-2021-06"
-  certificate_arn   = var.certarn
-  default_action {
-    type             = "forward"
-    target_group_arn = aws_lb_target_group.client-proxy.arn
-  }
+resource "aws_autoscaling_attachment" "nomad-server" {
+  autoscaling_group_name = aws_autoscaling_group.server.name
+  lb_target_group_arn    = var.nomad_server_tg_arn
 }
 
-# Create HTTPS listener for ALB (commented out as it requires a certificate)
-# resource "aws_lb_listener" "https" {
-#   load_balancer_arn = aws_lb.alb.arn
-#   port              = 443
-#   protocol          = "HTTPS"
-#   ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-2021-06"
-#   certificate_arn   = var.certarn
-#   
-#   default_action {
-#     type             = "forward"
-#     target_group_arn = aws_lb_target_group.client-proxy.arn
-#   }
-# }
-
-# Create listener rule for API subdomain
-resource "aws_lb_listener_rule" "api" {
-  listener_arn = aws_lb_listener.http.arn
-  priority     = 10
-
-  action {
-    type             = "forward"
-    target_group_arn = aws_lb_target_group.e2b-api.arn
-  }
-  
-  condition {
-    host_header {
-      values = ["api.${var.domainname}"]
-    }
-  }
+resource "aws_autoscaling_attachment" "e2b-api" {
+  autoscaling_group_name = aws_autoscaling_group.api.name
+  lb_target_group_arn    = var.e2b_api_tg_arn
 }
 
-# Create listener rule for Nomad subdomain
-resource "aws_lb_listener_rule" "nomad" {
-  listener_arn = aws_lb_listener.http.arn
-  priority     = 30
-
-  action {
-    type             = "forward"
-    target_group_arn = aws_lb_target_group.nomad-server.arn
-  }
-  
-  condition {
-    host_header {
-      values = ["nomad.${var.domainname}"]
-    }
-  }
+resource "aws_autoscaling_attachment" "client-proxy" {
+  autoscaling_group_name = aws_autoscaling_group.api.name
+  lb_target_group_arn    = var.client_proxy_tg_arn
 }
 
 # Create API cluster instances in an Auto Scaling Group

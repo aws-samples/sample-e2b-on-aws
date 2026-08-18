@@ -1,5 +1,5 @@
 job "api" {
-  datacenters = ["${aws_az1}", "${aws_az2}"]
+  datacenters = ["${aws_az1}", "${aws_az2}", "${aws_az3}"]
   node_pool = "api"
   priority = 90
 

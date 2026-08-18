@@ -159,6 +159,15 @@ if [ -n "$CFNAZ2" ]; then
 else
     echo "Warning: CFNAZ2 not found in config file, cannot set aws_az2"
 fi
+
+# Extract CFNAZ3 value from the config file. Nomad job datacenters are built
+# from aws_az*, so a missing aws_az3 silently keeps AZ3 nodes unschedulable.
+CFNAZ3=$(grep "^CFNAZ3=" "$CONFIG_FILE" | cut -d'=' -f2)
+if [ -n "$CFNAZ3" ]; then
+    echo "aws_az3=${CFNAZ3}" >> "$CONFIG_FILE"
+else
+    echo "Warning: CFNAZ3 not found in config file, cannot set aws_az3"
+fi
 # Database credentials are stored in Secrets Manager (CFNDBCredentialSecretName in config file)
 # No DB parameters (host, port, user, password) written to config file
 

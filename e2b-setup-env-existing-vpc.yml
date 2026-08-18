@@ -204,6 +204,7 @@ Conditions:
   HasExternalBuildCacheBucket: !Not [!Equals [!Ref ExistingBuildCacheBucketName, ""]]
   CreateTemplatesBucket: !Equals [!Ref ExistingTemplatesBucketName, ""]
   CreateBuildCacheBucket: !Equals [!Ref ExistingBuildCacheBucketName, ""]
+  IsPrivateAccess: !Equals [!Ref PublicAccess, private]
 
 # ===================================================================================================
 # Resources - AWS resources to be provisioned for the E2B infrastructure
@@ -676,6 +677,169 @@ Resources:
           ValidationDomain: !Ref BaseDomain
 
   # ------------------------------------------------------------------------------------------------
+  # Application Load Balancer
+  #
+  # Deliberately owned by CloudFormation rather than Terraform. The wildcard
+  # certificate above lives for the life of the stack, but a Terraform-managed
+  # load balancer is destroyed and recreated by `terraform destroy` / `apply`,
+  # and each new one gets a different DNS name. That forced the wildcard DNS
+  # record to be re-pointed by hand after every rebuild - the one manual step
+  # left in an otherwise unattended deployment. Keeping the load balancer on the
+  # same lifecycle as the certificate makes the DNS record a one-time setup.
+  #
+  # Terraform still owns the autoscaling groups and attaches them to the target
+  # groups below through the ARNs exported in this stack's outputs.
+  # ------------------------------------------------------------------------------------------------
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for the E2B application load balancer
+      VpcId: !Ref ExistingVpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          Description: HTTP
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: HTTPS
+      SecurityGroupEgress:
+        - IpProtocol: "-1"
+          CidrIp: 0.0.0.0/0
+          Description: Allow all outbound traffic
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-alb-sg"
+
+  ApplicationLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub "${AWS::StackName}-alb"
+      Type: application
+      Scheme: !If [IsPrivateAccess, internal, internet-facing]
+      SecurityGroups:
+        - !GetAtt ALBSecurityGroup.GroupId
+      Subnets: !If
+        - IsPrivateAccess
+        - [!Ref ExistingPrivateSubnet1Id, !Ref ExistingPrivateSubnet2Id]
+        - [!Ref ExistingPublicSubnet1Id, !Ref ExistingPublicSubnet2Id]
+      LoadBalancerAttributes:
+        # Long enough that a paused sandbox request is not cut off mid-flight.
+        - Key: idle_timeout.timeout_seconds
+          Value: "120"
+        - Key: deletion_protection.enabled
+          Value: !If [IsProd, "true", "false"]
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-alb"
+
+  # Nomad server UI / API.
+  NomadServerTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub "${AWS::StackName}-nomad-server"
+      VpcId: !Ref ExistingVpcId
+      Port: 4646
+      Protocol: HTTP
+      HealthCheckProtocol: HTTP
+      HealthCheckPath: /ui/
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 2
+      Matcher:
+        HttpCode: "200"
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-nomad-server"
+
+  # E2B API.
+  E2BApiTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub "${AWS::StackName}-e2b-api"
+      VpcId: !Ref ExistingVpcId
+      Port: 50001
+      Protocol: HTTP
+      HealthCheckProtocol: HTTP
+      HealthCheckPath: /health
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 2
+      Matcher:
+        HttpCode: "200"
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-e2b-api"
+
+  # Sandbox traffic. Served on 3002, health-checked on 3001, matching the
+  # proxy / health port pair in nomad/origin/edge.hcl.
+  ClientProxyTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub "${AWS::StackName}-client-proxy"
+      VpcId: !Ref ExistingVpcId
+      Port: 3002
+      Protocol: HTTP
+      HealthCheckProtocol: HTTP
+      HealthCheckPort: "3001"
+      HealthCheckPath: /health
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 2
+      Matcher:
+        HttpCode: "200"
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-client-proxy"
+
+  # Sandbox subdomains are dynamic, so client-proxy is the catch-all default and
+  # the two fixed hostnames are matched by higher-priority rules.
+  ALBHttpsListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Port: 443
+      Protocol: HTTPS
+      SslPolicy: ELBSecurityPolicy-TLS13-1-2-2021-06
+      Certificates:
+        - CertificateArn: !Ref WildcardCertificate
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref ClientProxyTargetGroup
+
+  ALBApiListenerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn: !Ref ALBHttpsListener
+      Priority: 10
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref E2BApiTargetGroup
+      Conditions:
+        - Field: host-header
+          Values:
+            - !Sub "api.${BaseDomain}"
+
+  ALBNomadListenerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn: !Ref ALBHttpsListener
+      Priority: 30
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref NomadServerTargetGroup
+      Conditions:
+        - Field: host-header
+          Values:
+            - !Sub "nomad.${BaseDomain}"
+
+  # ------------------------------------------------------------------------------------------------
   # S3 Buckets - Unified E2B bucket, Loki log storage, and the two dedicated
   # orchestrator storage buckets (templates / build cache).
   #
@@ -869,7 +1033,13 @@ Resources:
               snap install go --classic
             - |
               # Install essential development and deployment tools
-              apt install unzip docker.io make jq postgresql-client-common git -y
+              # build-essential is required, not optional: the orchestrator and
+              # template-manager binaries are compiled on this host (not in a
+              # container) and packages/orchestrator/Makefile builds them with
+              # CGO_ENABLED=1, because pkg/sandbox/uffd/userfaultfd binds
+              # linux/userfaultfd.h through cgo. Without a C compiler the build
+              # step fails with: cgo: C compiler "gcc" not found.
+              apt install unzip docker.io make jq postgresql-client-common git build-essential -y
             - |
               # Install PostgreSQL client for database management
               apt install postgresql-client -y
@@ -1125,6 +1295,37 @@ Outputs:
     Value: !Ref WildcardCertificate
     Export:
       Name: !Sub "${AWS::StackName}-CFNCERTARN"
+
+  # Load balancer outputs.
+  #
+  # The target group ARNs reach Terraform through infra-iac/init.sh ->
+  # /opt/config.properties -> infra-iac/terraform/prepare.sh -> var.tf, where the
+  # autoscaling attachments consume them. CFNALBDNS is the value the wildcard DNS
+  # record points at; because the load balancer now lives here rather than in
+  # Terraform, it survives terraform destroy/apply and only has to be set once.
+  CFNALBDNS:
+    Description: Application Load Balancer DNS name. Point *.{BaseDomain} at this.
+    Value: !GetAtt ApplicationLoadBalancer.DNSName
+    Export:
+      Name: !Sub "${AWS::StackName}-CFNALBDNS"
+
+  CFNNOMADSERVERTGARN:
+    Description: Nomad server target group ARN, attached to the server ASG by Terraform
+    Value: !Ref NomadServerTargetGroup
+    Export:
+      Name: !Sub "${AWS::StackName}-CFNNOMADSERVERTGARN"
+
+  CFNE2BAPITGARN:
+    Description: E2B API target group ARN, attached to the API ASG by Terraform
+    Value: !Ref E2BApiTargetGroup
+    Export:
+      Name: !Sub "${AWS::StackName}-CFNE2BAPITGARN"
+
+  CFNCLIENTPROXYTGARN:
+    Description: Client proxy target group ARN, attached to the API ASG by Terraform
+    Value: !Ref ClientProxyTargetGroup
+    Export:
+      Name: !Sub "${AWS::StackName}-CFNCLIENTPROXYTGARN"
 
   # Redis outputs
   REDISNAME:

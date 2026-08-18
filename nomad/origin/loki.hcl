@@ -1,5 +1,5 @@
 job "loki" {
-  datacenters = ["${aws_az1}", "${aws_az2}"]
+  datacenters = ["${aws_az1}", "${aws_az2}", "${aws_az3}"]
   type        = "service"
   node_pool = "api"
 
