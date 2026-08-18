@@ -1367,6 +1367,12 @@ Resources:
                 echo "RepoClone=FAILED for branch ${RepoBranch}, deliver the tree by hand" >> /tmp/e2b.log
                 mkdir -p /opt/infra/sample-e2b-on-aws
               fi
+              # UserData runs as root, so the clone lands root-owned and git then
+              # refuses to operate for the login user ("detected dubious ownership").
+              # Hand the tree to ubuntu, which is who drives the manual path and who
+              # VS Code Remote-SSH connects as. Steps that need root still work -
+              # root can write regardless of owner.
+              chown -R ubuntu:ubuntu /opt/infra/sample-e2b-on-aws
               cd /opt/infra/sample-e2b-on-aws
               git rev-parse --abbrev-ref HEAD >> /tmp/e2b.log 2>&1 || true
             - !If
