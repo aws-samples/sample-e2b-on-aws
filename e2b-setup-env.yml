@@ -1198,8 +1198,16 @@ Resources:
       ServerlessCacheName: !Sub "${AWS::StackName}-redis"
       SecurityGroupIds:
         - !GetAtt RedisSecurityGroup.GroupId
-      # NOTE: SubnetIds on AWS::ElastiCache::ServerlessCache requires replacement.
-      # Changing this on a live stack recreates the cache and changes REDISENDPOINT.
+      # SubnetIds requires replacement, and ServerlessCacheName is a required
+      # property, so this resource is always custom-named. CloudFormation refuses
+      # to replace a custom-named resource during a stack update - it would have to
+      # hold two caches under one name - and fails the whole update with "Rename
+      # e2b-dev-redis and update the stack again".
+      #
+      # So changing the subnet list here is not an updatable operation. It needs
+      # either a stack recreate or a new cache name, and either way REDISENDPOINT
+      # changes. Adding an Availability Zone to a live stack therefore means
+      # recreating it; do not burn time discovering this from a failed update.
       SubnetIds:
         - !Ref PrivateSubnet1
         - !Ref PrivateSubnet2
