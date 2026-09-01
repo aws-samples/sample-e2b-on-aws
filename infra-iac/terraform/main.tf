@@ -57,31 +57,31 @@ locals {
   # locals, so the bare-metal detection can never drift from what the ASG runs.
 
   # Client nodes host customer sandboxes. Bare metal, so Firecracker gets
-  # hardware virtualization directly, and the smallest metal shape each
-  # architecture offers: the pool scales out (max_size 5), so a bigger node buys
-  # nothing a second node would not, and an idle metal instance is the most
-  # expensive thing in this stack. A 4 vCPU / 4 GiB test sandbox fits either
-  # shape many times over.
+  # hardware virtualization directly.
   #
-  # x86_64: m5zn.metal, 48 vCPU / 192 GiB, the smallest x86 bare metal in
-  # us-east-1. z1d.metal matches its vCPU count but carries 384 GiB, and the
-  # next Intel step up, c5n.metal, is 72 vCPU.
+  # The size floor is not ours to choose: a sandbox may only be placed on a node
+  # whose CPU model matches the one its template was built on
+  # (shared/pkg/machineinfo.IsCompatibleWith allows same architecture + family +
+  # model, with a single hardcoded exception for Ice Lake builds on Emerald
+  # Rapids nodes). The build pool has to be 8th-generation Intel for nested
+  # virtualization, so the client pool has to be 8th-generation Intel metal - and
+  # AWS only sells that in metal-48xl (192 vCPU) and metal-96xl (384 vCPU).
   #
-  # arm64: c7g.metal, 64 vCPU / 128 GiB. a1.metal is smaller at 16 vCPU / 32 GiB
-  # and is deliberately not used: it is Graviton1, and Firecracker's aarch64
-  # support starts at Graviton2, so the smallest shape that can boot a sandbox at
-  # all is a 64 vCPU Graviton.
+  # An earlier attempt at m5zn.metal, the smallest x86 metal at 48 vCPU, deployed
+  # cleanly and then refused every sandbox with
+  #   503 sandbox_no_compatible_node: no compatible node for this template's
+  #   requirements
+  # because Cascade Lake is not the Granite Rapids the build ran on.
   #
-  # Split per architecture because the single value this replaces was an x86-only
-  # type used for both, which left arm64 deployments asking for an instance type
-  # that does not exist on that architecture. Both shapes are EBS-only, which is
-  # what the client launch template already assumes - it attaches a 300 GiB root
-  # and a 4 TiB data volume and never references an instance store.
-  #
-  # Neither type is offered in every availability zone. If a zone rejects the
-  # launch, c5.metal (96 vCPU / 192 GiB) is the broadly available x86 fallback.
-  client_instance_type_x86 = "m5zn.metal"
-  client_instance_type_arm = "c7g.metal"
+  # c8i rather than m8i at the same 192 vCPU: half the memory (384 GiB against
+  # 768 GiB) for the same CPU generation, and sandbox density here is bounded by
+  # vCPU, not by RAM.
+  client_instance_type_x86 = "c8i.metal-48xl"
+
+  # arm64: the same rule applies, so this has to match whatever the arm build
+  # node reports. c8g.metal-48xl is the Graviton4 equivalent; a1.metal is not an
+  # option regardless, since Firecracker's aarch64 support starts at Graviton2.
+  client_instance_type_arm = "c8g.metal-48xl"
 
   # Resolved once so data.aws_ec2_instance_type.client below describes the shape
   # this deployment actually launches; reading the x86 value unconditionally
@@ -801,6 +801,30 @@ resource "aws_autoscaling_group" "client" {
   launch_template {
     id      = aws_launch_template.client.id
     version = "$Latest"
+  }
+
+  # Tracking $Latest is not enough on its own: it decides what the *next*
+  # instance launches with and leaves the running one alone, so an instance-type
+  # or AMI change applied cleanly and then did nothing until something happened
+  # to replace the node. That is how a client pool kept serving m5zn.metal after
+  # terraform had already moved the launch template to c8i.metal-48xl - and the
+  # mismatch only surfaced as sandboxes failing to place, far from its cause.
+  #
+  # min_healthy_percentage = 0 because this pool runs a single node by default;
+  # anything higher and the refresh cannot start, since there is no second
+  # instance to stay healthy while the first is replaced. Sandboxes on the old
+  # node are lost when it goes - acceptable here because the alternative is a
+  # pool that silently ignores its own configuration.
+  instance_refresh {
+    strategy = "Rolling"
+    preferences {
+      min_healthy_percentage = 0
+      # Consul and Nomad have to come up and the node has to register before the
+      # refresh calls it done.
+      instance_warmup = 300
+    }
+    # No triggers block: a launch_template change already triggers the refresh on
+    # its own, and naming it explicitly is what terraform validate warns about.
   }
 
   tag {
