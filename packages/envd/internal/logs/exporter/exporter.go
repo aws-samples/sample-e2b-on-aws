@@ -4,41 +4,63 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"log"
 	"net/http"
-	"os"
 	"sync"
+	"sync/atomic"
 	"time"
+
+	"github.com/e2b-dev/infra/packages/envd/internal/host"
 )
 
-const ExporterTimeout = 10 * time.Second
+const (
+	ExporterTimeout = 10 * time.Second
+
+	// Under Loki's 256 KiB max_line_size default.
+	maxLogLineBytes  = 192 << 10
+	maxBufferedBytes = 8 << 20
+
+	logFloor = time.Minute
+)
 
 type HTTPExporter struct {
-	ctx      context.Context
-	client   http.Client
-	triggers chan struct{}
-	logs     [][]byte
-	sync.Mutex
-	debug bool
+	client        http.Client
+	logs          [][]byte
+	bufferedBytes int
+	mmdsOpts      atomic.Pointer[host.MMDSOpts]
+
+	jsonErrLog   *rateLimitedLogger
+	sendErrLog   *rateLimitedLogger
+	oversizedLog *rateLimitedLogger
+
+	// Concurrency coordination
+	triggers  chan struct{}
+	logLock   sync.Mutex
+	startOnce sync.Once
 }
 
-func NewHTTPLogsExporter(ctx context.Context, debug bool) *HTTPExporter {
+func NewHTTPLogsExporter(ctx context.Context, mmdsChan <-chan *host.MMDSOpts) *HTTPExporter {
 	exporter := &HTTPExporter{
 		client: http.Client{
-			Timeout: ExporterTimeout,
+			Timeout:   ExporterTimeout,
+			Transport: &http.Transport{DisableKeepAlives: true},
 		},
-		triggers: make(chan struct{}, 1),
-		debug:    debug,
-		ctx:      ctx,
+		triggers:     make(chan struct{}, 1),
+		jsonErrLog:   newRateLimitedLogger(logFloor, "error adding instance logging options to JSON: %v"),
+		sendErrLog:   newRateLimitedLogger(logFloor, "error sending instance logs: %+v"),
+		oversizedLog: newRateLimitedLogger(logFloor, "dropped log line exceeding %d bytes"),
 	}
 
-	go exporter.start()
+	go exporter.listenForMMDSOptsAndStart(ctx, mmdsChan)
 
 	return exporter
 }
 
-func (w *HTTPExporter) sendInstanceLogs(logs []byte, address string) error {
-	request, err := http.NewRequestWithContext(w.ctx, http.MethodPost, address, bytes.NewBuffer(logs))
+func (w *HTTPExporter) sendInstanceLogs(ctx context.Context, logs []byte, address string) error {
+	if address == "" {
+		return nil
+	}
+
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, address, bytes.NewBuffer(logs))
 	if err != nil {
 		return err
 	}
@@ -51,68 +73,61 @@ func (w *HTTPExporter) sendInstanceLogs(logs []byte, address string) error {
 	}
 	defer response.Body.Close()
 
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return fmt.Errorf("collector returned %s", response.Status)
+	}
+
 	return nil
 }
 
-func printLog(logs []byte) {
-	fmt.Fprintf(os.Stdout, "%v", string(logs))
+func (w *HTTPExporter) listenForMMDSOptsAndStart(ctx context.Context, mmdsChan <-chan *host.MMDSOpts) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case mmdsOpts, ok := <-mmdsChan:
+			if !ok {
+				return
+			}
+
+			w.mmdsOpts.Store(mmdsOpts)
+
+			w.startOnce.Do(func() {
+				go w.start(ctx)
+			})
+		}
+	}
 }
 
-func (w *HTTPExporter) start() {
-	w.waitForMMDS(w.ctx)
+func (w *HTTPExporter) start(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-w.triggers:
+		}
 
-	for range w.triggers {
 		logs := w.getAllLogs()
 
 		if len(logs) == 0 {
 			continue
 		}
 
-		if w.debug {
-			for _, log := range logs {
-				fmt.Fprintf(os.Stdout, "%v", string(log))
-			}
-
-			continue
-		}
-
-		token, err := w.getMMDSToken(w.ctx)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error getting mmds token: %v\n", err)
-
-			for _, log := range logs {
-				printLog(log)
-			}
-
-			continue
-		}
-
-		mmdsOpts, err := w.getMMDSOpts(w.ctx, token)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error getting instance logging options from mmds (token %s): %v\n", token, err)
-
-			for _, log := range logs {
-				printLog(log)
-			}
-
+		opts := w.mmdsOpts.Load()
+		if opts == nil {
 			continue
 		}
 
 		for _, logLine := range logs {
-			logsWithOpts, jsonErr := mmdsOpts.addOptsToJSON(logLine)
-			if jsonErr != nil {
-				log.Printf("error adding instance logging options (%+v) to JSON (%+v) with logs : %v\n", mmdsOpts, logLine, jsonErr)
-
-				printLog(logLine)
+			logLineWithOpts, err := opts.AddOptsToJSON(logLine)
+			if err != nil {
+				w.jsonErrLog.log(err)
 
 				continue
 			}
 
-			err = w.sendInstanceLogs(logsWithOpts, mmdsOpts.Address)
-			if err != nil {
-				log.Printf("error sending instance logs: %+v", err)
-
-				printLog(logLine)
+			if err := w.sendInstanceLogs(ctx, logLineWithOpts, opts.LogsCollectorAddress); err != nil {
+				w.sendErrLog.log(err)
 
 				continue
 			}
@@ -130,6 +145,13 @@ func (w *HTTPExporter) resumeProcessing() {
 }
 
 func (w *HTTPExporter) Write(logs []byte) (int, error) {
+	// Drop oversized lines: Loki would reject them anyway.
+	if len(logs) > maxLogLineBytes {
+		w.oversizedLog.log(maxLogLineBytes)
+
+		return len(logs), nil
+	}
+
 	logsCopy := make([]byte, len(logs))
 	copy(logsCopy, logs)
 
@@ -139,19 +161,30 @@ func (w *HTTPExporter) Write(logs []byte) (int, error) {
 }
 
 func (w *HTTPExporter) getAllLogs() [][]byte {
-	w.Lock()
-	defer w.Unlock()
+	w.logLock.Lock()
+	defer w.logLock.Unlock()
 
 	logs := w.logs
 	w.logs = nil
+	w.bufferedBytes = 0
 
 	return logs
 }
 
 func (w *HTTPExporter) addLogs(logs []byte) {
-	w.Lock()
-	defer w.Unlock()
+	w.logLock.Lock()
+	defer w.logLock.Unlock()
 
+	// Drop the oldest entries to stay under maxBufferedBytes. Happens when
+	// the collector is unreachable or the producer outruns the send loop;
+	// keeping the queue bounded matters more than not losing old lines.
+	for w.bufferedBytes+len(logs) > maxBufferedBytes && len(w.logs) > 0 {
+		w.bufferedBytes -= len(w.logs[0])
+		w.logs[0] = nil
+		w.logs = w.logs[1:]
+	}
+
+	w.bufferedBytes += len(logs)
 	w.logs = append(w.logs, logs)
 
 	w.resumeProcessing()

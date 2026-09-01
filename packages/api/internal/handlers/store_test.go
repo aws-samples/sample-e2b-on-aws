@@ -1,72 +1,53 @@
 package handlers
 
 import (
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"testing"
-	"time"
 
-	"github.com/golang-jwt/jwt/v5"
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/e2b-dev/infra/packages/api/internal/api"
+	"github.com/e2b-dev/infra/packages/shared/pkg/apierrors"
 )
 
-func signToken(t *testing.T, secret string, subject string) string {
-	claims := supabaseClaims{
-		RegisteredClaims: jwt.RegisteredClaims{
-			Subject:   subject,
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)), // 1 hour expiry
-			IssuedAt:  jwt.NewNumericDate(time.Now()),
-			Issuer:    "test",
-		},
-	}
+func TestSendAPIError_BodyCarriesSemanticErrorCode(t *testing.T) {
+	t.Parallel()
 
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	recorder := httptest.NewRecorder()
+	ginCtx, _ := gin.CreateTestContext(recorder)
 
-	signedToken, err := token.SignedString([]byte(secret))
-	assert.NoError(t, err)
+	apierrors.SendAPIError(ginCtx, &api.APIError{
+		Code:      http.StatusServiceUnavailable,
+		ErrorCode: "sandbox_capacity_unavailable",
+		ClientMsg: "Failed to place sandbox: not enough capacity for the requested resources right now, please retry shortly",
+		Err:       errors.New("no nodes available"),
+	})
 
-	return signedToken
+	require.Equal(t, http.StatusServiceUnavailable, recorder.Code)
+
+	var body api.Error
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &body))
+	assert.Equal(t, int32(http.StatusServiceUnavailable), body.Code)
+	require.NotNil(t, body.ErrorCode)
+	assert.Equal(t, "sandbox_capacity_unavailable", *body.ErrorCode)
+	assert.Equal(t, "Failed to place sandbox: not enough capacity for the requested resources right now, please retry shortly", body.Message)
 }
 
-func TestGetJWTClaims(t *testing.T) {
-	secret1 := "testsecret1testsecret1"
-	secret2 := "testsecret2testsecret2"
+func TestSendAPIStoreError_BodyOmitsErrorCode(t *testing.T) {
+	t.Parallel()
 
-	token1 := signToken(t, secret1, "1")
-	token2 := signToken(t, secret2, "2")
-	tokenEmpty := signToken(t, "", "3")
+	recorder := httptest.NewRecorder()
+	ginCtx, _ := gin.CreateTestContext(recorder)
 
-	t.Run("valid token for first secret", func(t *testing.T) {
-		claims, err := getJWTClaims([]string{secret1, secret2}, token1)
-		assert.NoError(t, err)
-		assert.Equal(t, "1", claims.Subject)
-	})
+	a := &APIStore{}
+	a.sendAPIStoreError(ginCtx, http.StatusInternalServerError, "Failed to place sandbox")
 
-	t.Run("valid token for second secret", func(t *testing.T) {
-		claims, err := getJWTClaims([]string{secret1, secret2}, token2)
-		assert.NoError(t, err)
-		assert.Equal(t, "2", claims.Subject)
-	})
-
-	t.Run("invalid token secret combination", func(t *testing.T) {
-		claims, err := getJWTClaims([]string{secret1}, token2)
-		assert.Error(t, err)
-		assert.Nil(t, claims)
-	})
-
-	t.Run("no secrets", func(t *testing.T) {
-		claims, err := getJWTClaims([]string{}, token1)
-		assert.Error(t, err)
-		assert.Nil(t, claims)
-	})
-
-	t.Run("empty secret", func(t *testing.T) {
-		claims, err := getJWTClaims([]string{""}, tokenEmpty)
-		assert.Error(t, err)
-		assert.Nil(t, claims)
-	})
-
-	t.Run("invalid token for all secrets", func(t *testing.T) {
-		claims, err := getJWTClaims([]string{secret1, secret2}, "invalid")
-		assert.Error(t, err)
-		assert.Nil(t, claims)
-	})
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &body))
+	assert.NotContains(t, body, "error_code")
 }

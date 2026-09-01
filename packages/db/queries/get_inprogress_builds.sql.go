@@ -7,21 +7,68 @@ package queries
 
 import (
 	"context"
+
+	"github.com/google/uuid"
 )
 
+const getCancellableTemplateBuildsByTeam = `-- name: GetCancellableTemplateBuildsByTeam :many
+SELECT atb.build_id, atb.template_id, e.cluster_id, b.cluster_node_id
+FROM public.active_template_builds atb
+JOIN public.env_builds b ON b.id = atb.build_id
+JOIN public.envs e ON e.id = atb.template_id
+WHERE atb.team_id = $1
+  AND atb.created_at > NOW() - INTERVAL '1 day'
+ORDER BY atb.build_id
+`
+
+type GetCancellableTemplateBuildsByTeamRow struct {
+	BuildID       uuid.UUID
+	TemplateID    string
+	ClusterID     *uuid.UUID
+	ClusterNodeID *string
+}
+
+// Relies on active_template_builds table (migration 20260305130000).
+func (q *Queries) GetCancellableTemplateBuildsByTeam(ctx context.Context, teamID uuid.UUID) ([]GetCancellableTemplateBuildsByTeamRow, error) {
+	rows, err := q.db.Query(ctx, getCancellableTemplateBuildsByTeam, teamID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetCancellableTemplateBuildsByTeamRow
+	for rows.Next() {
+		var i GetCancellableTemplateBuildsByTeamRow
+		if err := rows.Scan(
+			&i.BuildID,
+			&i.TemplateID,
+			&i.ClusterID,
+			&i.ClusterNodeID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getInProgressTemplateBuilds = `-- name: GetInProgressTemplateBuilds :many
-SELECT t.id, t.created_at, t.is_blocked, t.name, t.tier, t.email, t.is_banned, t.blocked_reason, t.cluster_id, e.id, e.created_at, e.updated_at, e.public, e.build_count, e.spawn_count, e.last_spawned_at, e.team_id, e.created_by, e.cluster_id, b.id, b.created_at, b.updated_at, b.finished_at, b.status, b.dockerfile, b.start_cmd, b.vcpu, b.ram_mb, b.free_disk_size_mb, b.total_disk_size_mb, b.kernel_version, b.firecracker_version, b.env_id, b.envd_version, b.ready_cmd, b.cluster_node_id
+SELECT DISTINCT ON (b.id) t.cluster_id AS team_cluster_id, e.id, e.created_at, e.updated_at, e.public, e.build_count, e.spawn_count, e.last_spawned_at, e.team_id, e.created_by, e.cluster_id, e.source, b.id, b.created_at, b.updated_at, b.finished_at, b.status, b.dockerfile, b.start_cmd, b.vcpu, b.ram_mb, b.free_disk_size_mb, b.total_disk_size_mb, b.kernel_version, b.firecracker_version, b.env_id, b.envd_version, b.ready_cmd, b.cluster_node_id, b.reason, b.version, b.cpu_architecture, b.cpu_family, b.cpu_model, b.cpu_model_name, b.cpu_flags, b.status_group, b.team_id
 FROM public.env_builds b
-JOIN public.envs e ON e.id = b.env_id
+JOIN public.env_build_assignments eba ON eba.build_id = b.id
+JOIN public.active_envs e ON e.id = eba.env_id
 JOIN public.teams t ON e.team_id = t.id
-WHERE b.status = 'waiting' OR b.status = 'building'
-ORDER BY b.created_at DESC
+WHERE b.status_group IN ('pending', 'in_progress')
+  AND e.source = 'template'
+ORDER BY b.id, b.created_at DESC
 `
 
 type GetInProgressTemplateBuildsRow struct {
-	Team     Team
-	Env      Env
-	EnvBuild EnvBuild
+	TeamClusterID *uuid.UUID
+	ActiveEnv     ActiveEnv
+	EnvBuild      EnvBuild
 }
 
 func (q *Queries) GetInProgressTemplateBuilds(ctx context.Context) ([]GetInProgressTemplateBuildsRow, error) {
@@ -34,25 +81,18 @@ func (q *Queries) GetInProgressTemplateBuilds(ctx context.Context) ([]GetInProgr
 	for rows.Next() {
 		var i GetInProgressTemplateBuildsRow
 		if err := rows.Scan(
-			&i.Team.ID,
-			&i.Team.CreatedAt,
-			&i.Team.IsBlocked,
-			&i.Team.Name,
-			&i.Team.Tier,
-			&i.Team.Email,
-			&i.Team.IsBanned,
-			&i.Team.BlockedReason,
-			&i.Team.ClusterID,
-			&i.Env.ID,
-			&i.Env.CreatedAt,
-			&i.Env.UpdatedAt,
-			&i.Env.Public,
-			&i.Env.BuildCount,
-			&i.Env.SpawnCount,
-			&i.Env.LastSpawnedAt,
-			&i.Env.TeamID,
-			&i.Env.CreatedBy,
-			&i.Env.ClusterID,
+			&i.TeamClusterID,
+			&i.ActiveEnv.ID,
+			&i.ActiveEnv.CreatedAt,
+			&i.ActiveEnv.UpdatedAt,
+			&i.ActiveEnv.Public,
+			&i.ActiveEnv.BuildCount,
+			&i.ActiveEnv.SpawnCount,
+			&i.ActiveEnv.LastSpawnedAt,
+			&i.ActiveEnv.TeamID,
+			&i.ActiveEnv.CreatedBy,
+			&i.ActiveEnv.ClusterID,
+			&i.ActiveEnv.Source,
 			&i.EnvBuild.ID,
 			&i.EnvBuild.CreatedAt,
 			&i.EnvBuild.UpdatedAt,
@@ -70,6 +110,15 @@ func (q *Queries) GetInProgressTemplateBuilds(ctx context.Context) ([]GetInProgr
 			&i.EnvBuild.EnvdVersion,
 			&i.EnvBuild.ReadyCmd,
 			&i.EnvBuild.ClusterNodeID,
+			&i.EnvBuild.Reason,
+			&i.EnvBuild.Version,
+			&i.EnvBuild.CpuArchitecture,
+			&i.EnvBuild.CpuFamily,
+			&i.EnvBuild.CpuModel,
+			&i.EnvBuild.CpuModelName,
+			&i.EnvBuild.CpuFlags,
+			&i.EnvBuild.StatusGroup,
+			&i.EnvBuild.TeamID,
 		); err != nil {
 			return nil, err
 		}
@@ -79,4 +128,29 @@ func (q *Queries) GetInProgressTemplateBuilds(ctx context.Context) ([]GetInProgr
 		return nil, err
 	}
 	return items, nil
+}
+
+const getInProgressTemplateBuildsByTeam = `-- name: GetInProgressTemplateBuildsByTeam :one
+SELECT COUNT(*) as build_count
+FROM public.active_template_builds atb
+WHERE atb.team_id = $1::uuid
+  AND atb.created_at > NOW() - INTERVAL '1 day'
+  AND NOT (
+    atb.template_id = $2::text
+    AND atb.tags && $3::text[]
+  )
+`
+
+type GetInProgressTemplateBuildsByTeamParams struct {
+	TeamID            uuid.UUID
+	ExcludeTemplateID string
+	ExcludeTags       []string
+}
+
+// Relies on active_template_builds table (migration 20260305130000).
+func (q *Queries) GetInProgressTemplateBuildsByTeam(ctx context.Context, arg GetInProgressTemplateBuildsByTeamParams) (int64, error) {
+	row := q.db.QueryRow(ctx, getInProgressTemplateBuildsByTeam, arg.TeamID, arg.ExcludeTemplateID, arg.ExcludeTags)
+	var build_count int64
+	err := row.Scan(&build_count)
+	return build_count, err
 }

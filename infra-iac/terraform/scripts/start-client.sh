@@ -277,11 +277,17 @@ mkdir -p $kernels_dir
 fc_versions_dir="/fc-versions"
 mkdir -p $fc_versions_dir
 
+# The orchestrator builds sandbox rootfs with busybox and expects it under
+# HOST_BUSYBOX_DIR (default /fc-busybox), matching BUSYBOX_VERSION.
+busybox_dir="/fc-busybox"
+mkdir -p $busybox_dir
+
 # Mount S3 buckets using mountpoint-s3
-mkdir -p /tmp/mp_cache_envd /tmp/mp_cache_kernels /tmp/mp_cache_versions
+mkdir -p /tmp/mp_cache_envd /tmp/mp_cache_kernels /tmp/mp_cache_versions /tmp/mp_cache_busybox
 mount-s3 ${E2B_BUCKET} $envd_dir --prefix fc-env-pipeline/ --read-only --allow-other --cache /tmp/mp_cache_envd --file-mode 0755
 mount-s3 ${E2B_BUCKET} $kernels_dir --prefix fc-kernels/ --read-only --allow-other --cache /tmp/mp_cache_kernels --file-mode 0755
 mount-s3 ${E2B_BUCKET} $fc_versions_dir --prefix fc-versions/ --read-only --allow-other --cache /tmp/mp_cache_versions --file-mode 0755
+mount-s3 ${E2B_BUCKET} $busybox_dir --prefix fc-busybox/ --read-only --allow-other --cache /tmp/mp_cache_busybox --file-mode 0755
 
 # These variables are passed in via Terraform template interpolation
 aws s3 cp "s3://${E2B_BUCKET}/cluster-setup/run-consul-${RUN_CONSUL_FILE_HASH}.sh" /opt/consul/bin/run-consul.sh
@@ -291,13 +297,14 @@ chmod +x /opt/consul/bin/run-consul.sh /opt/nomad/bin/run-nomad.sh
 
 mkdir -p /root/docker
 touch /root/docker/config.json
-# export ECR_AUTH_TOKEN=$(aws ecr get-authorization-token --output text --query 'authorizationData[].authorizationToken')
+# Delegate ECR auth to amazon-ecr-credential-helper (installed in the AMI), which
+# mints tokens from the instance profile on demand. The previous approach baked a
+# 12-hour ECR token into this file at boot, so any node outliving the token could
+# no longer pull images.
 cat <<EOF >/root/docker/config.json
 {
-    "auths": {
-        "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com": {
-            "auth": "$(aws ecr get-authorization-token --output text --query 'authorizationData[].authorizationToken')"
-        }
+    "credHelpers": {
+        "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com": "ecr-login"
     }
 }
 EOF
@@ -393,7 +400,10 @@ echo $overcommitment_hugepages >/proc/sys/vm/nr_overcommit_hugepages
     --gossip-encryption-key "${CONSUL_GOSSIP_ENCRYPTION_KEY}" \
     --dns-request-token "${CONSUL_DNS_REQUEST_TOKEN}" &
 
-/opt/nomad/bin/run-nomad.sh --client --consul-token "${CONSUL_TOKEN}" &
+# run-nomad.sh is the verbatim upstream 91f3173ae script (one shared copy for
+# every pool), so the pool name and labels are passed as flags; they land in the
+# Nomad client's node_pool and meta.node_labels.
+/opt/nomad/bin/run-nomad.sh --client --node-pool "default" --node-labels "${NODE_LABELS}" --consul-token "${CONSUL_TOKEN}" &
 
 # Add alias for ssh-ing to sbx
 echo '_sbx_ssh() {

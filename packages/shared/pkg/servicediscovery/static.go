@@ -1,0 +1,25 @@
+package servicediscovery
+
+import (
+	"context"
+	"fmt"
+)
+
+type staticDiscovery struct {
+	NoSync
+
+	items []Instance
+}
+
+func NewStatic(results []string, port uint16) Discoverer {
+	items := make([]Instance, len(results))
+	for i, result := range results {
+		items[i] = Instance{WorkloadID: fmt.Sprintf("%s:%d", result, port), IPAddress: result, Port: port, Backend: BackendStatic}
+	}
+
+	return &staticDiscovery{items: items}
+}
+
+func (s *staticDiscovery) ListInstances(_ context.Context) ([]Instance, error) {
+	return s.items, nil
+}

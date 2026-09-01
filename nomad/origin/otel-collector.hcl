@@ -1,5 +1,5 @@
 job "otel-collector" {
-  datacenters = ["${aws_az1}", "${aws_az2}"]
+  datacenters = ["${aws_az1}", "${aws_az2}", "${aws_az3}"]
   type        = "system"
   node_pool   = "all"
 
@@ -110,10 +110,23 @@ processors:
           - "template.*"
           - "api.*"
           - "client_proxy.*"
+          - "batcher.*"                  # event/metric batching pipeline
           - "e2b\\.sandbox\\..*"      # per-sandbox cpu/ram gauges
           - "http\\..*"                  # api HTTP middleware histograms
           - "rpc\\..*"                   # otelgrpc client/server histograms
+          - "grpc\\..*"                  # grpc-go native instrumentation
+          - "db\\.sql\\.connection\\..*" # DB pool, sized by DB_*_CONNECTIONS
+          - "db\\.client\\..*"           # DB client query instrumentation
+          - "pgxpool.*"                  # pgx connection pool
+          - "go\\..*"                    # Go runtime (heap, goroutines, GC)
           - "otelcol_.*"                   # collector self-metrics
+      # Payload-size histograms are the highest-volume series here and were
+      # never queried; rpc.client.call.duration already covers latency.
+      exclude:
+        match_type: regexp
+        metric_names:
+          - "rpc\\.client\\.request\\.size.*"
+          - "rpc\\.client\\.response\\.size.*"
 
 
   filter/prometheus:
@@ -237,10 +250,22 @@ extensions:
 exporters:
   debug:
     verbosity: detailed
-  # Customer OTel HTTP endpoint (no auth required)
-  # Use http:// for insecure, https:// for TLS
+  # Customer OTel HTTP endpoint. Use http:// for insecure, https:// for TLS.
+  #
+  # otel_customer_header_name / _value are optional and exist because every
+  # hosted OTLP backend authenticates with a header - Authorization for Grafana
+  # Cloud, DD-API-KEY for Datadog, x-honeycomb-team for Honeycomb - so an
+  # endpoint on its own only reaches a collector the customer runs unauthenticated.
+  #
+  # The block is emitted by Nomad's template engine rather than always rendered:
+  # envsubst has no conditionals, and "headers:" followed by an empty key is not
+  # valid config, so an unset header would break the collector rather than be
+  # ignored. Both keys come from /opt/config.properties.
   otlphttp/customer:
     endpoint: "${otel_customer_endpoint}"
+{{ if ne "${otel_customer_header_name}" "" }}    headers:
+      ${otel_customer_header_name}: "${otel_customer_header_value}"
+{{ end }}
 
 service:
   telemetry:

@@ -32,7 +32,17 @@
 
 E2B on AWS 为在您自己的 AWS 账户中运行 AI Agent 沙箱提供了安全、可扩展、可定制的环境。该项目旨在满足组织对 AI 基础设施控制权的需求，同时充分利用 E2B 的沙箱技术进行 AI Agent 开发、测试和部署。
 
-> 基于版本 [`0c35ed5`](https://github.com/e2b-dev/infra/commit/0c35ed5c3b8492f96d1e0bbfb91fff96541a8c74) 构建。如遇问题，请直接提交 PR。特别感谢所有参与项目转型的贡献者。
+> 如遇问题，请直接提交 PR。特别感谢所有参与项目转型的贡献者。
+
+### 上游版本
+
+代码层（`packages/`、`spec/`、`scripts/`、`tests/`、`firecracker/`）是
+[e2b-dev/infra](https://github.com/e2b-dev/infra) 在
+[`225f963`](https://github.com/e2b-dev/infra/commit/225f963a8dfbd516ee513b33d5f2846588c2f82c)
+处的逐字节副本，仅有两处例外：本部署不构建、因此不 vendor 的三个包
+（`dashboard-api`、`local-dev`、`nomad-nodepool-apm`，三者都不在 `go.work` 中），
+以及被 `.gitignore` 排除的上游 `.env*` 样例文件。同步的做法是整体替换该层，而不是
+往里合并。部署层（CloudFormation、`infra-iac/`、`nomad/`）为本仓库自研。
 
 ---
 
@@ -104,12 +114,35 @@ ssh -i your-key.pem ubuntu@<instance-ip>
 # 方式 B：通过 EC2 控制台使用 AWS Session Manager
 ```
 
-### 步骤 4 — 查看部署日志
+### 步骤 4 — 执行部署（或查看部署进度）
+
+整个引导过程只写一个日志文件 `/tmp/e2b.log`：工具链安装、每一个部署步骤、以及每步的完整输出都在里面：
 
 ```bash
 sudo su root
 tail -f /tmp/e2b.log
 ```
+
+**如果保持 `AutoDeploy=true`**（默认值），部署链已经在跑，无需再做任何事，看上面的日志即可。
+
+**如果创建栈时把 `AutoDeploy` 设为 `false`**，栈只安装了工具链并克隆了本仓库，没有执行任何部署步骤。剩下的全部步骤由一条命令完成：
+
+```bash
+cd /opt/infra/sample-e2b-on-aws
+sudo bash deploy-all.sh
+```
+
+它执行的步骤与顺序和 `AutoDeploy=true` 完全一致：`init` → `packer` → `terraform` → `init-db` → `build` → `prepare` → `deploy` → `create-template`。每个成功的步骤会写下 `/opt/.e2b-step-<name>.done`，因此某一步失败时，修好原因后直接重跑脚本即可 —— 它会从失败的那一步继续，不会重复已完成的工作。
+
+```bash
+sudo bash deploy-all.sh --list             # 列出各步骤及完成情况
+sudo bash deploy-all.sh --skip-template    # 部署到 deploy 为止，不构建测试模板
+sudo bash deploy-all.sh --only terraform   # 忽略标记，只重跑某一步
+sudo bash deploy-all.sh --force            # 清空所有标记，从头再来
+sudo bash deploy-all.sh --help
+```
+
+> **说明：** 在 `x86_64` 的 `dev` 栈上，完整链约耗时 45 分钟。其中 `build`（编译并推送服务镜像，约 19 分钟）和 `packer`（构建 AMI，约 14 分钟）占绝大部分，其余步骤都在分钟级。
 
 ### 步骤 5 — 配置 DNS 记录（Cloudflare）
 
@@ -149,27 +182,101 @@ tail -f /tmp/e2b.log
                                     └──────────────────────┘
 ```
 
+#### 部署日志模块
+
+沙箱用户日志是这套系统里唯一**不需要外部后端**的部分：Vector 把日志送进集群内的 Loki，
+Loki 存到 S3。两个 job，先 Loki，因为 Vector 的 sink 要解析 `loki.service.consul`：
+
+```bash
+source nomad/nomad.sh          # 导出 NOMAD_ADDR / NOMAD_TOKEN
+bash nomad/deploy.sh loki
+bash nomad/deploy.sh logs-collector
+```
+
+`logs-collector` 是 `system` 类型 job，每个节点一个 alloc —— api、build、沙箱节点都会上报。
+存储用 CloudFormation 创建的 Loki 桶 `{stack-name}-loki-{account-id}`；保留策略走 Loki 默认值而非 S3
+生命周期，日志量大的话请自行给该桶加 lifecycle 规则。
+
+**即使暂时没有 OTel 后端也建议部署它。** 不部署 `logs-collector` 时，各服务仍会往
+`localhost:30006` POST 日志，而那里没人监听，日志行被直接丢弃 —— 之前一次模板构建失败就只
+留下 `Build failed: An internal error occurred`，真实原因
+（`stat /fc-versions/...: no such file or directory`）被丢掉了。
+
+#### 查询日志
+
+Loki 自身没有 UI，且只监听其 alloc 所在节点的私网地址。在堡垒机上先定位节点，再查 HTTP API：
+
+```bash
+source nomad/nomad.sh
+ALLOC=$(nomad job status loki | sed -n '/^Allocations/,$p' | awk 'NR==3{print $1}')
+NODE=$(nomad alloc status -json "$ALLOC" | jq -r .NodeID)
+LOKI=$(nomad node status -json "$NODE" | jq -r .HTTPAddr | cut -d: -f1)
+
+# 当前有哪些标签
+curl -s "http://$LOKI:3100/loki/api/v1/labels" | jq -c .data
+# ["buildID","category","envID","sandboxID","service","source","teamID"]
+
+# 某个沙箱最近 10 分钟的全部日志
+curl -s --get "http://$LOKI:3100/loki/api/v1/query_range" \
+  --data-urlencode 'query={sandboxID="<sandbox-id>"}' \
+  --data-urlencode "start=$(( $(date +%s) - 600 ))000000000" \
+  --data-urlencode 'limit=50' | jq -r '.data.result[]?.values[]?[1]'
+```
+
+每行是一个 JSON 对象，含命令行、pid、退出状态、`teamID`、`envID`。用 `{service="envd"}`
+可看全部沙箱活动，`{sandboxID="..."}` 收敛到单个沙箱。标签列表为空说明还没有日志到达 ——
+要么 `logs-collector` 未部署，要么还没有沙箱运行过。
+
+> 堡垒机上无法解析 Consul DNS，所以这里通过 Nomad 查地址而不是直接用
+> `loki.service.consul`。集群内部该域名是可用的，Vector 和 API 用的就是它。
+
 #### 使用客户 OTel 端点部署
 
-配置任意支持 OTLP/HTTP 协议的后端端点（如 Grafana Cloud、Datadog、Honeycomb、或自建 collector）：
+把集群的遥测数据指向您自己的 OTLP/HTTP 后端（Grafana Cloud、Datadog、Honeycomb、
+New Relic，或自建 collector）。三步，唯一需要知道的就是端点地址：
 
 ```bash
 # 1. 把端点写入 config.properties
 cat << EOF >> /opt/config.properties
 
-# 客户 OTel 端点（无需认证）
-# 明文传输用 http://，TLS 用 https://
-otel_customer_endpoint=http://your-otel-collector:4318
+# 客户 OTel 端点。明文用 http://，TLS 用 https://
+otel_customer_endpoint=https://your-otel-backend:4318
 EOF
 
-# 2. 重新渲染 deploy HCL，让 envsubst 注入 otel_customer_endpoint
+# 2. 重新渲染 deploy HCL，让 envsubst 注入
 bash nomad/prepare.sh
 
-# 3. 部署所有监控组件
+# 3. 部署监控组件
 bash nomad/deploy.sh --all
 ```
 
-> **重要：** 运行 `nomad/prepare.sh` **之前**，`/opt/config.properties` 里必须已定义 `otel_customer_endpoint`。`prepare.sh` 会用 `envsubst` 将 `origin/*.hcl` 渲染为 `deploy/*-deploy.hcl`；若变量缺失，exporter 端点会变成空字符串，otel-collector 任务启动失败。
+**如果后端需要认证**（所有托管服务都需要），再加上它要求的 header。一个 header 足以覆盖常见后端：
+
+```bash
+cat << EOF >> /opt/config.properties
+otel_customer_header_name=Authorization
+otel_customer_header_value=Basic <base64(instanceID:token)>
+EOF
+```
+
+| 后端 | `otel_customer_header_name` | `otel_customer_header_value` |
+|---|---|---|
+| Grafana Cloud | `Authorization` | `Basic <base64(instanceID:token)>` |
+| Datadog | `DD-API-KEY` | 您的 API key |
+| Honeycomb | `x-honeycomb-team` | 您的 ingest key |
+| New Relic | `api-key` | 您的 licence key |
+| 自建、免认证 | *（两项都不填）* | |
+
+这两个键是可选的、与端点相互独立：不填则 exporter 不发送任何 header，正是免认证 collector 需要的形式。
+
+> **重要：** 运行 `nomad/prepare.sh` **之前**，`/opt/config.properties` 里必须已定义
+> `otel_customer_endpoint`。`prepare.sh` 用 `envsubst` 把 `origin/*.hcl` 渲染成
+> `deploy/*-deploy.hcl`；端点缺失时 exporter 会拿到空地址、otel-collector 启动失败 ——
+> 这是故意的：转发到空地址属于配置错误，不是默认值。
+
+> **暂时没有后端？** 沙箱用户日志不需要它：`logs-collector` 会把日志写入集群内的 Loki，
+> 只跑 `bash nomad/deploy.sh logs-collector` 就能通过 Loki 的 HTTP API 检索沙箱日志。
+> 只有 OTel 管道（metrics、traces、服务日志）才必须有一个可发送的端点。
 
 #### 数据流详情
 
@@ -181,7 +288,7 @@ bash nomad/deploy.sh --all
 | **应用日志** | Go 服务 zap logger | → OTel Collector（OTLP log bridge）→ 客户端点 | 外部 |
 | **Sandbox 用户日志** | envd → orchestrator | → Vector (:30006) → Loki (:3100) | **S3**（Loki 桶） |
 
-> **注意：** Sandbox 用户日志始终走 Vector → Loki → S3，独立于 OTel 管道。Loki S3 桶由 Terraform 创建（`{prefix}-loki-storage-{account_id}`）。
+> **注意：** Sandbox 用户日志始终走 Vector → Loki → S3，独立于 OTel 管道。Loki S3 桶由 CloudFormation 创建（`{stack-name}-loki-{account-id}`），Terraform 只负责给节点授权访问。
 
 </details>
 
@@ -267,9 +374,12 @@ curl -X POST \
 brew install e2b
 
 # 导出环境变量
-# （从 /opt/config.properties 查询 accessToken 和 teamApiKey）
+# （从 /opt/config.properties 查询 teamApiKey）
+#
+# 这里不再设置 E2B_ACCESS_TOKEN：上游已删除 access_tokens 表，本部署不再签发
+# sk_e2b_ token。使用 team API key 的命令可正常工作；需要以用户身份认证的命令
+# 依赖 auth provider，本部署未运行该组件。
 export E2B_API_KEY=xxx
-export E2B_ACCESS_TOKEN=xxx
 export E2B_DOMAIN="<e2bdomain>"
 
 # 常用命令
@@ -278,6 +388,32 @@ e2b sandbox connect <sandbox-id>  # 连接到沙箱
 e2b sandbox kill <sandbox-id>     # 终止沙箱
 e2b sandbox kill --all            # 终止所有沙箱
 ```
+
+### 本部署已验证的客户端版本
+
+| 客户端 | 版本 | 安装方式 |
+|---|---|---|
+| E2B CLI | `2.16.1` | `npm i -g @e2b/cli`（或 `brew install e2b`） |
+| Python SDK `e2b` | `2.46.0` | 随 `pip install e2b-code-interpreter` 一起安装 |
+| Python SDK `e2b-code-interpreter` | `2.9.2` | `pip install e2b-code-interpreter` |
+| `envd`（沙箱内 agent，服务端） | `0.7.0` | 由部署链构建，无需手动安装 |
+
+以上针对上游 `225f963` 的代码层验证。`envd` 版本由 API 在每次创建时返回（`envdVersion`），
+`e2b sandbox list` 也会显示 —— 这是确认沙箱来自哪个构建最快的办法。
+
+只需要 `E2B_API_KEY` 和 `E2B_DOMAIN`：`e2b sandbox list` 与 `e2b template list` 都在
+未设置 `E2B_ACCESS_TOKEN` 的情况下验证通过 —— 上游删除用户 access token 之后，这是本部署
+能提供的认证方式。
+
+`tools/` 下有两个脚本用于对运行中的部署做 API 验证：
+
+```bash
+python3 tools/api-smoke-test.py                  # 认证、模板、沙箱生命周期
+python3 tools/api-load-test.py --sandboxes 40    # 并发：突发创建、读扇出、状态翻转
+# 加 --replicas <ip:port>,<ip:port> 可同时验证多个 API 副本共享状态
+```
+
+两者都自行读取部署链写下的凭据，无需预先 export，并且会清理自己创建的全部沙箱。
 
 ---
 

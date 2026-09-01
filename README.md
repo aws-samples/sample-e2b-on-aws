@@ -32,7 +32,20 @@
 
 E2B on AWS provides a secure, scalable, and customizable environment for running AI agent sandboxes in your own AWS account. This project addresses the growing need for organizations to maintain control over their AI infrastructure while leveraging the power of E2B's sandbox technology for AI agent development, testing, and deployment.
 
-> Built based on version [`0c35ed5`](https://github.com/e2b-dev/infra/commit/0c35ed5c3b8492f96d1e0bbfb91fff96541a8c74). If you encounter any issues, please submit a PR directly. Special thanks to all contributors involved in the project transformation.
+> If you encounter any issues, please submit a PR directly. Special thanks to all contributors involved in the project transformation.
+
+### Upstream version
+
+The code layer (`packages/`, `spec/`, `scripts/`, `tests/`, `firecracker/`) is a
+byte-for-byte copy of
+[e2b-dev/infra](https://github.com/e2b-dev/infra) at
+[`225f963`](https://github.com/e2b-dev/infra/commit/225f963a8dfbd516ee513b33d5f2846588c2f82c),
+with two exceptions: three packages this deployment does not build and so does
+not vendor (`dashboard-api`, `local-dev`, `nomad-nodepool-apm` — none of them
+appear in `go.work`), and upstream's `.env*` samples, which `.gitignore`
+excludes. A sync replaces that layer wholesale rather than merging into it. The
+deployment layer (CloudFormation, `infra-iac/`, `nomad/`) is specific to this
+repository.
 
 ---
 
@@ -104,12 +117,44 @@ ssh -i your-key.pem ubuntu@<instance-ip>
 # Option B: AWS Session Manager from the EC2 console
 ```
 
-### Step 4 — Watch Deployment Logs
+### Step 4 — Run the Deployment (or Watch It Run)
+
+The whole bootstrap writes to a single log, `/tmp/e2b.log` — the toolchain
+install, every deployment step, and the output of each step:
 
 ```bash
 sudo su root
 tail -f /tmp/e2b.log
 ```
+
+**If you left `AutoDeploy=true`** (the default), the chain is already running and
+there is nothing to start. Follow it in the log above.
+
+**If you set `AutoDeploy=false`**, the stack installed the toolchain and cloned
+this repository but ran nothing. One command does the rest:
+
+```bash
+cd /opt/infra/sample-e2b-on-aws
+sudo bash deploy-all.sh
+```
+
+It runs the same steps, in the same order, that `AutoDeploy=true` would:
+`init` → `packer` → `terraform` → `init-db` → `build` → `prepare` → `deploy` →
+`create-template`. Each step that succeeds writes `/opt/.e2b-step-<name>.done`,
+so if one fails you can fix the cause and re-run the script — it resumes at the
+step that broke instead of repeating the work before it.
+
+```bash
+sudo bash deploy-all.sh --list             # steps, and which are already done
+sudo bash deploy-all.sh --skip-template    # stop after deploy, no test template
+sudo bash deploy-all.sh --only terraform   # re-run one step, ignoring its marker
+sudo bash deploy-all.sh --force            # clear all markers and start over
+sudo bash deploy-all.sh --help
+```
+
+> **Note:** the full chain took about 45 minutes on an `x86_64` `dev` stack.
+> `build` (compiling and pushing the service images, ~19 min) and `packer`
+> (the AMI, ~14 min) dominate; everything else is minutes.
 
 ### Step 5 — Configure DNS Records (Cloudflare)
 
@@ -149,27 +194,112 @@ The logging and monitoring stack consists of three components deployed via `noma
                                     └──────────────────────┘
 ```
 
+#### Deploy the logging module
+
+Sandbox user logs are the one part of this stack that needs no external backend:
+Vector ships them to a Loki that runs in the cluster and stores in S3. Two jobs,
+Loki first because Vector's sink resolves `loki.service.consul`:
+
+```bash
+source nomad/nomad.sh          # exports NOMAD_ADDR / NOMAD_TOKEN
+bash nomad/deploy.sh loki
+bash nomad/deploy.sh logs-collector
+```
+
+`logs-collector` is a `system` job, so it lands one allocation per node — the api,
+build and sandbox nodes all ship logs. Storage is the Loki bucket CloudFormation
+created, `{stack-name}-loki-{account-id}`; retention is Loki's default, not S3
+lifecycle, so set a lifecycle rule on that bucket if the volume matters to you.
+
+**Deploy this even if you have no OTel backend.** Without `logs-collector` the
+services keep POSTing to `localhost:30006`, nothing is listening, and the log line
+is dropped — which is how a template build failure once surfaced only as
+`Build failed: An internal error occurred` with the real cause
+(`stat /fc-versions/...: no such file or directory`) discarded.
+
+#### Query the logs
+
+Loki has no UI of its own. It listens on the private address of the node its
+allocation landed on, so find that node and query the HTTP API from the bastion:
+
+```bash
+source nomad/nomad.sh
+ALLOC=$(nomad job status loki | sed -n '/^Allocations/,$p' | awk 'NR==3{print $1}')
+NODE=$(nomad alloc status -json "$ALLOC" | jq -r .NodeID)
+LOKI=$(nomad node status -json "$NODE" | jq -r .HTTPAddr | cut -d: -f1)
+
+# What labels exist yet
+curl -s "http://$LOKI:3100/loki/api/v1/labels" | jq -c .data
+# ["buildID","category","envID","sandboxID","service","source","teamID"]
+
+# Everything one sandbox emitted in the last 10 minutes
+curl -s --get "http://$LOKI:3100/loki/api/v1/query_range" \
+  --data-urlencode 'query={sandboxID="<sandbox-id>"}' \
+  --data-urlencode "start=$(( $(date +%s) - 600 ))000000000" \
+  --data-urlencode 'limit=50' | jq -r '.data.result[]?.values[]?[1]'
+```
+
+Each line is a JSON object carrying the command, pid, exit status, `teamID` and
+`envID`, so `{service="envd"}` gives every sandbox's activity and
+`{sandboxID="..."}` narrows it to one. An empty label list means no logs have
+arrived yet — either `logs-collector` is not deployed or no sandbox has run.
+
+> Consul DNS is not resolvable from the bastion, which is why the address is
+> looked up through Nomad rather than by using `loki.service.consul` directly.
+> Inside the cluster that name works, and it is what Vector and the API use.
+
 #### Deploy with Customer OTel Endpoint
 
-Configure your OTel-compatible backend endpoint (any service supporting OTLP/HTTP, e.g. Grafana Cloud, Datadog, Honeycomb, or a self-hosted collector):
+Point the cluster at your own OTLP/HTTP backend — Grafana Cloud, Datadog,
+Honeycomb, New Relic, or a collector you run. Three steps, and the only thing you
+have to know is the endpoint:
 
 ```bash
 # 1. Write the endpoint into config.properties
 cat << EOF >> /opt/config.properties
 
-# Customer OTel endpoint (no authentication)
-# Use http:// for plaintext, https:// for TLS
-otel_customer_endpoint=http://your-otel-collector:4318
+# Customer OTel endpoint. http:// for plaintext, https:// for TLS.
+otel_customer_endpoint=https://your-otel-backend:4318
 EOF
 
-# 2. Re-render deploy HCLs so envsubst injects otel_customer_endpoint
+# 2. Re-render the deploy HCLs so envsubst injects it
 bash nomad/prepare.sh
 
-# 3. Deploy all monitoring components
+# 3. Deploy the monitoring components
 bash nomad/deploy.sh --all
 ```
 
-> **Important:** `otel_customer_endpoint` must be present in `/opt/config.properties` **before** running `nomad/prepare.sh`. `prepare.sh` uses `envsubst` to render `origin/*.hcl` → `deploy/*-deploy.hcl`; if the variable is missing, the exporter endpoint becomes an empty string and the otel-collector job fails to start.
+**If your backend needs authentication** — every hosted one does — add the header
+it expects. One header covers the common backends:
+
+```bash
+cat << EOF >> /opt/config.properties
+otel_customer_header_name=Authorization
+otel_customer_header_value=Basic <base64 of instanceID:token>
+EOF
+```
+
+| Backend | `otel_customer_header_name` | `otel_customer_header_value` |
+|---|---|---|
+| Grafana Cloud | `Authorization` | `Basic <base64(instanceID:token)>` |
+| Datadog | `DD-API-KEY` | your API key |
+| Honeycomb | `x-honeycomb-team` | your ingest key |
+| New Relic | `api-key` | your licence key |
+| Self-hosted, no auth | *(leave both unset)* | |
+
+Both keys are optional and independent of the endpoint: leave them out and the
+exporter sends no headers, which is what an unauthenticated collector wants.
+
+> **Important:** `otel_customer_endpoint` must be in `/opt/config.properties`
+> **before** `nomad/prepare.sh` runs. `prepare.sh` renders `origin/*.hcl` →
+> `deploy/*-deploy.hcl` with `envsubst`; with no endpoint the exporter gets an
+> empty one and the otel-collector job fails to start — deliberately, since
+> forwarding nowhere is a misconfiguration rather than a default.
+
+> **No backend yet?** Sandbox user logs do not need one: `logs-collector` writes
+> them to the in-cluster Loki, so `bash nomad/deploy.sh logs-collector` alone
+> gives you searchable sandbox logs through Loki's HTTP API. Only the OTel
+> pipeline (metrics, traces, service logs) requires an endpoint to send to.
 
 #### Data Flow Details
 
@@ -181,7 +311,7 @@ bash nomad/deploy.sh --all
 | **Application Logs** | Go services zap logger | → OTel Collector (OTLP log bridge) → Customer endpoint | External |
 | **Sandbox User Logs** | envd → orchestrator | → Vector (:30006) → Loki (:3100) | **S3** (Loki bucket) |
 
-> **Note:** Sandbox user logs always go through Vector → Loki → S3, independent of the OTel pipeline. The Loki S3 bucket is created by Terraform (`{prefix}-loki-storage-{account_id}`).
+> **Note:** Sandbox user logs always go through Vector → Loki → S3, independent of the OTel pipeline. The Loki S3 bucket is created by CloudFormation (`{stack-name}-loki-{account-id}`); Terraform only grants the nodes access to it.
 
 </details>
 
@@ -267,9 +397,13 @@ Domain validation, bastion access, DNS setup, monitoring, and testing follow the
 brew install e2b
 
 # Export environment variables
-# (query accessToken and teamApiKey from /opt/config.properties)
+# (query teamApiKey from /opt/config.properties)
+#
+# E2B_ACCESS_TOKEN is not set here: upstream dropped the access_tokens table, so
+# this deployment no longer issues an sk_e2b_ token. CLI commands that take a
+# team API key work; the ones that authenticate as a user need an auth provider,
+# which this deployment does not run.
 export E2B_API_KEY=xxx
-export E2B_ACCESS_TOKEN=xxx
 export E2B_DOMAIN="<e2bdomain>"
 
 # Common commands
@@ -278,6 +412,34 @@ e2b sandbox connect <sandbox-id>  # Connect to a sandbox
 e2b sandbox kill <sandbox-id>     # Kill a sandbox
 e2b sandbox kill --all            # Kill all sandboxes
 ```
+
+### Client versions this deployment was verified with
+
+| Client | Version | Install |
+|---|---|---|
+| E2B CLI | `2.16.1` | `npm i -g @e2b/cli` (or `brew install e2b`) |
+| Python SDK `e2b` | `2.46.0` | `pip install e2b-code-interpreter` pulls it in |
+| Python SDK `e2b-code-interpreter` | `2.9.2` | `pip install e2b-code-interpreter` |
+| `envd` (in-sandbox agent, server side) | `0.7.0` | built by the deploy chain, not installed by you |
+
+Verified against the code layer at upstream `225f963`. `envd` is reported by the
+API on every create (`envdVersion`) and by `e2b sandbox list`, so it is the
+quickest way to confirm which build a sandbox actually came from.
+
+Only `E2B_API_KEY` and `E2B_DOMAIN` are needed — `e2b sandbox list` and
+`e2b template list` were both checked with no `E2B_ACCESS_TOKEN` set, which is
+what this deployment can offer now that upstream dropped user access tokens.
+
+Two scripts in `tools/` exercise the API against a running deployment:
+
+```bash
+python3 tools/api-smoke-test.py                  # auth, templates, sandbox lifecycle
+python3 tools/api-load-test.py --sandboxes 40    # concurrency: burst, fan-out, churn
+# add --replicas <ip:port>,<ip:port> to also assert the API replicas share state
+```
+
+Both read the credentials the deploy chain wrote, so there is nothing to export
+first, and both clean up every sandbox they create.
 
 ---
 

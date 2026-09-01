@@ -1,27 +1,140 @@
 package header
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
+	"fmt"
+	"io"
 
-	"github.com/bits-and-blooms/bitset"
+	"github.com/RoaringBitmap/roaring/v2"
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.uber.org/zap"
 
+	"github.com/e2b-dev/infra/packages/shared/pkg/logger"
 	"github.com/e2b-dev/infra/packages/shared/pkg/telemetry"
 )
+
+const (
+	// metadataVersion is used by template-manager for uncompressed builds (V3 headers).
+	metadataVersion = 3
+	// MetadataVersionV4 is used for compressed builds (V4 headers with FrameTables).
+	MetadataVersionV4 = 4
+	// MetadataVersionV5 is V4 with a columnar, varint-encoded mapping section.
+	// Same semantics as V4 (Builds map + FrameTables); only the on-disk mapping
+	// layout differs. Far smaller and far more compressible for the large,
+	// fragmented headers produced by page-granular memfile dedup.
+	MetadataVersionV5 = 5
+)
+
+type Metadata struct {
+	Version    uint64
+	BlockSize  uint64
+	Size       uint64
+	Generation uint64
+	BuildId    uuid.UUID
+	// TODO: Use the base build id when setting up the snapshot rootfs
+	BaseBuildId uuid.UUID
+}
+
+func NewTemplateMetadata(buildId uuid.UUID, blockSize, size uint64) *Metadata {
+	return &Metadata{
+		Version:     metadataVersion,
+		Generation:  0,
+		BlockSize:   blockSize,
+		Size:        size,
+		BuildId:     buildId,
+		BaseBuildId: buildId,
+	}
+}
+
+func (m *Metadata) NextGeneration(buildID uuid.UUID) *Metadata {
+	return &Metadata{
+		Version:     m.Version,
+		Generation:  m.Generation + 1,
+		BlockSize:   m.BlockSize,
+		Size:        m.Size,
+		BuildId:     buildID,
+		BaseBuildId: m.BaseBuildId,
+	}
+}
+
+// metadataSize is the binary size of the Metadata struct, computed from the struct layout.
+var metadataSize = binary.Size(Metadata{})
+
+func deserializeMetadata(data []byte) (*Metadata, error) {
+	var metadata Metadata
+
+	err := binary.Read(bytes.NewReader(data), binary.LittleEndian, &metadata)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read metadata: %w", err)
+	}
+
+	return &metadata, nil
+}
 
 var ignoreBuildID = uuid.Nil
 
 type DiffMetadata struct {
-	Dirty *bitset.BitSet
-	Empty *bitset.BitSet
+	Dirty *roaring.Bitmap
+	Empty *roaring.Bitmap
 
 	BlockSize int64
 }
 
-func (d *DiffMetadata) CreateMapping(
+func NewDiffMetadata(blockSize int64, dirty, empty *roaring.Bitmap) *DiffMetadata {
+	if dirty == nil {
+		dirty = roaring.New()
+	}
+	if empty == nil {
+		empty = roaring.New()
+	}
+
+	return &DiffMetadata{
+		Dirty:     dirty,
+		Empty:     empty,
+		BlockSize: blockSize,
+	}
+}
+
+// ToProvisionalDiffHeader builds a local-only header that describes the memfd
+// directly — all dirty pages attributed to buildID with identity storage
+// offsets (see createIdentityMapping), composed over originalHeader. Unlike
+// ToDiffHeader it needs no dedup metadata, so it is available at pause time and
+// lets a resume serve immediately. It must never be uploaded (the uploaded
+// artifact always uses the deduped ToDiffHeader output).
+func (d *DiffMetadata) ToProvisionalDiffHeader(
+	ctx context.Context,
+	originalHeader *Header,
+	buildID uuid.UUID,
+) (*Header, error) {
+	_, span := tracer.Start(ctx, "to provisional diff-header")
+	defer span.End()
+
+	dirtyMappings := createIdentityMapping(&buildID, d.Dirty, d.BlockSize)
+	emptyMappings := CreateMapping(&ignoreBuildID, d.Empty, d.BlockSize)
+	diffMapping := MergeMappings(dirtyMappings, emptyMappings)
+
+	m := NormalizeMappings(MergeMappings(originalHeader.Mapping.Slice(), diffMapping))
+	metadata := originalHeader.Metadata.NextGeneration(buildID)
+
+	h, err := newDiffHeader(metadata, m, originalHeader.Builds)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create provisional header: %w", err)
+	}
+	if err := h.Mapping.Validate(h.Metadata.Size, PageSize); err != nil {
+		return nil, fmt.Errorf("invalid provisional header mappings: %w", err)
+	}
+
+	return h, nil
+}
+
+func (d *DiffMetadata) toDiffMapping(
 	ctx context.Context,
 	buildID uuid.UUID,
-) (mapping []*BuildMap, e error) {
+) (mapping []BuildMap) {
 	dirtyMappings := CreateMapping(
 		&buildID,
 		d.Dirty,
@@ -40,5 +153,139 @@ func (d *DiffMetadata) CreateMapping(
 	mappings := MergeMappings(dirtyMappings, emptyMappings)
 	telemetry.ReportEvent(ctx, "merge mappings")
 
-	return mappings, nil
+	return mappings
+}
+
+func (d *DiffMetadata) ToDiffHeader(
+	ctx context.Context,
+	originalHeader *Header,
+	buildID uuid.UUID,
+) (h *Header, e error) {
+	ctx, span := tracer.Start(ctx, "to diff-header")
+	defer span.End()
+	defer func() {
+		if e != nil {
+			span.RecordError(e)
+			span.SetStatus(codes.Error, e.Error())
+		}
+	}()
+
+	diffMapping := d.toDiffMapping(ctx, buildID)
+
+	// MergeMappings/NormalizeMappings operate on []BuildMap (transient).
+	// originalHeader.Mapping is the compact cached form; materialize it once
+	// here. The intermediate slice is short-lived (released after the new
+	// compact header is built below).
+	m := MergeMappings(
+		originalHeader.Mapping.Slice(),
+		diffMapping,
+	)
+	telemetry.ReportEvent(ctx, "merged mappings")
+
+	// TODO: We can run normalization only when empty mappings are not empty for this snapshot
+	m = NormalizeMappings(m)
+	telemetry.ReportEvent(ctx, "normalized mappings")
+
+	metadata := originalHeader.Metadata.NextGeneration(buildID)
+
+	telemetry.SetAttributes(ctx,
+		attribute.Int64("snapshot.header.mappings.length", int64(len(m))),
+		attribute.Int64("snapshot.diff.size", int64(d.Dirty.GetCardinality())*d.BlockSize),
+		attribute.Int64("snapshot.mapped_size", int64(metadata.Size)),
+		attribute.Int64("snapshot.block_size", int64(metadata.BlockSize)),
+		attribute.Int64("snapshot.metadata.version", int64(metadata.Version)),
+		attribute.Int64("snapshot.metadata.generation", int64(metadata.Generation)),
+		attribute.String("snapshot.metadata.build_id", metadata.BuildId.String()),
+		attribute.String("snapshot.metadata.base_build_id", metadata.BaseBuildId.String()),
+	)
+
+	header, err := newDiffHeader(metadata, m, originalHeader.Builds)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create header: %w", err)
+	}
+
+	// Dedup emits PageSize-granular mappings; validate at PageSize.
+	err = header.Mapping.Validate(header.Metadata.Size, PageSize)
+	if err != nil {
+		if header.IsNormalizeFixApplied() {
+			return nil, fmt.Errorf("invalid header mappings: %w", err)
+		}
+
+		logger.L().Warn(ctx, "header mappings are invalid, but normalize fix is not applied", zap.Error(err), logger.WithBuildID(header.Metadata.BuildId.String()))
+	}
+
+	return header, nil
+}
+
+// ToResizedDiffHeader composes the diff over the original header while changing
+// the rootfs logical size. It leaves the original header untouched and strictly
+// validates that the resulting mapping covers the entire resized rootfs.
+func (d *DiffMetadata) ToResizedDiffHeader(
+	ctx context.Context,
+	originalHeader *Header,
+	buildID uuid.UUID,
+	newSize uint64,
+) (*Header, error) {
+	resizedHeader := *originalHeader
+	resizedMetadata := *originalHeader.Metadata
+	resizedMetadata.Size = newSize
+	resizedHeader.Metadata = &resizedMetadata
+
+	header, err := d.ToDiffHeader(ctx, &resizedHeader, buildID)
+	if err != nil {
+		return nil, err
+	}
+	if err := header.Mapping.Validate(header.Metadata.Size, PageSize); err != nil {
+		return nil, fmt.Errorf("invalid resized header mappings: %w", err)
+	}
+
+	return header, nil
+}
+
+type DiffMetadataBuilder struct {
+	dirty *roaring.Bitmap
+	empty *roaring.Bitmap
+
+	blockSize int64
+}
+
+func NewDiffMetadataBuilder(blockSize int64) *DiffMetadataBuilder {
+	return &DiffMetadataBuilder{
+		dirty: roaring.New(),
+		empty: roaring.New(),
+
+		blockSize: blockSize,
+	}
+}
+
+func (b *DiffMetadataBuilder) Process(ctx context.Context, block []byte, out io.Writer, offset int64) error {
+	blockIdx := BlockIdx(offset, b.blockSize)
+
+	if IsZero(block) {
+		b.empty.Add(uint32(blockIdx))
+
+		return nil
+	}
+
+	b.dirty.Add(uint32(blockIdx))
+	n, err := out.Write(block)
+	if err != nil {
+		logger.L().Error(ctx, "error writing to out", zap.Error(err))
+
+		return err
+	}
+
+	if int64(n) != b.blockSize {
+		return fmt.Errorf("short write: %d != %d", int64(n), b.blockSize)
+	}
+
+	return nil
+}
+
+func (b *DiffMetadataBuilder) Build() *DiffMetadata {
+	return &DiffMetadata{
+		Dirty:     b.dirty,
+		Empty:     b.empty,
+		BlockSize: b.blockSize,
+	}
 }

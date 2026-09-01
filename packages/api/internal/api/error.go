@@ -1,7 +1,5 @@
 package api
 
-type APIError struct {
-	Err       error
-	ClientMsg string
-	Code      int
-}
+import "github.com/e2b-dev/infra/packages/shared/pkg/apierrors"
+
+type APIError = apierrors.APIError

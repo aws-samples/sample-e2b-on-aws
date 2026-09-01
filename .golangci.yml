@@ -1,0 +1,215 @@
+version: "2"
+
+formatters:
+  enable:
+    - gci
+    - gofumpt
+  settings:
+    gci:
+      sections:
+        - standard
+        - default
+        - prefix(github.com/e2b-dev/infra)
+
+linters:
+  default: all
+  disable:
+    # todo: determine if we want this
+    - canonicalheader
+    - cyclop
+    - dupl
+    - dupword
+    - errcheck
+    - exhaustive
+    - exhaustruct
+    - funcorder
+    - funlen
+    - gochecknoglobals
+    - gochecknoinits
+    - gocognit
+    - goconst
+    - gocyclo
+    - godot
+    - godox
+    - gomoddirectives
+    - gomodguard
+    - gosec
+    - ireturn
+    - lll
+    - maintidx
+    - mnd
+    - nestif
+    - nilnil
+    - noinlineerr
+    - nonamedreturns
+    - nosprintfhostport
+    - prealloc
+    - predeclared
+    - tagliatelle
+    - testpackage
+    - varnamelen
+    - wrapcheck
+
+    # todo: enable these
+    - err113
+    - forcetypeassert
+    - godoclint
+
+    # deprecated, remove when golangci-lint makes us
+    - wsl
+    - wsl_v5
+
+  exclusions:
+    rules:
+      - path: '^packages/db/pkg/dberrors/dberrors\.go$'
+        linters:
+          - forbidigo
+      - path: '.*_test\.go$'
+        text: "Use github.com/e2b-dev/infra/packages/db/pkg/dberrors.IsNotFoundError instead."
+        linters:
+          - forbidigo
+      # Pre-existing packages with non-recommended names ("types", "utils").
+      # excluded for now.
+      - path: ".*"
+        text: "package-naming"
+        linters:
+          - revive
+
+  settings:
+    forbidigo:
+      forbid:
+        - pattern: '.*\.ErrNoRows$'
+          pkg: "^database/sql$"
+          msg: "Use github.com/e2b-dev/infra/packages/db/pkg/dberrors.IsNotFoundError instead."
+        - pattern: '.*\.ErrNoRows$'
+          pkg: '^github\.com/jackc/pgx/v5$'
+          msg: "Use github.com/e2b-dev/infra/packages/db/pkg/dberrors.IsNotFoundError instead."
+        #        - pattern: os\.Getenv
+        #          msg: "Add your field to the configuration model instead."
+        - pattern: 'zap\.New$'
+          pkg: '^go\.uber\.org/zap$'
+          msg: "Use github.com/e2b-dev/infra/packages/shared/pkg/logger instead of zap.New()"
+        - pattern: 'zap\.NewProduction$'
+          pkg: '^go\.uber\.org/zap$'
+          msg: "Use github.com/e2b-dev/infra/packages/shared/pkg/logger instead of zap.NewProduction()"
+        - pattern: 'zap\.NewDevelopment$'
+          pkg: '^go\.uber\.org/zap$'
+          msg: "Use github.com/e2b-dev/infra/packages/shared/pkg/logger instead of zap.NewDevelopment()"
+        - pattern: 'zap\.NewExample$'
+          pkg: '^go\.uber\.org/zap$'
+          msg: "Use github.com/e2b-dev/infra/packages/shared/pkg/logger instead of zap.NewExample()"
+        - pattern: 'zap\.L$'
+          msg: "Use github.com/e2b-dev/infra/packages/shared/pkg/logger.L() instead of zap.L()"
+        - pattern: 'zap\.S$'
+          pkg: '^go\.uber\.org/zap$'
+          msg: "Use github.com/e2b-dev/infra/packages/shared/pkg/logger instead of zap.S()"
+        - pattern: 'zap\.NewNop$'
+          pkg: '^go\.uber\.org/zap$'
+          msg: "Use github.com/e2b-dev/infra/packages/shared/pkg/logger.NewNopLogger() instead of zap.NewNop()"
+        - pattern: 'zap\.Time$'
+          pkg: '^go\.uber\.org/zap$'
+          msg: "Use github.com/e2b-dev/infra/packages/shared/pkg/logger.Time() instead of zap.Time()"
+
+        # prefer methods that take a context to those that don't
+        - pattern: '^retryablehttp\.NewRequest$'
+          pkg: ^github\.com/hashicorp/go-retryablehttp$
+          msg: "Use github.com/hashicorp/go-retryablehttp.NewRequestWithContext instead of retryablehttp.NewRequest"
+        - pattern: 'gin\.SetMode'
+          pkg: '^github\.com/gin-gonic/gin$'
+          msg: "Do not use gin.SetMode(gin.TestMode) - it causes race conditions. GIN_MODE=test is set in CI workflows."
+      analyze-types: true
+
+    depguard:
+      rules:
+        no-pprof-default-mux:
+          files:
+            - $all
+            - "!**/packages/shared/pkg/telemetry/**"
+          deny:
+            - pkg: "net/http/pprof"
+              desc: "Importing net/http/pprof registers on DefaultServeMux via init(). Use telemetry.NewPprofMux() instead."
+
+    nolintlint:
+      # We are temporarily allowing unused nolints due to apparently
+      # false failures in CI. See
+      # https://github.com/golangci/golangci-lint/issues/3228
+      allow-unused: true
+
+    perfsprint:
+      # Scoped to `errorf` only: enforce `errors.New` over `fmt.Errorf("static")`.
+      # Other perfsprint checks are intentionally disabled to keep this rule surgical.
+      # Can be broadened later in a follow-up.
+      error-format: true
+      errorf: true
+      err-error: false
+      integer-format: false
+      int-conversion: false
+      string-format: false
+      sprintf1: false
+      strconcat: false
+      bool-format: false
+      hex-format: false
+      concat-loop: false
+
+    gocritic:
+      disabled-checks:
+        - appendAssign
+    revive:
+      enable-all-rules: true
+      rules:
+        - { disabled: true, name: add-constant } # todo: enable this
+        - { disabled: true, name: argument-limit }
+        - { disabled: true, name: bare-return }
+        - { disabled: true, name: bool-literal-in-expr }
+        - { disabled: true, name: cognitive-complexity }
+        - { disabled: true, name: comment-spacings }
+        - { disabled: true, name: confusing-naming }
+        - { disabled: true, name: confusing-results }
+        - { disabled: true, name: context-as-argument }
+        - { disabled: true, name: cyclomatic }
+        - { disabled: true, name: deep-exit }
+        - { disabled: true, name: enforce-switch-style }
+        - { disabled: true, name: exported }
+        - { disabled: true, name: flag-parameter } # todo: enable this
+        - { disabled: true, name: function-length }
+        - { disabled: true, name: function-result-limit }
+        - { disabled: true, name: get-return }
+        - { disabled: true, name: identical-branches } # todo: enable this
+        - { disabled: true, name: identical-switch-branches } # todo: enable this
+        - { disabled: true, name: import-alias-naming }
+        - { disabled: true, name: import-shadowing }
+        - { disabled: true, name: line-length-limit }
+        - { disabled: true, name: max-control-nesting }
+        - { disabled: true, name: max-public-structs }
+        - { disabled: true, name: nested-structs }
+        - { disabled: true, name: package-comments }
+        - { disabled: true, name: package-directory-mismatch }
+        - { disabled: true, name: unchecked-type-assertion }
+        - { disabled: true, name: unexported-naming }
+        - { disabled: true, name: unhandled-error } #  todo: enable this
+        - { disabled: true, name: unnecessary-format } # todo: enable this
+        - { disabled: true, name: unnecessary-stmt } # todo: enable this
+        - { disabled: true, name: unsecure-url-scheme }
+        - { disabled: true, name: unused-receiver }
+        - { disabled: true, name: use-errors-new } # todo: enable this
+        - { disabled: true, name: use-waitgroup-go } # todo: enable this
+        - { disabled: true, name: var-declaration }
+        - { disabled: true, name: var-naming }
+
+    staticcheck:
+      checks:
+        - all
+        - -S1002 # Omit comparison with boolean constant
+        - -SA1019 # TODO: Remove (Using a deprecated function, variable, constant or field)
+        - -ST1000 # Incorrect or missing package comment
+        - -ST1020 # The documentation of an exported function should start with the function’s name
+        - -ST1021 # The documentation of an exported type should start with type’s name
+        - -ST1003 # Poorly chosen identifier
+        - -QF1008 # Omit embedded fields from selector expression
+
+run:
+  allow-parallel-runners: true
+
+issues:
+  max-issues-per-linter: 50
+  max-same-issues: 50

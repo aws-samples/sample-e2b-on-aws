@@ -40,8 +40,6 @@ locals {
   file_hash = {
     "scripts/run-consul.sh"              = substr(filesha256("${path.module}/scripts/run-consul.sh"), 0, 5)
     "scripts/run-nomad.sh"               = substr(filesha256("${path.module}/scripts/run-nomad.sh"), 0, 5)
-    "scripts/run-api-nomad.sh"           = substr(filesha256("${path.module}/scripts/run-api-nomad.sh"), 0, 5)
-    "scripts/run-build-cluster-nomad.sh" = substr(filesha256("${path.module}/scripts/run-build-cluster-nomad.sh"), 0, 5)
     "scripts/run-custom-script.sh"       = substr(filesha256("${path.module}/scripts/run-custom-script.sh"), 0, 5)
   }
 
@@ -52,6 +50,52 @@ locals {
     ManagedBy   = "Terraform"
   }
   
+  # Instance types for the two Firecracker-hosting pools. Declared here rather
+  # than taken from var.client_instance_type (which carries the stack's
+  # CFNCLIENTINSTANCETYPE parameter) because changing that would require a
+  # CloudFormation stack update. data.aws_ec2_instance_type below reads the same
+  # locals, so the bare-metal detection can never drift from what the ASG runs.
+
+  # Client nodes host customer sandboxes. Bare metal, so Firecracker gets
+  # hardware virtualization directly, and the smallest metal shape each
+  # architecture offers: the pool scales out (max_size 5), so a bigger node buys
+  # nothing a second node would not, and an idle metal instance is the most
+  # expensive thing in this stack. A 4 vCPU / 4 GiB test sandbox fits either
+  # shape many times over.
+  #
+  # x86_64: m5zn.metal, 48 vCPU / 192 GiB, the smallest x86 bare metal in
+  # us-east-1. z1d.metal matches its vCPU count but carries 384 GiB, and the
+  # next Intel step up, c5n.metal, is 72 vCPU.
+  #
+  # arm64: c7g.metal, 64 vCPU / 128 GiB. a1.metal is smaller at 16 vCPU / 32 GiB
+  # and is deliberately not used: it is Graviton1, and Firecracker's aarch64
+  # support starts at Graviton2, so the smallest shape that can boot a sandbox at
+  # all is a 64 vCPU Graviton.
+  #
+  # Split per architecture because the single value this replaces was an x86-only
+  # type used for both, which left arm64 deployments asking for an instance type
+  # that does not exist on that architecture. Both shapes are EBS-only, which is
+  # what the client launch template already assumes - it attaches a 300 GiB root
+  # and a 4 TiB data volume and never references an instance store.
+  #
+  # Neither type is offered in every availability zone. If a zone rejects the
+  # launch, c5.metal (96 vCPU / 192 GiB) is the broadly available x86 fallback.
+  client_instance_type_x86 = "m5zn.metal"
+  client_instance_type_arm = "c7g.metal"
+
+  # Resolved once so data.aws_ec2_instance_type.client below describes the shape
+  # this deployment actually launches; reading the x86 value unconditionally
+  # would report x86 bare-metal facts for an arm64 stack.
+  client_instance_type = var.architecture == "x86_64" ? local.client_instance_type_x86 : local.client_instance_type_arm
+
+  # The build node runs template-manager on its own. It does not need bare
+  # metal: nested virtualization is supported on 8th-generation Intel families
+  # (c8i, m8i, r8i and their flex variants, per the CpuOptions API), which gives
+  # the build sandbox a working /dev/kvm at a fraction of a metal instance.
+  # null_resource.build_nested_virtualization turns the flag on, because the AWS
+  # provider pinned here has no cpu_options.nested_virtualization argument.
+  build_instance_type = "m8i.4xlarge"
+
   # Define cluster configurations for different node types
   clusters = {
     # Server nodes run Consul and Nomad servers
@@ -64,27 +108,38 @@ locals {
     }
     # Client nodes run workloads and containers
     client = {
-      instance_type_x86    = var.client_instance_type
-      instance_type_arm    = var.client_instance_type
+      instance_type_x86    = local.client_instance_type_x86
+      instance_type_arm    = local.client_instance_type_arm
       desired_capacity = 1
       max_size         = 5
       min_size         = 0
     }
-    # API nodes run the API service
+    # API nodes run the API service.
+    #
+    # Two nodes, because the api job asks for two allocations and carries a
+    # distinct_hosts constraint with static ports (50001, 5009): a second
+    # allocation has nowhere to land without a second node. The API itself is
+    # stateless - every sandbox state transition goes through Redis under a lock
+    # (api/internal/sandbox/storage/redis), which is the only storage backend
+    # there is - so replicas share one view rather than diverging.
     api = {
       instance_type_x86    = var.environment == "prod" ? "m7i.4xlarge" : "t3.xlarge"
       instance_type_arm    = var.environment == "prod" ? "m7g.4xlarge" : "t4g.xlarge"
+      desired_capacity = 2
+      max_size         = 3
+      min_size         = 2
+    }
+    # Build nodes run template-manager. It has to be a pool of its own: the
+    # orchestrator and template-manager both allocate host-global network slots
+    # (veth-<idx>, 10.11.0.x) and both program the nftables rules that redirect
+    # sandbox egress into their own proxy, so on a shared host whichever wrote
+    # last takes over the other's sandboxes and template builds lose the network.
+    build = {
+      instance_type_x86    = local.build_instance_type
+      instance_type_arm    = local.build_instance_type
       desired_capacity = 1
       max_size         = 1
       min_size         = 1
-    }
-    # Build nodes for environment building (currently not active)
-    build = {
-      instance_type_x86    = var.client_instance_type
-      instance_type_arm    = var.client_instance_type
-      desired_capacity = 0
-      max_size         = 0
-      min_size         = 0
     }
   }
 }
@@ -94,15 +149,19 @@ locals {
 # AMI AND BASE INFRASTRUCTURE
 # =========================================================
 
-# Find the latest E2B base AMI to use for all instances
+# Find the latest E2B base AMI to use for all instances.
+#
+# The name is scoped by var.prefix (the CloudFormation stack name) and must stay
+# in sync with ami_name in infra-iac/packer/main.pkr.hcl. A globally-shared
+# pattern combined with most_recent = true makes two deployments in the same
+# account pick up each other's AMI.
 data "aws_ami" "e2b" {
   most_recent = true
-  owners = [local.account_id]
-  
-  # Filter for AMIs with the specific naming pattern
+  owners      = [local.account_id]
+
   filter {
     name   = "name"
-    values = ["e2b-ubuntu-ami-*"]
+    values = ["${var.prefix}-orch-*"]
   }
 }
 
@@ -177,6 +236,56 @@ resource "random_uuid" "consul_dns_request_token" {
 resource "aws_secretsmanager_secret_version" "consul_dns_request_token" {
   secret_id     = aws_secretsmanager_secret.consul_dns_request_token.id
   secret_string = random_uuid.consul_dns_request_token.result
+}
+
+# -------------------- API Secret --------------------
+# Consumed by template-manager as API_SECRET to authenticate against the API.
+resource "random_password" "api_secret" {
+  length  = 32
+  special = false
+}
+
+resource "aws_secretsmanager_secret" "api_secret" {
+  name        = "${var.prefix}-api-secret"
+  description = "Shared secret used by template-manager to call the API"
+  tags        = local.common_tags
+}
+
+resource "aws_secretsmanager_secret_version" "api_secret" {
+  secret_id     = aws_secretsmanager_secret.api_secret.id
+  secret_string = random_password.api_secret.result
+}
+
+# -------------------- Volume Token Signing Key --------------------
+# Consumed by the API as VOLUME_TOKEN_SIGNING_KEY ("HMAC:<base64>").
+# Rotating this invalidates every outstanding persistent-volume token, so the
+# generation parameters are pinned to keep Terraform from recreating it.
+resource "random_password" "volume_token_key" {
+  length  = 32
+  special = false
+
+  lifecycle {
+    ignore_changes = [length, special]
+  }
+}
+
+# -------------------- LaunchDarkly API Key --------------------
+# The upstream services all read LAUNCH_DARKLY_API_KEY for feature flags and
+# fall back to their offline store when it is blank. The secret exists so the
+# value can be filled in later without a Terraform change.
+resource "aws_secretsmanager_secret" "launch_darkly_api_key" {
+  name        = "${var.prefix}-launch-darkly-api-key"
+  description = "LaunchDarkly SDK key; blank means use the offline flag store"
+  tags        = local.common_tags
+}
+
+resource "aws_secretsmanager_secret_version" "launch_darkly_api_key" {
+  secret_id     = aws_secretsmanager_secret.launch_darkly_api_key.id
+  secret_string = " "
+
+  lifecycle {
+    ignore_changes = [secret_string]
+  }
 }
 
 # =========================================================
@@ -258,7 +367,14 @@ resource "aws_iam_role_policy" "runtime_access" {
           "arn:aws:s3:::${var.e2b_bucket}",
           "arn:aws:s3:::${var.e2b_bucket}/*",
           "arn:aws:s3:::${var.loki_bucket}",
-          "arn:aws:s3:::${var.loki_bucket}/*"
+          "arn:aws:s3:::${var.loki_bucket}/*",
+          # Dedicated orchestrator storage buckets. The Go storage layer no
+          # longer supports a key prefix, so these cannot live under the
+          # unified e2b bucket.
+          "arn:aws:s3:::${var.templates_bucket}",
+          "arn:aws:s3:::${var.templates_bucket}/*",
+          "arn:aws:s3:::${var.build_cache_bucket}",
+          "arn:aws:s3:::${var.build_cache_bucket}/*"
         ]
       },
       {
@@ -287,10 +403,11 @@ resource "aws_iam_role_policy" "runtime_access" {
           "ecr:BatchCheckLayerAvailability",
           "ecr:DescribeRepositories"
         ]
+        # e2b-* covers e2b-orchestration/{api,client-proxy,db-migrator};
+        # e2bdev/* covers the custom sandbox environment images.
         Resource = [
           "arn:aws:ecr:*:*:repository/e2b-*",
-          "arn:aws:ecr:*:*:repository/e2bdev/*",
-          "arn:aws:ecr:*:*:repository/docker-reverse-proxy"
+          "arn:aws:ecr:*:*:repository/e2bdev/*"
         ]
       },
       {
@@ -341,9 +458,13 @@ variable "setup_files" {
   type = map(string)
   default = {
     "scripts/run-nomad.sh"               = "run-nomad",
-    "scripts/run-api-nomad.sh"           = "run-api-nomad",
-    "scripts/run-build-cluster-nomad.sh" = "run-build-cluster-nomad",
-    "scripts/run-consul.sh"              = "run-consul"
+    "scripts/run-consul.sh"              = "run-consul",
+    # Every start-*.sh downloads this by RUN_CUSTOM_SCRIPT_FILE_HASH and runs
+    # under `set -euo pipefail`, so leaving it out of this map made the fetch
+    # 404 and killed node bootstrap along with the backgrounded run-nomad.sh.
+    # The script is a no-op when custom_script_url is empty, so it is always
+    # uploaded rather than made conditional.
+    "scripts/run-custom-script.sh"       = "run-custom-script"
   }
 }
 
@@ -591,6 +712,7 @@ resource "aws_launch_template" "client" {
     E2B_BUCKET                   = var.e2b_bucket
     AWS_REGION                   = local.aws_region
     AWS_ACCOUNT_ID               = local.account_id
+    NODE_LABELS                  = var.client_node_labels
     NOMAD_TOKEN                  = aws_secretsmanager_secret_version.nomad_acl_token.secret_string
     CONSUL_TOKEN                 = aws_secretsmanager_secret_version.consul_acl_token.secret_string
     RUN_CONSUL_FILE_HASH         = local.file_hash["scripts/run-consul.sh"]
@@ -616,7 +738,11 @@ resource "aws_launch_template" "client" {
 }
 
 data "aws_ec2_instance_type" "client" {
-  instance_type = var.client_instance_type
+  instance_type = local.client_instance_type
+}
+
+data "aws_ec2_instance_type" "build" {
+  instance_type = local.build_instance_type
 }
 
 # Create a new launch template version with NestedVirtualization enabled via AWS CLI
@@ -634,6 +760,28 @@ resource "null_resource" "client_nested_virtualization" {
       aws ec2 create-launch-template-version \
         --launch-template-id ${aws_launch_template.client.id} \
         --source-version ${aws_launch_template.client.latest_version} \
+        --launch-template-data '{"CpuOptions":{"NestedVirtualization":"enabled"}}'
+    EOT
+  }
+}
+
+# Same treatment for the build launch template. This is the one that actually
+# needs it: the build pool runs a non-metal m8i, so Firecracker inside the
+# template build only gets /dev/kvm with nested virtualization turned on.
+# The ASG tracks version "$Latest", so it picks up the version created here.
+resource "null_resource" "build_nested_virtualization" {
+  count = data.aws_ec2_instance_type.build.bare_metal ? 0 : 1
+
+  triggers = {
+    launch_template_id      = aws_launch_template.build.id
+    launch_template_version = aws_launch_template.build.latest_version
+  }
+
+  provisioner "local-exec" {
+    command = <<-EOT
+      aws ec2 create-launch-template-version \
+        --launch-template-id ${aws_launch_template.build.id} \
+        --source-version ${aws_launch_template.build.latest_version} \
         --launch-template-data '{"CpuOptions":{"NestedVirtualization":"enabled"}}'
     EOT
   }
@@ -717,6 +865,23 @@ resource "aws_security_group" "api_sg" {
     cidr_blocks = [var.VPC.CIDR]
   }
 
+  # API internal gRPC port. client-proxy reaches the API over this via
+  # api-internal-grpc.service.consul, so VPC-internal only.
+  ingress {
+    from_port   = 5009
+    to_port     = 5009
+    protocol    = "tcp"
+    cidr_blocks = [var.VPC.CIDR]
+  }
+
+  # Nomad dynamic port range, used by the API's grpc_api port allocation.
+  ingress {
+    from_port   = 20000
+    to_port     = 32000
+    protocol    = "tcp"
+    cidr_blocks = [var.VPC.CIDR]
+  }
+
   # Allow all inbound traffic
   ingress {
     from_port   = 0
@@ -741,263 +906,39 @@ resource "aws_security_group" "api_sg" {
   )
 }
 
-# Create Application Load Balancer
-resource "aws_lb" "alb" {
-  name               = "${var.prefix}-alb"
-  internal           = var.publicaccess == "private" ? true : false
-  load_balancer_type = "application"
-  security_groups    = [aws_security_group.alb_sg.id]
-  subnets            = var.publicaccess == "private" ? var.VPC.private_subnets : var.VPC.public_subnets
-  enable_deletion_protection = var.environment == "prod" ? true : false
-  idle_timeout               = 120
+# =========================================================
+# LOAD BALANCER ATTACHMENTS
+# =========================================================
+#
+# The load balancer, its security group, the three target groups, the HTTPS
+# listener and its host-header rules all live in the CloudFormation stack, not
+# here. They used to be Terraform resources, which meant every terraform
+# destroy/apply produced a load balancer with a new DNS name and the wildcard
+# DNS record had to be re-pointed by hand - the only manual step in an otherwise
+# unattended deployment. Putting them on the same lifecycle as the wildcard
+# certificate (also CloudFormation-owned) makes that record a one-time setup.
+#
+# What stays here is the part that genuinely belongs to Terraform: attaching the
+# autoscaling groups it owns to those target groups. The ARNs arrive through
+# infra-iac/init.sh -> /opt/config.properties -> prepare.sh -> var.tf.
+#
+# NOTE: the docker-proxy target group, its ASG attachment and the
+# docker.<domain> listener rule were removed together with the
+# docker-reverse-proxy component, which upstream deprecated and deleted.
 
-  tags = merge(
-    local.common_tags,
-    {
-      Name = "${var.prefix}-alb"
-    }
-  )
-}
-
-# Security group for ALB
-resource "aws_security_group" "alb_sg" {
-  name        = "${var.prefix}-alb-sg"
-  description = "Security group for ALB"
-  vpc_id      = var.VPC.id
-
-  # HTTP
-  ingress {
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  # HTTPS
-  ingress {
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  # Allow all outbound traffic
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  tags = merge(
-    local.common_tags,
-    {
-      Name = "${var.prefix}-alb-sg"
-    }
-  )
-}
-
-# Create target group for Nomad server UI
-resource "aws_lb_target_group" "nomad-server" {
-  name     = "${var.prefix}-nomad-server"
-  port     = 4646
-  protocol = "HTTP"
-  vpc_id   = var.VPC.id
-
-  health_check {
-    enabled             = true
-    path                = "/ui/"
-    interval            = 30
-    protocol            = "HTTP"
-    timeout             = 5
-    healthy_threshold   = 2
-    unhealthy_threshold = 2
-    matcher             = "200"
-  }
-
-  lifecycle {
-    create_before_destroy = true
-  }
-  
-  tags = local.common_tags
-}
-
-# Attach server ASG to Nomad server target group
 resource "aws_autoscaling_attachment" "nomad-server" {
   autoscaling_group_name = aws_autoscaling_group.server.name
-  lb_target_group_arn    = aws_lb_target_group.nomad-server.arn
+  lb_target_group_arn    = var.nomad_server_tg_arn
 }
 
-# Create target group for E2B API
-resource "aws_lb_target_group" "e2b-api" {
-  name     = "${var.prefix}-e2b-api"
-  port     = 50001
-  protocol = "HTTP"
-  vpc_id   = var.VPC.id
-
-  health_check {
-    enabled             = true
-    path                = "/health"
-    interval            = 30
-    protocol            = "HTTP"
-    timeout             = 5
-    healthy_threshold   = 2
-    unhealthy_threshold = 2
-    matcher             = "200"
-  }
-
-  lifecycle {
-    create_before_destroy = true
-  }
-  
-  tags = local.common_tags
-}
-
-# Attach API ASG to E2B API target group
 resource "aws_autoscaling_attachment" "e2b-api" {
   autoscaling_group_name = aws_autoscaling_group.api.name
-  lb_target_group_arn    = aws_lb_target_group.e2b-api.arn
+  lb_target_group_arn    = var.e2b_api_tg_arn
 }
 
-# Create target group for client proxy service
-resource "aws_lb_target_group" "client-proxy" {
-  name     = "${var.prefix}-client-proxy"
-  port     = 3002
-  protocol = "HTTP"
-  vpc_id   = var.VPC.id
-
-  health_check {
-    port                = 3001
-    enabled             = true
-    path                = "/health"
-    interval            = 30
-    protocol            = "HTTP"
-    timeout             = 5
-    healthy_threshold   = 2
-    unhealthy_threshold = 2
-    matcher             = "200"
-  }
-
-  lifecycle {
-    create_before_destroy = true
-  }
-  
-  tags = local.common_tags
-}
-
-# Attach API ASG to client proxy target group
 resource "aws_autoscaling_attachment" "client-proxy" {
   autoscaling_group_name = aws_autoscaling_group.api.name
-  lb_target_group_arn    = aws_lb_target_group.client-proxy.arn
-}
-
-# Create target group for Docker proxy service
-resource "aws_lb_target_group" "docker-proxy" {
-  name     = "${var.prefix}-docker-proxy"
-  port     = 5000
-  protocol = "HTTP"
-  vpc_id   = var.VPC.id
-
-  health_check {
-    enabled             = true
-    path                = "/health"
-    interval            = 30
-    protocol            = "HTTP"
-    timeout             = 5
-    healthy_threshold   = 2
-    unhealthy_threshold = 2
-    matcher             = "200"
-  }
-
-  lifecycle {
-    create_before_destroy = true
-  }
-  
-  tags = local.common_tags
-}
-
-# Attach api ASG to Docker proxy target group
-resource "aws_autoscaling_attachment" "docker-proxy" {
-  autoscaling_group_name = aws_autoscaling_group.api.name
-  lb_target_group_arn    = aws_lb_target_group.docker-proxy.arn
-}
-
-# Create HTTP listener for ALB with default action to client-proxy
-resource "aws_lb_listener" "http" {
-  load_balancer_arn = aws_lb.alb.arn
-  port              = 443
-  protocol          = "HTTPS"
-  ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-2021-06"
-  certificate_arn   = var.certarn
-  default_action {
-    type             = "forward"
-    target_group_arn = aws_lb_target_group.client-proxy.arn
-  }
-}
-
-# Create HTTPS listener for ALB (commented out as it requires a certificate)
-# resource "aws_lb_listener" "https" {
-#   load_balancer_arn = aws_lb.alb.arn
-#   port              = 443
-#   protocol          = "HTTPS"
-#   ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-2021-06"
-#   certificate_arn   = var.certarn
-#   
-#   default_action {
-#     type             = "forward"
-#     target_group_arn = aws_lb_target_group.client-proxy.arn
-#   }
-# }
-
-# Create listener rule for API subdomain
-resource "aws_lb_listener_rule" "api" {
-  listener_arn = aws_lb_listener.http.arn
-  priority     = 10
-
-  action {
-    type             = "forward"
-    target_group_arn = aws_lb_target_group.e2b-api.arn
-  }
-  
-  condition {
-    host_header {
-      values = ["api.${var.domainname}"]
-    }
-  }
-}
-
-# Create listener rule for Docker subdomain
-resource "aws_lb_listener_rule" "docker" {
-  listener_arn = aws_lb_listener.http.arn
-  priority     = 20
-
-  action {
-    type             = "forward"
-    target_group_arn = aws_lb_target_group.docker-proxy.arn
-  }
-  
-  condition {
-    host_header {
-      values = ["docker.${var.domainname}"]
-    }
-  }
-}
-
-# Create listener rule for Nomad subdomain
-resource "aws_lb_listener_rule" "nomad" {
-  listener_arn = aws_lb_listener.http.arn
-  priority     = 30
-
-  action {
-    type             = "forward"
-    target_group_arn = aws_lb_target_group.nomad-server.arn
-  }
-  
-  condition {
-    host_header {
-      values = ["nomad.${var.domainname}"]
-    }
-  }
+  lb_target_group_arn    = var.client_proxy_tg_arn
 }
 
 # Create API cluster instances in an Auto Scaling Group
@@ -1043,7 +984,7 @@ resource "aws_launch_template" "api" {
     NOMAD_TOKEN                  = aws_secretsmanager_secret_version.nomad_acl_token.secret_string
     CONSUL_TOKEN                 = aws_secretsmanager_secret_version.consul_acl_token.secret_string
     RUN_CONSUL_FILE_HASH         = local.file_hash["scripts/run-consul.sh"]
-    RUN_NOMAD_FILE_HASH          = local.file_hash["scripts/run-api-nomad.sh"]
+    RUN_NOMAD_FILE_HASH          = local.file_hash["scripts/run-nomad.sh"]
     RUN_CUSTOM_SCRIPT_FILE_HASH  = local.file_hash["scripts/run-custom-script.sh"]
     CUSTOM_SCRIPT_URL            = var.custom_script_url
     CONSUL_GOSSIP_ENCRYPTION_KEY = aws_secretsmanager_secret_version.consul_gossip_encryption_key.secret_string
@@ -1071,10 +1012,15 @@ resource "aws_autoscaling_group" "api" {
   # desired_capacity    = var.api_asg_desired_capacity
   # max_size            = var.api_asg_desired_capacity
   # min_size            = var.api_asg_desired_capacity
-  desired_capacity  = local.clusters.api.desired_capacity
-  max_size          = local.clusters.api.max_size
-  min_size          = local.clusters.api.min_size
-  target_group_arns = [aws_lb_target_group.e2b-api.arn]
+  desired_capacity = local.clusters.api.desired_capacity
+  max_size         = local.clusters.api.max_size
+  min_size         = local.clusters.api.min_size
+
+  # Target groups are wired up exclusively through aws_autoscaling_attachment
+  # (e2b-api and client-proxy below). Declaring target_group_arns here as well
+  # made every plan want to strip the client-proxy group back off, because this
+  # list only ever held e2b-api. The AWS provider documents the two mechanisms
+  # as mutually exclusive.
 
   launch_template {
     id      = aws_launch_template.api.id
@@ -1193,10 +1139,11 @@ resource "aws_launch_template" "build" {
     E2B_BUCKET                   = var.e2b_bucket
     AWS_REGION                   = local.aws_region
     AWS_ACCOUNT_ID               = local.account_id
+    NODE_LABELS                  = var.build_node_labels
     NOMAD_TOKEN                  = aws_secretsmanager_secret_version.nomad_acl_token.secret_string
     CONSUL_TOKEN                 = aws_secretsmanager_secret_version.consul_acl_token.secret_string
     RUN_CONSUL_FILE_HASH         = local.file_hash["scripts/run-consul.sh"]
-    RUN_NOMAD_FILE_HASH          = local.file_hash["scripts/run-build-cluster-nomad.sh"]
+    RUN_NOMAD_FILE_HASH          = local.file_hash["scripts/run-nomad.sh"]
     RUN_CUSTOM_SCRIPT_FILE_HASH  = local.file_hash["scripts/run-custom-script.sh"]
     CUSTOM_SCRIPT_URL            = var.custom_script_url
     CONSUL_GOSSIP_ENCRYPTION_KEY = aws_secretsmanager_secret_version.consul_gossip_encryption_key.secret_string
@@ -1227,6 +1174,12 @@ resource "aws_autoscaling_group" "build" {
   desired_capacity = local.clusters.build.desired_capacity
   max_size         = local.clusters.build.max_size
   min_size         = local.clusters.build.min_size
+
+  # The nested-virtualization flag is added as a new launch template version by
+  # a local-exec, which Terraform cannot order implicitly. Without this the first
+  # instance launches from the version that predates the flag and comes up with
+  # no /dev/kvm, so every template build fails until the node is replaced.
+  depends_on = [null_resource.build_nested_virtualization]
 
   launch_template {
     id      = aws_launch_template.build.id

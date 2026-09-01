@@ -1,15 +1,30 @@
 ENV := $(shell cat ../../.last_used_env || echo "not-set")
 -include ../../.env.${ENV}
+PREFIX := $(strip $(subst ",,$(PREFIX)))
 
-goose := GOOSE_DBSTRING=$(POSTGRES_CONNECTION_STRING) go tool goose -table "_migrations" -dir "migrations" postgres
-IMAGE := e2b-orchestration/db-migrator
+goose := GOOSE_DRIVER=postgres GOOSE_DBSTRING=$(POSTGRES_CONNECTION_STRING) go tool goose -table "_migrations" -dir "migrations"
+goose-local := GOOSE_DBSTRING=postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable go tool goose -table "_migrations" -dir "migrations" postgres
+
 
 .PHONY: migrate
-migrate:migrate/up
-migrate:migrate/down
-migrate/%:
-	@echo "Applying Postgres migration *$(notdir $@)*"
-	@$(goose) $(notdir $@)
+migrate:
+	@echo "Applying Postgres migration *$(notdir $@)* for ${ENV}"
+	@$(goose) up
+	@echo "Done"
+
+.PHONY: migrate-local
+migrate-local:
+	@echo "Applying Postgres migration *$(notdir $@)* for ${ENV}"
+	@$(goose-local) up
+	@echo "Done"
+
+.PHONY: migrate/up
+migrate/up: migrate
+
+.PHONY: migrate/down
+migrate/down:
+	@echo "Reverting Postgres migration *$(notdir $@)* for ${ENV}"
+	@$(goose) down
 	@echo "Done"
 
 .PHONY: build-debug
@@ -17,15 +32,15 @@ build-debug:
 	go mod download
 	go vet ./...
 
-.PHONE: create-migration
+.PHONY: create-migration
 create-migration:
 ifeq ($(origin NAME), undefined)
-	@echo "The expected syntax is: make migration-create NAME=your-migration-name"
+	@echo "The expected syntax is: make create-migration NAME=your-migration-name"
 	@exit 1
 endif
 	@$(goose) create $(NAME) sql
 
-.PHONE: status
+.PHONY: status
 status:
 	@$(goose) status
 
@@ -34,10 +49,15 @@ generate:
 	rm -rf queries/*.go
 	go tool sqlc generate
 
+.PHONY: build-tools
+build-tools:
+	@go tool goose --version > /dev/null
 
-.PHONY: build-and-upload
-build-and-upload:
-	@rm -rf .shared/
-	@cp -r ../shared .shared/
-	@docker build --platform linux/amd64 --tag "$(GCP_REGION)-docker.pkg.dev/$(GCP_PROJECT_ID)/$(IMAGE)" --push .
-	@rm -rf .shared/
+.PHONY: test
+test: build-tools
+	go test -v ./tests/...
+
+.PHONY: seed-db
+seed-db:
+	@echo "Seeding database..."
+	@POSTGRES_CONNECTION_STRING=$(POSTGRES_CONNECTION_STRING) go run ./scripts/seed/postgres/seed-db.go

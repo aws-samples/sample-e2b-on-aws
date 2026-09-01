@@ -1,5 +1,5 @@
 job "logs-collector" {
-  datacenters = ["${aws_az1}", "${aws_az2}"]
+  datacenters = ["${aws_az1}", "${aws_az2}", "${aws_az3}"]
   type        = "system"
   node_pool    = "all"
 
@@ -83,9 +83,14 @@ type = "remap"
 inputs = ["http_server"]
 source = """
 del(."_path")
-.sandboxID = .instanceID
 .timestamp = parse_timestamp(.timestamp, format: "%+") ?? now()
 # Normalize keys
+# Guarded: assigning unconditionally makes .sandboxID exist-but-null for
+# producers that emit no instanceID, which then defeats the "unknown" default
+# below (the key exists, so the default never fires).
+if exists(.instanceID) && .instanceID != null {
+  .sandboxID = .instanceID
+}
 if exists(.sandbox_id) {
   .sandboxID = .sandbox_id
 }

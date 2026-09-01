@@ -52,6 +52,21 @@ echo "Starting Packer build with architecture: ${ARCHITECTURE}"
 
 VPC_ID=$(grep "^CFNVPCID=" "$CONFIG_FILE" | cut -d'=' -f2)
 SUBNET_ID=$(grep "^CFNPRIVATESUBNET1=" "$CONFIG_FILE" | cut -d'=' -f2)
+# Prefix scopes the AMI name so parallel deployments in one account don't pick
+# up each other's image. Must match the aws_ami "e2b" name filter in
+# infra-iac/terraform/main.tf.
+PREFIX=$(grep "^CFNSTACKNAME=" "$CONFIG_FILE" | cut -d'=' -f2)
+if [ -z "${PREFIX}" ]; then
+    echo "Error: CFNSTACKNAME not found in $CONFIG_FILE; cannot scope the AMI name."
+    exit 1
+fi
 echo "Using VPC: ${VPC_ID}"
 echo "Using Subnet: ${SUBNET_ID}"
-packer build -only=amazon-ebs.orch -var "aws_region=${AWS_REGION}" -var "architecture=${ARCHITECTURE}" -var "vpc_id=${VPC_ID}" -var "subnet_id=${SUBNET_ID}" .
+echo "Using AMI name prefix: ${PREFIX}-orch-"
+packer build -only=amazon-ebs.orch \
+    -var "aws_region=${AWS_REGION}" \
+    -var "architecture=${ARCHITECTURE}" \
+    -var "vpc_id=${VPC_ID}" \
+    -var "subnet_id=${SUBNET_ID}" \
+    -var "prefix=${PREFIX}" \
+    .

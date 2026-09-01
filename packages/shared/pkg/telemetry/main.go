@@ -4,16 +4,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"time"
 
+	"github.com/google/uuid"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
-	"go.opentelemetry.io/otel/log"
-	noopLogs "go.opentelemetry.io/otel/log/noop"
 	"go.opentelemetry.io/otel/metric"
 	noopMetric "go.opentelemetry.io/otel/metric/noop"
 	"go.opentelemetry.io/otel/propagation"
-	sdklog "go.opentelemetry.io/otel/sdk/log"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace"
@@ -25,44 +25,62 @@ const metricExportPeriod = 15 * time.Second
 type Client struct {
 	MetricExporter  sdkmetric.Exporter
 	MeterProvider   metric.MeterProvider
+	forceFlush      func(ctx context.Context) error
 	SpanExporter    sdktrace.SpanExporter
 	TracerProvider  trace.TracerProvider
 	TracePropagator propagation.TextMapPropagator
-	LogsExporter    sdklog.Exporter
-	LogsProvider    log.LoggerProvider
+	LogsProvider    LogProvider
 }
 
-func New(ctx context.Context, serviceName, commitSHA, clientID string) (*Client, error) {
-	// Setup metrics
-	metricsExporter, err := NewMeterExporter(ctx, otlpmetricgrpc.WithAggregationSelector(func(kind sdkmetric.InstrumentKind) sdkmetric.Aggregation {
-		if kind == sdkmetric.InstrumentKindHistogram {
-			// Defaults from https://github.com/open-telemetry/opentelemetry-specification/blob/main/specification/metrics/sdk.md#base2-exponential-bucket-histogram-aggregation
-			return sdkmetric.AggregationBase2ExponentialHistogram{
-				MaxSize:  160,
-				MaxScale: 20,
-				NoMinMax: false,
-			}
+// histogramAggregation exports every histogram as base-2 exponential, whose
+// buckets adapt to the data instead of the SDK default boundaries that stop at
+// 10s. It also means metric.WithExplicitBucketBoundaries on an instrument is
+// discarded — that advice only survives when the reader default is an
+// explicit-bucket aggregation. Override per metric with a View, not with
+// boundaries.
+//
+// Sizing from https://github.com/open-telemetry/opentelemetry-specification/blob/main/specification/metrics/sdk.md#base2-exponential-bucket-histogram-aggregation
+func histogramAggregation(kind sdkmetric.InstrumentKind) sdkmetric.Aggregation {
+	if kind == sdkmetric.InstrumentKindHistogram {
+		return sdkmetric.AggregationBase2ExponentialHistogram{
+			MaxSize:  160,
+			MaxScale: 20,
+			NoMinMax: false,
 		}
-		return sdkmetric.DefaultAggregationSelector(kind)
-	}))
+	}
+
+	return sdkmetric.DefaultAggregationSelector(kind)
+}
+
+// New creates a telemetry client that exports traces, metrics, and logs via gRPC.
+// Telemetry is enabled when the OTEL_COLLECTOR_GRPC_ENDPOINT environment variable is set
+// (e.g. "localhost:4317"). When unset, a noop client is returned with zero overhead.
+func New(ctx context.Context, nodeID, serviceName, serviceCommit, serviceVersion, serviceInstanceID string, additional ...attribute.KeyValue) (*Client, error) {
+	if otelCollectorGRPCEndpoint == "" {
+		return NewNoopClient(), nil
+	}
+
+	// Setup metrics
+	metricsExporter, err := NewMeterExporter(ctx, otlpmetricgrpc.WithAggregationSelector(histogramAggregation))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create metrics exporter: %w", err)
 	}
 
-	meterProvider, err := NewMeterProvider(ctx, metricsExporter, metricExportPeriod, serviceName, commitSHA, clientID)
+	res, err := GetResource(ctx, nodeID, serviceName, serviceCommit, serviceVersion, serviceInstanceID, additional...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create resource: %w", err)
+	}
+
+	meterProvider, err := NewMeterProvider(metricsExporter, metricExportPeriod, res)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create metrics provider: %w", err)
 	}
+	otel.SetMeterProvider(meterProvider)
 
 	// Setup logging
-	logsExporter, err := NewLogExporter(ctx)
+	logProvider, err := NewLogProvider(ctx, res)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create logs exporter: %w", err)
-	}
-
-	logsProvider, err := NewLogProvider(ctx, logsExporter, serviceName, commitSHA, clientID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create logs provider: %w", err)
+		return nil, fmt.Errorf("failed to create log provider: %w", err)
 	}
 
 	// Setup tracing
@@ -71,10 +89,8 @@ func New(ctx context.Context, serviceName, commitSHA, clientID string) (*Client,
 		return nil, fmt.Errorf("failed to create span exporter: %w", err)
 	}
 
-	tracerProvider, err := NewTracerProvider(ctx, spanExporter, serviceName, commitSHA, clientID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create tracer provider: %w", err)
-	}
+	tracerProvider := NewTracerProvider(spanExporter, res)
+	otel.SetTracerProvider(tracerProvider)
 
 	// There's probably not a reason why not to set the trace propagator globally, it's used in SDKs
 	propagator := NewTextPropagator()
@@ -83,16 +99,37 @@ func New(ctx context.Context, serviceName, commitSHA, clientID string) (*Client,
 	return &Client{
 		MetricExporter:  metricsExporter,
 		MeterProvider:   meterProvider,
+		forceFlush:      meterProvider.ForceFlush,
 		SpanExporter:    spanExporter,
 		TracerProvider:  tracerProvider,
 		TracePropagator: propagator,
-		LogsExporter:    logsExporter,
-		LogsProvider:    logsProvider,
+		LogsProvider:    logProvider,
 	}, nil
+}
+
+// NewAnonymous creates a telemetry client for tools and CLI commands that don't
+// have build-time injected metadata (commitSHA, version, nodeID).
+// serviceName is the primary identifier used for filtering traces and metrics
+// in observability tools (e.g. Grafana). The remaining resource attributes
+// are filled with sensible defaults (hostname, "unknown" commit, "dev" version).
+func NewAnonymous(ctx context.Context, serviceName string) (*Client, error) {
+	nodeID, _ := os.Hostname()
+	if nodeID == "" {
+		nodeID = "unknown"
+	}
+
+	return New(ctx, nodeID, serviceName, "unknown", "dev", uuid.NewString())
 }
 
 func (t *Client) Shutdown(ctx context.Context) error {
 	var errs []error
+
+	// Flush before the exporter is torn down: shutting it down first would
+	// leave the reader's pending batch with nowhere to go.
+	if err := t.forceFlush(ctx); err != nil {
+		errs = append(errs, err)
+	}
+
 	if t.MetricExporter != nil {
 		if err := t.MetricExporter.Shutdown(ctx); err != nil {
 			errs = append(errs, err)
@@ -103,8 +140,8 @@ func (t *Client) Shutdown(ctx context.Context) error {
 			errs = append(errs, err)
 		}
 	}
-	if t.LogsExporter != nil {
-		if err := t.LogsExporter.Shutdown(ctx); err != nil {
+	if t.LogsProvider != nil {
+		if err := t.LogsProvider.Shutdown(ctx); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -116,10 +153,10 @@ func NewNoopClient() *Client {
 	return &Client{
 		MetricExporter:  &noopMetricExporter{},
 		MeterProvider:   noopMetric.MeterProvider{},
+		forceFlush:      func(context.Context) error { return nil },
 		SpanExporter:    &noopSpanExporter{},
 		TracerProvider:  noopTrace.NewTracerProvider(),
 		TracePropagator: propagation.NewCompositeTextMapPropagator(),
-		LogsExporter:    &noopLogExporter{},
-		LogsProvider:    noopLogs.NewLoggerProvider(),
+		LogsProvider:    NewNoopLogProvider(),
 	}
 }

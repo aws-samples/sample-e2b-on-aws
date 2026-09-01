@@ -3,8 +3,13 @@
 # Environment Configuration Section
 # ==================================================
 setup_environment() {
-  # Get CloudFormation stack ID
-  STACK_ID=$(grep "^StackName=" /tmp/e2b.log | cut -d'=' -f2)
+  # Get CloudFormation stack ID.
+  #
+  # tail -1 because the log is appended to, not truncated: a second StackName=
+  # line (a re-run, or a tree reused against another stack) would otherwise make
+  # STACK_ID two lines and every describe-stacks call below fail on a stack name
+  # that does not exist. The most recent line is the current stack.
+  STACK_ID=$(grep "^StackName=" /tmp/e2b.log | tail -1 | cut -d'=' -f2)
   
   # Validate stack existence
   [[ -z "$STACK_ID" ]] && { echo "Error: Failed to get CloudFormation Stack ID"; exit 1; }
@@ -39,12 +44,19 @@ setup_environment() {
   echo "AWSREGION=$REGION" >> /opt/config.properties
 
 
+  # Derive the AZ of every private subnet the stack exposes. Subnet 3 is only
+  # present on 3-AZ stacks, so it is resolved only when the output exists.
   SUBNET1=$(grep "^CFNPRIVATESUBNET1=" /opt/config.properties | cut -d= -f2)
   SUBNET2=$(grep "^CFNPRIVATESUBNET2=" /opt/config.properties | cut -d= -f2)
+  SUBNET3=$(grep "^CFNPRIVATESUBNET3=" /opt/config.properties | cut -d= -f2)
   AZ1=$(aws ec2 describe-subnets --subnet-ids $SUBNET1 --query 'Subnets[*].[AvailabilityZone]' --output text)
   AZ2=$(aws ec2 describe-subnets --subnet-ids $SUBNET2 --query 'Subnets[*].[AvailabilityZone]' --output text)
   echo "CFNAZ1=$AZ1" >> /opt/config.properties
   echo "CFNAZ2=$AZ2" >> /opt/config.properties
+  if [[ -n "$SUBNET3" ]]; then
+    AZ3=$(aws ec2 describe-subnets --subnet-ids $SUBNET3 --query 'Subnets[*].[AvailabilityZone]' --output text)
+    echo "CFNAZ3=$AZ3" >> /opt/config.properties
+  fi
 
   # Verification output
   echo "=== Exported Variables ==="

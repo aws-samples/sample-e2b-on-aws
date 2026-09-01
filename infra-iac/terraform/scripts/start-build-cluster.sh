@@ -33,6 +33,33 @@ net.ipv4.ip_local_reserved_ports = 44313,50001
 EOF
 sudo sysctl -p
 
+# The build node runs the same binary as a client node, so it needs the same
+# host prerequisites. These were only ever set up in start-client.sh, which went
+# unnoticed while the build pool was provisioned at desired_capacity = 0: the
+# template-manager dies on startup with
+#   "failed to create device pool: failed to get max devices: NBD module not loaded"
+# because it writes the build's rootfs through an NBD device.
+echo "Disabling inotify for NBD devices"
+# https://lore.kernel.org/lkml/20220422054224.19527-1-matthew.ruffell@canonical.com/
+cat <<EOH >/etc/udev/rules.d/97-nbd-device.rules
+# Disable inotify watching of change events for NBD devices
+ACTION=="add|change", KERNEL=="nbd*", OPTIONS:="nowatch"
+EOH
+
+sudo udevadm control --reload-rules
+sudo udevadm trigger
+
+# Load the nbd module with 4096 devices
+sudo modprobe nbd nbds_max=4096
+
+# ORCHESTRATOR_BASE_PATH defaults to /orchestrator, and TemplatesDir and
+# DefaultCacheDir hang off it (orchestrator/pkg/cfg/model.go). Unlike a client
+# node there is no instance store to carve a cache volume out of - m8i is
+# EBS-only - so these are plain directories on the root volume.
+sudo mkdir -p /orchestrator/sandbox
+sudo mkdir -p /orchestrator/template
+sudo mkdir -p /orchestrator/build
+
 # Create the directory for the fc mounts
 mkdir -p /fc-vm
 
@@ -46,27 +73,32 @@ mkdir -p $kernels_dir
 fc_versions_dir="/fc-versions"
 mkdir -p $fc_versions_dir
 
+# template-manager builds sandbox rootfs with busybox and expects it under
+# HOST_BUSYBOX_DIR (default /fc-busybox), matching BUSYBOX_VERSION.
+busybox_dir="/fc-busybox"
+mkdir -p $busybox_dir
 
 # Mount S3 buckets using mountpoint-s3
-mkdir -p /tmp/mp_cache_envd /tmp/mp_cache_kernels /tmp/mp_cache_versions
+mkdir -p /tmp/mp_cache_envd /tmp/mp_cache_kernels /tmp/mp_cache_versions /tmp/mp_cache_busybox
 mount-s3 ${E2B_BUCKET} $envd_dir --prefix fc-env-pipeline/ --read-only --allow-other --cache /tmp/mp_cache_envd --file-mode 0755
 mount-s3 ${E2B_BUCKET} $kernels_dir --prefix fc-kernels/ --read-only --allow-other --cache /tmp/mp_cache_kernels --file-mode 0755
 mount-s3 ${E2B_BUCKET} $fc_versions_dir --prefix fc-versions/ --read-only --allow-other --cache /tmp/mp_cache_versions --file-mode 0755
+mount-s3 ${E2B_BUCKET} $busybox_dir --prefix fc-busybox/ --read-only --allow-other --cache /tmp/mp_cache_busybox --file-mode 0755
 
 # These variables are passed in via Terraform template interpolation
 aws s3 cp "s3://${E2B_BUCKET}/cluster-setup/run-consul-${RUN_CONSUL_FILE_HASH}.sh" /opt/consul/bin/run-consul.sh
-aws s3 cp "s3://${E2B_BUCKET}/cluster-setup/run-build-cluster-nomad-${RUN_NOMAD_FILE_HASH}.sh" /opt/nomad/bin/run-nomad.sh
+aws s3 cp "s3://${E2B_BUCKET}/cluster-setup/run-nomad-${RUN_NOMAD_FILE_HASH}.sh" /opt/nomad/bin/run-nomad.sh
 chmod +x /opt/consul/bin/run-consul.sh /opt/nomad/bin/run-nomad.sh
 
 mkdir -p /root/docker
 touch /root/docker/config.json
-# export ECR_AUTH_TOKEN=$(aws ecr get-authorization-token --output text --query 'authorizationData[].authorizationToken')
+# Delegate ECR auth to amazon-ecr-credential-helper (installed in the AMI), which
+# mints tokens from the instance profile on demand instead of baking a 12-hour
+# token into this file at boot.
 cat <<EOF >/root/docker/config.json
 {
-    "auths": {
-        "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com": {
-            "auth": "$(aws ecr get-authorization-token --output text --query 'authorizationData[].authorizationToken')"
-        }
+    "credHelpers": {
+        "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com": "ecr-login"
     }
 }
 EOF
@@ -162,7 +194,10 @@ echo $overcommitment_hugepages >/proc/sys/vm/nr_overcommit_hugepages
     --gossip-encryption-key "${CONSUL_GOSSIP_ENCRYPTION_KEY}" \
     --dns-request-token "${CONSUL_DNS_REQUEST_TOKEN}" &
 
-/opt/nomad/bin/run-nomad.sh --consul-token "${CONSUL_TOKEN}" &
+# One shared upstream run-nomad.sh for every pool, so --client, the pool name and
+# the labels are explicit flags. The retired run-build-cluster-nomad.sh hardcoded
+# the pool and read labels from the environment.
+/opt/nomad/bin/run-nomad.sh --client --node-pool "build" --node-labels "${NODE_LABELS}" --consul-token "${CONSUL_TOKEN}" &
 
 # Download and execute custom script if provided
 aws s3 cp "s3://${E2B_BUCKET}/cluster-setup/run-custom-script-${RUN_CUSTOM_SCRIPT_FILE_HASH}.sh" /opt/run-custom-script.sh

@@ -5,44 +5,65 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
-	"os"
-	"strings"
+	"net"
 
-	"go.uber.org/zap"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/protobuf/types/known/emptypb"
-)
 
-var host = strings.TrimSpace(os.Getenv("ANALYTICS_COLLECTOR_HOST"))
+	e2bgrpc "github.com/e2b-dev/infra/packages/shared/pkg/grpc"
+)
 
 type Analytics struct {
 	client     AnalyticsCollectorClient
 	connection *grpc.ClientConn
 }
 
-func NewAnalytics() (*Analytics, error) {
+// NewAnalytics creates a client for the analytics collector.
+//
+// host is either a bare hostname, in which case the collector is assumed to be
+// served on the default HTTPS port (the managed deployment puts it behind a
+// load balancer on 443), or an explicit "host:port" address. An empty host
+// returns a no-op client that drops every event.
+//
+// useTLS must be false for collectors that speak plaintext gRPC, such as the
+// one running in local development; the per-RPC API key is then sent over an
+// unencrypted connection, so only do that on loopback.
+func NewAnalytics(host, grpcAPIKey string, useTLS bool) (*Analytics, error) {
 	var client AnalyticsCollectorClient
 	var connection *grpc.ClientConn
 
-	if host == "" {
-		zap.L().Info("Running dummy implementation of analytics collector client, no host provided")
-	} else {
-		systemRoots, err := x509.SystemCertPool()
-		if err != nil {
-			errMsg := fmt.Errorf("failed to read system root certificate pool: %w", err)
-
-			return nil, errMsg
+	// Run dummy client if host is not provided
+	if host != "" {
+		target := host
+		if _, _, err := net.SplitHostPort(host); err != nil {
+			// No port in host, default to the HTTPS one.
+			target = net.JoinHostPort(host, "443")
 		}
 
-		cred := credentials.NewTLS(&tls.Config{
-			RootCAs:    systemRoots,
-			MinVersion: tls.VersionTLS13,
-		})
+		var cred credentials.TransportCredentials
+		if useTLS {
+			systemRoots, err := x509.SystemCertPool()
+			if err != nil {
+				errMsg := fmt.Errorf("failed to read system root certificate pool: %w", err)
+
+				return nil, errMsg
+			}
+
+			cred = credentials.NewTLS(&tls.Config{
+				RootCAs:    systemRoots,
+				MinVersion: tls.VersionTLS13,
+			})
+		} else {
+			cred = insecure.NewCredentials()
+		}
 
 		conn, err := grpc.NewClient(
-			fmt.Sprintf("%s:443", host),
-			grpc.WithPerRPCCredentials(&gRPCApiKey{}),
+			target,
+			grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
+			grpc.WithPerRPCCredentials(newGRPCAPIKey(grpcAPIKey, useTLS)),
 			grpc.WithAuthority(host),
 			grpc.WithTransportCredentials(cred),
 		)
@@ -68,6 +89,10 @@ func (a *Analytics) Close() error {
 	}
 
 	return nil
+}
+
+func (a *Analytics) Init(ctx context.Context) {
+	e2bgrpc.ObserveConnection(ctx, a.connection, "analytics-collector")
 }
 
 func (a *Analytics) InstanceStarted(ctx context.Context, in *InstanceStartedEvent, opts ...grpc.CallOption) (*emptypb.Empty, error) {

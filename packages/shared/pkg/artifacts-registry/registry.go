@@ -16,6 +16,7 @@ type RegistryProvider string
 const (
 	GCPStorageProvider   RegistryProvider = "GCP_ARTIFACTS"
 	AWSStorageProvider   RegistryProvider = "AWS_ECR"
+	AzureStorageProvider RegistryProvider = "AZURE_ACR"
 	LocalStorageProvider RegistryProvider = "Local"
 
 	DefaultRegistryProvider RegistryProvider = GCPStorageProvider
@@ -31,10 +32,10 @@ type ArtifactsRegistry interface {
 	Delete(ctx context.Context, templateId string, buildId string) error
 }
 
-func GetArtifactsRegistryProvider() (ArtifactsRegistry, error) {
+func GetArtifactsRegistryProvider(ctx context.Context) (ArtifactsRegistry, error) {
 	provider := RegistryProvider(env.GetEnv(storageProviderEnv, string(DefaultRegistryProvider)))
 
-	setupCtx, setupCtxCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	setupCtx, setupCtxCancel := context.WithTimeout(ctx, 10*time.Second)
 	defer setupCtxCancel()
 
 	switch provider {
@@ -42,6 +43,8 @@ func GetArtifactsRegistryProvider() (ArtifactsRegistry, error) {
 		return NewAWSArtifactsRegistry(setupCtx)
 	case GCPStorageProvider:
 		return NewGCPArtifactsRegistry(setupCtx)
+	case AzureStorageProvider:
+		return NewAzureArtifactsRegistry(setupCtx)
 	case LocalStorageProvider:
 		return NewLocalArtifactsRegistry()
 	}

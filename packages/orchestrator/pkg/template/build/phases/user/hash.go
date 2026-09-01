@@ -1,0 +1,20 @@
+//go:build linux
+
+package user
+
+import (
+	"context"
+
+	"github.com/e2b-dev/infra/packages/orchestrator/pkg/template/build/phases"
+	"github.com/e2b-dev/infra/packages/orchestrator/pkg/template/build/storage/cache"
+)
+
+const prefix = "DEFAULT USER"
+
+func (ub *UserBuilder) Hash(_ context.Context, sourceLayer phases.LayerResult) (string, error) {
+	return cache.HashKeys(
+		sourceLayer.Hash,
+		prefix,
+		ub.user,
+	), nil
+}

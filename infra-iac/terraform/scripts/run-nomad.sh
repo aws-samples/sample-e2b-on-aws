@@ -9,7 +9,11 @@ set -x
 readonly NOMAD_CONFIG_FILE="default.hcl"
 readonly SUPERVISOR_CONFIG_PATH="/etc/supervisor/conf.d/run-nomad.conf"
 
-readonly EC2_METADATA_URL="http://169.254.169.254/latest"
+readonly EC2_INSTANCE_METADATA_URL="http://169.254.169.254/latest/meta-data"
+readonly EC2_DYNAMIC_METADATA_URL="http://169.254.169.254/latest/dynamic/instance-identity/document"
+readonly EC2_METADATA_TOKEN_URL="http://169.254.169.254/latest/api/token"
+readonly EC2_METADATA_TOKEN_TTL_SECONDS="21600"
+readonly EC2_METADATA_TOKEN_MAX_ATTEMPTS="5"
 
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly SCRIPT_NAME="$(basename "$0")"
@@ -35,6 +39,7 @@ function print_usage {
   echo -e "  --use-sudo\t\tIf set, run the Nomad agent with sudo. By default, sudo is only used if --client is set."
   echo -e "  --skip-nomad-config\tIf this flag is set, don't generate a Nomad configuration file. Optional. Default is false."
   echo -e "  --api\t\tIf set, run the Nomad agent dedicated to API. Optional. Default is false."
+  echo -e "  --node-labels\t\tComma-separated list of scheduling labels for this node. Optional."
   echo
   echo "Example:"
   echo
@@ -42,37 +47,37 @@ function print_usage {
 }
 
 function log {
-  local readonly level="$1"
-  local readonly message="$2"
-  local readonly timestamp=$(date +"%Y-%m-%d %H:%M:%S")
+  local -r level="$1"
+  local -r message="$2"
+  local -r timestamp=$(date +"%Y-%m-%d %H:%M:%S")
   echo >&2 -e "${timestamp} [${level}] [$SCRIPT_NAME] ${message}"
 }
 
 function log_info {
-  local readonly message="$1"
+  local -r message="$1"
   log "INFO" "$message"
 }
 
 function log_warn {
-  local readonly message="$1"
+  local -r message="$1"
   log "WARN" "$message"
 }
 
 function log_error {
-  local readonly message="$1"
+  local -r message="$1"
   log "ERROR" "$message"
 }
 
 # Based on code from: http://stackoverflow.com/a/16623897/483528
 function strip_prefix {
-  local readonly str="$1"
-  local readonly prefix="$2"
+  local -r str="$1"
+  local -r prefix="$2"
   echo "${str#$prefix}"
 }
 
 function assert_not_empty {
-  local readonly arg_name="$1"
-  local readonly arg_value="$2"
+  local -r arg_name="$1"
+  local -r arg_value="$2"
 
   if [[ -z "$arg_value" ]]; then
     log_error "The value for '$arg_name' cannot be empty"
@@ -81,64 +86,101 @@ function assert_not_empty {
   fi
 }
 
-# Get the value at a specific EC2 Instance Metadata path
+# Get the value at a specific Instance Metadata path.
 function get_instance_metadata_value {
-  local readonly path="$1"
+  local -r path="$1"
+  local token=""
+  local -a token_header=()
 
-  # AWS IMDSv2 requires a token first for security
-  TOKEN=$(curl -X PUT --silent --show-error "$EC2_METADATA_URL/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 60")
+  token=$(get_instance_metadata_token)
+  token_header=(--header "X-aws-ec2-metadata-token: $token")
 
-  log_info "Looking up Metadata value at $EC2_METADATA_URL/$path"
-  curl --silent --show-error --location -H "X-aws-ec2-metadata-token: $TOKEN" "$EC2_METADATA_URL/$path"
+  log_info "Looking up Metadata value at $EC2_INSTANCE_METADATA_URL/$path"
+  response=$(curl --silent --show-error --location --fail \
+    "${token_header[@]}" \
+    --write-out "%{http_code}" \
+    --output /tmp/metadata.out \
+    "$EC2_INSTANCE_METADATA_URL/$path")
+
+  if [ "$response" -eq 200 ]; then
+    cat /tmp/metadata.out
+  else
+    echo ""
+  fi
+  rm  /tmp/metadata.out
 }
 
-# Get the value of a tag from EC2 Instance Tags
+# Get an IMDSv2 token for Instance Metadata calls.
+function get_instance_metadata_token {
+  local token=""
+
+  for attempt in $(seq 1 "$EC2_METADATA_TOKEN_MAX_ATTEMPTS"); do
+    if token=$(curl --silent --show-error --location --fail \
+      --connect-timeout 2 \
+      --max-time 5 \
+      --request PUT \
+      --header "X-aws-ec2-metadata-token-ttl-seconds: $EC2_METADATA_TOKEN_TTL_SECONDS" \
+      "$EC2_METADATA_TOKEN_URL"); then
+      printf '%s' "$token"
+      return 0
+    fi
+
+    log_warn "Failed to get IMDSv2 token, retrying ($attempt/$EC2_METADATA_TOKEN_MAX_ATTEMPTS)"
+    sleep "$attempt"
+  done
+
+  log_error "Failed to get IMDSv2 token after $EC2_METADATA_TOKEN_MAX_ATTEMPTS attempts"
+  return 1
+}
+
+# Get dynamic instance metadata (includes region, account-id, etc.)
+function get_instance_dynamic_metadata {
+  local token=""
+  local -a token_header=()
+
+  token=$(get_instance_metadata_token)
+  token_header=(--header "X-aws-ec2-metadata-token: $token")
+
+  log_info "Looking up dynamic instance metadata"
+  curl --silent --show-error --location --fail "${token_header[@]}" "$EC2_DYNAMIC_METADATA_URL"
+}
+
+# Get the value of the given tag from EC2 instance tags
 function get_instance_tag_value {
-  local readonly key="$1"
+  local -r key="$1"
+  local instance_id=$(get_instance_metadata_value "instance-id")
+  local region=$(get_instance_region)
 
-  log_info "Looking up Instance Tag value for key \"$key\""
-  # This requires instance profile with permission to describe tags
-  # Using the instance-id from metadata to find the tags
-  aws ec2 describe-tags --filters "Name=resource-id,Values=$(get_instance_id)" "Name=key,Values=$key" --query "Tags[0].Value" --output text
+  log_info "Looking up EC2 tag value for key \"$key\""
+  aws ec2 describe-tags --region "$region" --filters "Name=resource-id,Values=$instance_id" "Name=key,Values=$key" --query 'Tags[0].Value' --output text 2>/dev/null || echo ""
 }
 
-# Get the AWS account ID
-function get_aws_account_id {
-  log_info "Looking up AWS Account ID"
-  aws sts get-caller-identity --query "Account" --output text
+# Get the AWS Region in which this EC2 Instance currently resides
+function get_instance_region {
+  log_info "Looking up Region of the current EC2 Instance"
+  get_instance_dynamic_metadata | jq -r '.region'
 }
 
-# Get the AWS Zone (availability zone) in which this EC2 Instance currently resides
+# Get the availability zone of the current EC2 Instance
 function get_instance_zone {
   log_info "Looking up Availability Zone of the current EC2 Instance"
-  get_instance_metadata_value "meta-data/placement/availability-zone"
-}
-
-function get_instance_region {
-  # Remove the last character from the availability zone to get the region
-  # e.g., us-east-1a -> us-east-1
-  get_instance_zone | sed 's/[a-z]$//'
+  get_instance_metadata_value "placement/availability-zone"
 }
 
 # Get the ID of the current EC2 Instance
 function get_instance_name {
   log_info "Looking up current EC2 Instance ID"
-  get_instance_metadata_value "meta-data/instance-id"
-}
-
-# Get the ID of the current EC2 Instance (alternative name)
-function get_instance_id {
-  get_instance_metadata_value "meta-data/instance-id"
+  get_instance_metadata_value "instance-id"
 }
 
 # Get the IP Address of the current EC2 Instance
 function get_instance_ip_address {
   log_info "Looking up EC2 Instance IP Address"
-  get_instance_metadata_value "meta-data/local-ipv4"
+  get_instance_metadata_value "local-ipv4"
 }
 
 function assert_is_installed {
-  local readonly name="$1"
+  local -r name="$1"
 
   if [[ ! $(command -v ${name}) ]]; then
     log_error "The binary '$name' is required by this script but is not installed or in the system's PATH."
@@ -147,23 +189,27 @@ function assert_is_installed {
 }
 
 function generate_nomad_config {
-  local readonly server="$1"
-  local readonly client="$2"
-  local readonly num_servers="$3"
-  local readonly config_dir="$4"
-  local readonly user="$5"
-  local readonly consul_token="$6"
-  local readonly config_path="$config_dir/$NOMAD_CONFIG_FILE"
+  local -r server="$1"
+  local -r client="$2"
+  local -r num_servers="$3"
+  local -r config_dir="$4"
+  local -r user="$5"
+  local -r consul_token="$6"
+  local -r node_pool="$7"
+  local -r node_labels="$8"
+  local -r config_path="$config_dir/$NOMAD_CONFIG_FILE"
 
   local instance_name=""
   local instance_ip_address=""
   local instance_region=""
   local instance_zone=""
+  local job_constraint=""
 
   instance_name=$(get_instance_name)
   instance_ip_address=$(get_instance_ip_address)
   instance_region=$(get_instance_region)
   zone=$(get_instance_zone)
+  job_constraint=$(get_instance_tag_value "job-constraint" || true)
 
   local server_config=""
   if [[ "$server" == "true" ]]; then
@@ -171,7 +217,12 @@ function generate_nomad_config {
       cat <<EOF
 server {
   enabled = true
-  bootstrap_expect = 3
+  bootstrap_expect = $num_servers
+  heartbeat_grace = "1m"
+
+  default_scheduler_config {
+    memory_oversubscription_enabled = true
+  }
 }
 
 EOF
@@ -184,16 +235,18 @@ EOF
       cat <<EOF
 client {
   enabled = true
-  node_pool = "default"
+  node_pool = "$node_pool"
   meta {
-    node_pool = "default"
+    "node_pool" = "$node_pool"
+    "node_labels" = "${node_labels:-}"
+    ${job_constraint:+"\"job_constraint\"" = "\"$job_constraint\""}
   }
+  max_kill_timeout = "24h"
 }
 
 plugin "raw_exec" {
   config {
     enabled = true
-    no_cgroups = true
   }
 }
 
@@ -225,9 +278,16 @@ plugin_dir = "/opt/nomad/plugins"
 
 plugin "docker" {
   config {
+    volumes {
+      enabled = true
+    }
     auth {
-      # Nomad will prepend "docker-credential-" to the helper value and call
-      # that script name.
+      # E2B-on-AWS deviation from upstream (which points auth at a static
+      # /root/docker/config.json): use the amazon-ecr-credential-helper baked
+      # into the AMI. The static token written at boot expires after ~12h and
+      # the node then fails to pull images; the helper refreshes on demand.
+      # Nomad prepends "docker-credential-" to this value. Do NOT revert to the
+      # config.json form.
       helper = "ecr-login"
     }
   }
@@ -263,13 +323,13 @@ EOF
 }
 
 function generate_supervisor_config {
-  local readonly supervisor_config_path="$1"
-  local readonly nomad_config_dir="$2"
-  local readonly nomad_data_dir="$3"
-  local readonly nomad_bin_dir="$4"
-  local readonly nomad_log_dir="$5"
-  local readonly nomad_user="$6"
-  local readonly use_sudo="$7"
+  local -r supervisor_config_path="$1"
+  local -r nomad_config_dir="$2"
+  local -r nomad_data_dir="$3"
+  local -r nomad_bin_dir="$4"
+  local -r nomad_log_dir="$5"
+  local nomad_user="$6"
+  local -r use_sudo="$7"
 
   if [[ "$use_sudo" == "true" ]]; then
     log_info "The --use-sudo flag is set, so running Nomad as the root user"
@@ -305,23 +365,23 @@ function bootstrap {
   done
   log_info "Nomad server started."
 
-  local readonly nomad_token="$1"
+  local -r nomad_token="$1"
   log_info "Bootstrapping Nomad"
   echo "$nomad_token" >"/tmp/nomad.token"
   nomad acl bootstrap /tmp/nomad.token
-  # rm "/tmp/nomad.token"
+  rm "/tmp/nomad.token"
 }
 
 function create_node_pools {
-  local readonly nomad_token="$1"
+  local -r nomad_token="$1"
   log_info "Creating node pools"
-  cat >"$config_dir/api_node_pool.hcl" <<EOF
+  cat > "$config_dir/api_node_pool.hcl"  <<EOF
 node_pool "api" {
   description = "Nodes for api."
 }
 EOF
   nomad node pool apply -token "$nomad_token" "$config_dir/api_node_pool.hcl"
-  cat >"$config_dir/build_node_pool.hcl" <<EOF
+  cat > "$config_dir/build_node_pool.hcl"  <<EOF
 node_pool "build" {
   description = "Nodes for template builds."
 }
@@ -331,7 +391,7 @@ EOF
 
 # Based on: http://unix.stackexchange.com/a/7732/215969
 function get_owner_of_path {
-  local readonly path="$1"
+  local -r path="$1"
   ls -ld "$path" | awk '{print $3}'
 }
 
@@ -339,13 +399,6 @@ function run {
   local server="false"
   local client="false"
   local num_servers=""
-  local config_dir=""
-  local data_dir=""
-  local bin_dir=""
-  local log_dir=""
-  local user=""
-  local skip_nomad_config="false"
-  local use_sudo=""
   local all_args=()
 
   while [[ $# > 0 ]]; do
@@ -372,34 +425,12 @@ function run {
       consul_token="$2"
       shift
       ;;
-    --config-dir)
-      assert_not_empty "$key" "$2"
-      config_dir="$2"
+    --node-pool)
+      node_pool="$2"
       shift
       ;;
-    --data-dir)
-      assert_not_empty "$key" "$2"
-      data_dir="$2"
-      shift
-      ;;
-    --bin-dir)
-      assert_not_empty "$key" "$2"
-      bin_dir="$2"
-      shift
-      ;;
-    --log-dir)
-      assert_not_empty "$key" "$2"
-      log_dir="$2"
-      shift
-      ;;
-    --user)
-      assert_not_empty "$key" "$2"
-      user="$2"
-      shift
-      ;;
-    --cluster-tag-key)
-      assert_not_empty "$key" "$2"
-      cluster_tag_key="$2"
+    --node-labels)
+      node_labels="$2"
       shift
       ;;
     --cluster-tag-value)
@@ -407,15 +438,8 @@ function run {
       cluster_tag_value="$2"
       shift
       ;;
-    --skip-nomad-config)
-      skip_nomad_config="true"
-      ;;
     --use-sudo)
       use_sudo="true"
-      ;;
-    --help)
-      print_usage
-      exit
       ;;
     *)
       log_error "Unrecognized argument: $key"
@@ -447,44 +471,18 @@ function run {
   assert_is_installed "supervisorctl"
   assert_is_installed "curl"
 
-  if [[ -z "$config_dir" ]]; then
-    config_dir=$(cd "$SCRIPT_DIR/../config" && pwd)
-  fi
+  config_dir=$(cd "$SCRIPT_DIR/../config" && pwd)
 
-  if [[ -z "$data_dir" ]]; then
-    data_dir=$(cd "$SCRIPT_DIR/../data" && pwd)
-  fi
+  data_dir=$(cd "$SCRIPT_DIR/../data" && pwd)
 
-  if [[ -z "$bin_dir" ]]; then
-    bin_dir=$(cd "$SCRIPT_DIR/../bin" && pwd)
-  fi
+  bin_dir=$(cd "$SCRIPT_DIR/../bin" && pwd)
 
-  if [[ -z "$log_dir" ]]; then
-    log_dir=$(cd "$SCRIPT_DIR/../log" && pwd)
-  fi
+  log_dir=$(cd "$SCRIPT_DIR/../log" && pwd)
 
-  if [[ -z "$user" ]]; then
-    user=$(get_owner_of_path "$config_dir")
-  fi
+  user=$(get_owner_of_path "$config_dir")
 
-  if [[ "$skip_nomad_config" == "true" ]]; then
-    log_info "The --skip-nomad-config flag is set, so will not generate a default Nomad config file."
-  else
-    generate_nomad_config "$server" "$client" "$num_servers" "$config_dir" "$user" "$consul_token"
-  fi
-
+  generate_nomad_config "$server" "$client" "$num_servers" "$config_dir" "$user" "$consul_token" "$node_pool" "$node_labels"
   generate_supervisor_config "$SUPERVISOR_CONFIG_PATH" "$config_dir" "$data_dir" "$bin_dir" "$log_dir" "$user" "$use_sudo"
-
-  # TODO: Let client wait for Nomad servers to start
-  #  if [[ "$client" == "true" ]]; then
-  #     log_info "Waiting for Nomad servers to start"
-  #     while test -z "$(curl -s http://127.0.0.1:4646/v1/agent/leader)"
-  #     do
-  #       log_info "Nomad servers not yet started. Waiting for 1 second."
-  #       sleep 1
-  #     done
-  #  fi
-
   start_nomad
 
   if [[ "$server" == "true" ]]; then
