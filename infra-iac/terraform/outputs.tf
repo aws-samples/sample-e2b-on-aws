@@ -52,6 +52,16 @@ output "api_secret_name" {
   value       = aws_secretsmanager_secret.api_secret.name
 }
 
+output "admin_token_secret_name" {
+  description = "The name of the admin API token secret"
+  value       = aws_secretsmanager_secret.admin_token.name
+}
+
+output "sandbox_access_token_hash_seed_secret_name" {
+  description = "The name of the sandbox access token hash seed secret"
+  value       = aws_secretsmanager_secret.sandbox_access_token_hash_seed.name
+}
+
 output "launch_darkly_api_key_name" {
   description = "The name of the LaunchDarkly SDK key secret"
   value       = aws_secretsmanager_secret.launch_darkly_api_key.name

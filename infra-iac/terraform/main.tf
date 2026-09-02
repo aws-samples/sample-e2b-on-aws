@@ -245,6 +245,50 @@ resource "random_password" "api_secret" {
   special = false
 }
 
+# -------------------- Admin Token --------------------
+# The credential for the admin-only routes (X-Admin-Token), which is what the
+# scale-in controller authenticates with. A Secrets Manager entry rather than
+# something start.sh generates: openssl there produced a fresh value on every
+# apply, so the running api and /opt/config.properties drifted apart and the
+# admin routes answered 401 until the job was redeployed.
+resource "aws_secretsmanager_secret" "admin_token" {
+  name        = "${var.prefix}-admin-token"
+  description = "Credential for the API's admin routes (X-Admin-Token)"
+  tags        = local.common_tags
+}
+
+resource "random_password" "admin_token" {
+  length  = 32
+  special = false
+}
+
+resource "aws_secretsmanager_secret_version" "admin_token" {
+  secret_id     = aws_secretsmanager_secret.admin_token.id
+  secret_string = random_password.admin_token.result
+}
+
+# -------------------- Sandbox Access Token Hash Seed --------------------
+# Separate from the admin token, which it used to share a value with. It seeds
+# the hash that validates sandbox traffic tokens
+# (api/internal/handlers/store.go), so rotating it invalidates every live
+# sandbox's access token - and handing the admin credential to an automation
+# would otherwise hand over this seed with it.
+resource "aws_secretsmanager_secret" "sandbox_access_token_hash_seed" {
+  name        = "${var.prefix}-sandbox-access-token-hash-seed"
+  description = "Seed for hashing sandbox traffic access tokens"
+  tags        = local.common_tags
+}
+
+resource "random_password" "sandbox_access_token_hash_seed" {
+  length  = 32
+  special = false
+}
+
+resource "aws_secretsmanager_secret_version" "sandbox_access_token_hash_seed" {
+  secret_id     = aws_secretsmanager_secret.sandbox_access_token_hash_seed.id
+  secret_string = random_password.sandbox_access_token_hash_seed.result
+}
+
 resource "aws_secretsmanager_secret" "api_secret" {
   name        = "${var.prefix}-api-secret"
   description = "Shared secret used by template-manager to call the API"

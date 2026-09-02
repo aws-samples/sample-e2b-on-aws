@@ -71,7 +71,13 @@ job "orchestrator" {
       }
 
       env {
-        NODE_ID     = "${node.unique.id}"
+        # The EC2 instance id, not the Nomad UUID, matching upstream's own job.
+        # run-nomad.sh names each client after its instance, so the id in an ASG
+        # lifecycle event, the Nomad node name and the API's nodeID are one
+        # string - which is what lets the scale-in controller talk only to the
+        # E2B API instead of also resolving UUIDs through Nomad. A stale UUID
+        # left behind by a re-registered client cannot be picked up either.
+        NODE_ID     = "${node.unique.name}"
         NODE_IP     = "${attr.unique.network.ip-address}"
         NODE_LABELS = "${meta.node_labels}"
 

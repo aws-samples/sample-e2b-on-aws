@@ -187,13 +187,34 @@ else
     echo "Warning: Consul ACL token not found in config file"
 fi
 
-# Generate random admin token
-ADMIN_TOKEN=$(openssl rand -base64 32 | tr -dc 'a-zA-Z0-9!@#$%^&*()_+{}|:<>?=-' | head -c 30)
-echo "admin_token=${ADMIN_TOKEN}" >> "$CONFIG_FILE"
+# admin_token and sandbox_access_token_hash_seed come from Secrets Manager, via
+# the SECRET_* keys written above. They used to be one openssl call here, which
+# had two consequences: the value changed on every apply, so the running api and
+# this file disagreed and the admin routes answered 401 until a redeploy; and the
+# same value seeded the hash that validates sandbox traffic tokens, so anything
+# given the admin credential was also given that seed.
 
 # The SECRET_* keys written above are prefixed with the stack name, so the Nomad
 # job templates cannot reference them directly. Normalise the ones the jobs need
 # into stable lower-case keys, the same way nomad_acl_token is derived above.
+
+# api: ADMIN_TOKEN
+ADMIN_TOKEN=$(grep -i "_ADMIN_TOKEN=" "$CONFIG_FILE" | head -1 | cut -d'=' -f2-)
+if [ -n "$ADMIN_TOKEN" ]; then
+    echo "admin_token=${ADMIN_TOKEN}" >> "$CONFIG_FILE"
+else
+    echo "Warning: admin token not found in config file"
+fi
+
+# api: SANDBOX_ACCESS_TOKEN_HASH_SEED. Rotating this invalidates every live
+# sandbox's traffic access token, which is why it is its own secret rather than
+# a second use of the admin token.
+SANDBOX_SEED=$(grep -i "_SANDBOX_ACCESS_TOKEN_HASH_SEED=" "$CONFIG_FILE" | head -1 | cut -d'=' -f2-)
+if [ -n "$SANDBOX_SEED" ]; then
+    echo "sandbox_access_token_hash_seed=${SANDBOX_SEED}" >> "$CONFIG_FILE"
+else
+    echo "Warning: sandbox access token hash seed not found in config file"
+fi
 
 # template-manager: API_SECRET
 API_SECRET=$(grep -i "_API_SECRET=" "$CONFIG_FILE" | head -1 | cut -d'=' -f2-)

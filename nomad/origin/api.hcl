@@ -166,8 +166,11 @@ job "api" {
         # so it would hand out template-manager addresses as orchestrators.
         NOMAD_ORCHESTRATOR_LEGACY_DISCOVERY_ENABLED = false
 
+        # Two distinct secrets. They were the same value until it turned out that
+        # handing the admin credential to an automation would also hand over the
+        # seed that validates every sandbox's traffic access token.
         ADMIN_TOKEN                    = "${admin_token}"
-        SANDBOX_ACCESS_TOKEN_HASH_SEED = "${admin_token}"
+        SANDBOX_ACCESS_TOKEN_HASH_SEED = "${sandbox_access_token_hash_seed}"
 
         # Persistent-volume access tokens.
         VOLUME_TOKEN_ISSUER           = "${CFNDOMAIN}"
