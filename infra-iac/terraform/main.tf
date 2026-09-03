@@ -24,6 +24,12 @@ terraform {
       source  = "hashicorp/null"
       version = "3.2.2"
     }
+    # Archive provider: zips the drain-warden Lambda sources at plan time, so the
+    # functions have no build step of their own.
+    archive = {
+      source  = "hashicorp/archive"
+      version = "2.8.0"
+    }
   }
 }
 
@@ -854,15 +860,23 @@ resource "aws_autoscaling_group" "client" {
   # terraform had already moved the launch template to c8i.metal-48xl - and the
   # mismatch only surfaced as sandboxes failing to place, far from its cause.
   #
-  # min_healthy_percentage = 0 because this pool runs a single node by default;
-  # anything higher and the refresh cannot start, since there is no second
-  # instance to stay healthy while the first is replaced. Sandboxes on the old
-  # node are lost when it goes - acceptable here because the alternative is a
-  # pool that silently ignores its own configuration.
+  # Launch before terminate: the replacement is launched and healthy first, and
+  # only then does the old node enter Terminating:Wait and drain.
+  #
+  # This was min_healthy_percentage = 0 (terminate first), which a one-node pool
+  # needs to refresh at all when a refresh is instantaneous. It stops being
+  # acceptable the moment the lifecycle hook below exists: the old node then
+  # drains for up to 65 minutes before it dies, and with terminate-first the
+  # replacement does not launch until it is gone - so any apply touching the
+  # launch template would leave the pool with no capacity for the whole drain.
+  #
+  # AWS requires max - min <= 100, which 100/200 satisfies. The cost is one extra
+  # bare-metal node for the duration of a drain.
   instance_refresh {
     strategy = "Rolling"
     preferences {
-      min_healthy_percentage = 0
+      min_healthy_percentage = 100
+      max_healthy_percentage = 200
       # Consul and Nomad have to come up and the node has to register before the
       # refresh calls it done.
       instance_warmup = 300
@@ -1074,6 +1088,27 @@ resource "aws_launch_template" "api" {
 }
 
 # Create API auto scaling group
+# Holds a terminating client node in Terminating:Wait so its sandboxes can finish
+# before the instance dies. Without it EC2 terminates immediately and every
+# sandbox on the node is lost.
+#
+# heartbeat_timeout is deliberately short: the drain controller heartbeats every
+# loop, so this only has to cover one loop plus a cold start. A controller that
+# wedges therefore releases the instance in five minutes rather than holding it
+# for the whole drain budget. default_result = CONTINUE means every failure path
+# ends with the instance released - the hook protects the ASG from stalling, not
+# the sandboxes from being lost, and the controller is what protects those.
+#
+# The ASG's own ceiling is min(48h, 100 x heartbeat_timeout) = 8h20m here, well
+# past the 65-minute budget the controller works to.
+resource "aws_autoscaling_lifecycle_hook" "client_terminating" {
+  name                   = "${var.prefix}-client-drain"
+  autoscaling_group_name = aws_autoscaling_group.client.name
+  lifecycle_transition   = "autoscaling:EC2_INSTANCE_TERMINATING"
+  heartbeat_timeout      = 300
+  default_result         = "CONTINUE"
+}
+
 resource "aws_autoscaling_group" "api" {
   name                = "${var.prefix}-api-asg"
   vpc_zone_identifier = var.VPC.private_subnets

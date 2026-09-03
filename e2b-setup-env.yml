@@ -873,6 +873,101 @@ Resources:
                 Action:
                   - sts:GetCallerIdentity
                 Resource: "*"
+              # The graceful scale-in controller
+              # (infra-iac/terraform/drain-warden.tf) is terraform-managed like
+              # everything else, so the bastion has to be able to create it.
+              # Scoped to this stack's names, because these are the only
+              # Lambda/Step Functions/EventBridge/SQS resources the deploy chain
+              # owns.
+              - Sid: DrainWardenLambda
+                Effect: Allow
+                Action:
+                  - lambda:CreateFunction
+                  - lambda:DeleteFunction
+                  - lambda:GetFunction
+                  - lambda:GetFunctionConfiguration
+                  - lambda:GetFunctionCodeSigningConfig
+                  - lambda:GetPolicy
+                  - lambda:UpdateFunctionCode
+                  - lambda:UpdateFunctionConfiguration
+                  - lambda:AddPermission
+                  - lambda:RemovePermission
+                  - lambda:ListVersionsByFunction
+                  - lambda:TagResource
+                  - lambda:UntagResource
+                  - lambda:ListTags
+                  - lambda:GetFunctionEventInvokeConfig
+                Resource:
+                  - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-*"
+              - Sid: DrainWardenStepFunctions
+                Effect: Allow
+                Action:
+                  - states:CreateStateMachine
+                  - states:DeleteStateMachine
+                  - states:DescribeStateMachine
+                  - states:UpdateStateMachine
+                  - states:TagResource
+                  - states:UntagResource
+                  - states:ListTagsForResource
+                  # The provider reads versions and aliases on every refresh even
+                  # when neither is published.
+                  - states:ListStateMachineVersions
+                  - states:ListStateMachineAliases
+                  - states:DescribeStateMachineAlias
+                Resource:
+                  - !Sub "arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:${AWS::StackName}-*"
+              # The terraform provider validates a definition before creating the
+              # state machine, and that API is only authorised against
+              # stateMachine:* - it has no name to scope to yet.
+              - Sid: DrainWardenStepFunctionsValidate
+                Effect: Allow
+                Action:
+                  - states:ValidateStateMachineDefinition
+                Resource: "*"
+              - Sid: DrainWardenEvents
+                Effect: Allow
+                Action:
+                  - events:PutRule
+                  - events:DeleteRule
+                  - events:DescribeRule
+                  - events:PutTargets
+                  - events:RemoveTargets
+                  - events:ListTargetsByRule
+                  - events:TagResource
+                  - events:UntagResource
+                  - events:ListTagsForResource
+                Resource:
+                  - !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:rule/${AWS::StackName}-*"
+              - Sid: DrainWardenQueue
+                Effect: Allow
+                Action:
+                  - sqs:CreateQueue
+                  - sqs:DeleteQueue
+                  - sqs:GetQueueAttributes
+                  - sqs:SetQueueAttributes
+                  - sqs:GetQueueUrl
+                  - sqs:TagQueue
+                  - sqs:UntagQueue
+                  - sqs:ListQueueTags
+                Resource:
+                  - !Sub "arn:aws:sqs:${AWS::Region}:${AWS::AccountId}:${AWS::StackName}-*"
+              # PutMetricAlarm takes a resource condition; DescribeAlarms does
+              # not, so the read side is unscoped.
+              - Sid: DrainWardenAlarms
+                Effect: Allow
+                Action:
+                  - cloudwatch:PutMetricAlarm
+                  - cloudwatch:DeleteAlarms
+                  - cloudwatch:TagResource
+                  - cloudwatch:UntagResource
+                  - cloudwatch:ListTagsForResource
+                Resource:
+                  - !Sub "arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:${AWS::StackName}-*"
+              - Sid: DrainWardenAlarmsRead
+                Effect: Allow
+                Action:
+                  - cloudwatch:DescribeAlarms
+                Resource: "*"
       Description: IAM role with complete permissions for E2B infrastructure deployment including Packer and Terraform
 
   EC2InstanceProfile:
