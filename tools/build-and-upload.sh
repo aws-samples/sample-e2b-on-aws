@@ -84,6 +84,12 @@ make -C "$REPO_ROOT/packages/orchestrator" build-and-upload/orchestrator
 echo "=== template-manager ==="
 make -C "$REPO_ROOT/packages/orchestrator" build-and-upload/template-manager
 
+# snapshot-retention is this deployment's own tool (tools/, not vendored). It is
+# published next to the upstream binaries, where
+# nomad/origin/snapshot-retention.hcl fetches it from.
+echo "=== snapshot-retention ==="
+make -C "$REPO_ROOT/tools/snapshot-retention" build-and-upload
+
 echo "=== envd ==="
 make -C "$REPO_ROOT/packages/envd" build-and-upload
 

@@ -81,9 +81,15 @@ export otel_customer_endpoint="${otel_customer_endpoint:-}"
 export otel_customer_header_name="${otel_customer_header_name:-}"
 export otel_customer_header_value="${otel_customer_header_value:-}"
 
+# The snapshot retention job ships as a dry run: it logs what it would delete
+# and touches nothing. Add RETENTION_APPLY=true to /opt/config.properties, then
+# re-run prepare and `nomad/deploy.sh snapshot-retention`, to let it delete.
+export RETENTION_APPLY="${RETENTION_APPLY:-false}"
+
 # Derived above rather than read from the config file.
 SUBST_KEYS+=(postgres_password postgres_host postgres_user CFNDBURL REDIS_CA_B64 VOLUME_TOKEN_KEY_B64)
 SUBST_KEYS+=(otel_customer_endpoint otel_customer_header_name otel_customer_header_value)
+SUBST_KEYS+=(RETENTION_APPLY)
 
 # Process each HCL file in the origin directory.
 #

@@ -11,4 +11,6 @@ use (
 	./packages/shared
 
 	./tests/integration
+
+	./tools/snapshot-retention
 )

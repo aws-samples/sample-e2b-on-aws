@@ -13,6 +13,7 @@ declare -A jobs_minimal=(
     ["orchestrator"]="deploy/orchestrator-deploy.hcl"
     ["client-proxy"]="deploy/edge-deploy.hcl"
     ["template-manager"]="deploy/template-manager-deploy.hcl"
+    ["snapshot-retention"]="deploy/snapshot-retention-deploy.hcl"
 )
 
 declare -A jobs_all=(
@@ -23,6 +24,7 @@ declare -A jobs_all=(
     ["orchestrator"]="deploy/orchestrator-deploy.hcl"
     ["client-proxy"]="deploy/edge-deploy.hcl"
     ["template-manager"]="deploy/template-manager-deploy.hcl"
+    ["snapshot-retention"]="deploy/snapshot-retention-deploy.hcl"
 )
 
 # Deployment order. Iterating an associative array walks it in hash order, which
@@ -36,8 +38,11 @@ declare -A jobs_all=(
 # two wait on each other until the api's progress_deadline expires ~10 minutes
 # later. Nothing in the orchestrator depends on the api or on the database, so
 # starting it first is safe.
-order_minimal=(loki orchestrator api client-proxy template-manager)
-order_all=(loki logs-collector otel-collector orchestrator api client-proxy template-manager)
+#
+# snapshot-retention is a periodic batch job: `nomad job run` only registers
+# it and returns, so it goes last and never holds up the services.
+order_minimal=(loki orchestrator api client-proxy template-manager snapshot-retention)
+order_all=(loki logs-collector otel-collector orchestrator api client-proxy template-manager snapshot-retention)
 
 # Set default jobs array to jobs_all for help and listing functions
 declare -A jobs

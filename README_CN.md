@@ -22,6 +22,7 @@
 - [部署（使用现有 VPC）](#-部署使用现有-vpc)
 - [使用 E2B CLI](#-使用-e2b-cli)
 - [E2B SDK Cookbook](#-e2b-sdk-cookbook)
+- [快照保留](#-快照保留)
 - [故障排查](#-故障排查)
 - [资源清理](#-资源清理)
 - [许可证](#-许可证)
@@ -429,6 +430,49 @@ vim .env
 
 poetry run start
 ```
+
+---
+
+## 🗑️ 快照保留
+
+暂停沙箱会把快照写进模板桶，与它所基于的模板构建放在一起，而上游从不删除它——
+即使调用 `DELETE /sandboxes/{id}` 也只是隐藏数据库行。`snapshot-retention`
+Nomad 任务（`nomad/origin/snapshot-retention.hcl`，由 `tools/snapshot-retention`
+构建）每天 03:00 UTC 运行，执行一条策略：
+
+- **最后一次 pause 超过 90 天**的暂停沙箱会被软删：它从 `e2b sandbox list` 消失、
+  不能再恢复，效果与通过 API 删除完全相同。
+- **再过 7 天**，它的对象从桶里删除、构建记录从数据库删除——但前提是任务已经读取
+  所有仍在使用的模板与快照的 header，确认没有谁还引用这些数据块。fork 的 checkpoint、
+  快照模板、基于快照模板构建的模板都会让它们的祖先保持存活。模板对象永远不会被碰。
+- 通过 API 删除的快照遵循同样的 90 天 / 7 天规则。
+
+为什么用任务而不是 S3 生命周期规则：快照是增量的。新快照的 header 指向旧快照和模板
+的数据块，运行中的沙箱按需读取它们。按对象年龄过期会把它们弄坏。
+
+任务默认是**演习模式**：只记录它将要做的每一条 `MARK`、`RESTORE`、`PURGE`，不改动
+任何数据。先看一轮日志，再启用：
+
+```bash
+# 立即触发一轮并查看日志
+nomad job periodic force snapshot-retention
+nomad job status snapshot-retention        # 子任务 -> allocation id
+nomad alloc logs <alloc-id>
+
+# 启用删除
+echo "RETENTION_APPLY=true" >> /opt/config.properties
+bash nomad/prepare.sh
+bash nomad/deploy.sh snapshot-retention
+```
+
+7 天窗口内，清掉快照 env（`MARK` 日志行里的 `env`）上的软删标记即可把沙箱找回来：
+
+```sql
+UPDATE envs SET deleted_at = NULL WHERE id = '<env-id>';
+```
+
+`RETENTION_DAYS` 与 `PURGE_DELAY_DAYS` 在任务定义里。延迟必须大于沙箱最长存活时间
+（`tiers.max_length_hours`），否则任务拒绝运行。
 
 ---
 

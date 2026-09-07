@@ -22,6 +22,7 @@
 - [Deployment (Existing VPC)](#-deployment-existing-vpc)
 - [Using E2B CLI](#-using-e2b-cli)
 - [E2B SDK Cookbook](#-e2b-sdk-cookbook)
+- [Snapshot Retention](#-snapshot-retention)
 - [Troubleshooting](#-troubleshooting)
 - [Resource Cleanup](#-resource-cleanup)
 - [License](#-license)
@@ -455,6 +456,56 @@ vim .env
 
 poetry run start
 ```
+
+---
+
+## 🗑️ Snapshot Retention
+
+Pausing a sandbox writes a snapshot into the templates bucket, next to the
+template builds it was layered on, and nothing upstream ever deletes it — not
+even `DELETE /sandboxes/{id}`, which only hides the database row. The
+`snapshot-retention` Nomad job (`nomad/origin/snapshot-retention.hcl`, built
+from `tools/snapshot-retention`) runs daily at 03:00 UTC and applies one policy:
+
+- A paused sandbox whose **last pause is older than 90 days** is soft-deleted:
+  it disappears from `e2b sandbox list` and cannot be resumed, exactly as if it
+  had been deleted through the API.
+- **7 days later** its objects are deleted from the bucket and its build rows
+  from the database — but only after the job has confirmed, from the headers of
+  every live template and snapshot, that nothing still reads those blocks. A
+  fork's checkpoint, a snapshot template, or a template built from one keeps its
+  ancestors alive. Template objects are never touched.
+- Snapshots deleted through the API follow the same 90-day / 7-day rule.
+
+Why a job rather than an S3 lifecycle rule: snapshots are diffs. A newer
+snapshot's header points at blocks of older snapshots and of the template, and a
+running sandbox reads them lazily. Expiring objects by age would corrupt them.
+
+The job ships as a **dry run**: it logs every `MARK`, `RESTORE` and `PURGE` it
+would make and changes nothing. Review a run, then enable it:
+
+```bash
+# Trigger a run now and read its log
+nomad job periodic force snapshot-retention
+nomad job status snapshot-retention        # child job -> allocation id
+nomad alloc logs <alloc-id>
+
+# Enable deletion
+echo "RETENTION_APPLY=true" >> /opt/config.properties
+bash nomad/prepare.sh
+bash nomad/deploy.sh snapshot-retention
+```
+
+Within the 7-day window a marked sandbox can be brought back by clearing the
+soft delete on its snapshot env (the `env` in the `MARK` log line):
+
+```sql
+UPDATE envs SET deleted_at = NULL WHERE id = '<env-id>';
+```
+
+`RETENTION_DAYS` and `PURGE_DELAY_DAYS` live in the job spec. The delay must
+exceed the longest sandbox lifetime (`tiers.max_length_hours`); the job refuses
+to run otherwise.
 
 ---
 
