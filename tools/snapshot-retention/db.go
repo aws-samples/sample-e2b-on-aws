@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/e2b-dev/infra/packages/db/pkg/dberrors"
 	"github.com/e2b-dev/infra/packages/db/queries"
 )
 
@@ -101,7 +102,7 @@ func (d *database) markEnv(ctx context.Context, c markCandidate, retention time.
 		FROM public.envs
 		WHERE id = $1 AND deleted_at IS NULL AND source = 'snapshot'
 		FOR UPDATE`, c.envID).Scan(&locked)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if dberrors.IsNotFoundError(err) {
 		return false, nil
 	}
 	if err != nil {
@@ -125,7 +126,7 @@ func (d *database) markEnv(ctx context.Context, c markCandidate, retention time.
 
 	q := queries.New(tx)
 	if _, err := q.SoftDeleteTemplate(ctx, queries.SoftDeleteTemplateParams{TemplateID: c.envID, TeamID: c.teamID}); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if dberrors.IsNotFoundError(err) {
 			// Already deleted, or the team no longer owns it: same outcome as
 			// the API, which treats this as nothing to do.
 			return false, nil
@@ -147,25 +148,32 @@ func (d *database) markEnv(ctx context.Context, c markCandidate, retention time.
 	return true, nil
 }
 
-type liveBuild struct {
+type rootBuild struct {
 	id        uuid.UUID
 	createdAt time.Time
 }
 
-// liveBuilds returns every build assigned to an env that is not soft-deleted,
-// whatever the env's source. Their headers decide what must not be deleted.
-func (d *database) liveBuilds(ctx context.Context) ([]liveBuild, error) {
+// protectedRootBuilds returns every build whose header has to be read to learn
+// what must not be deleted: the builds of every live env, and the builds of
+// every env soft-deleted less than the purge delay ago. The second group is
+// what keeps the undo window honest - a sandbox marked yesterday can still be
+// brought back, so the builds its snapshots are layered on (a fork's
+// checkpoint in another sandbox's env, say) have to survive until it cannot.
+// Neither the env's source nor its cluster is filtered: reading one header too
+// many only over-protects.
+func (d *database) protectedRootBuilds(ctx context.Context, purgeDelay time.Duration) ([]rootBuild, error) {
 	rows, err := d.pool.Query(ctx, `
 		SELECT DISTINCT eb.id, eb.created_at
 		FROM public.env_build_assignments eba
-		JOIN public.envs e ON e.id = eba.env_id AND e.deleted_at IS NULL AND e.cluster_id IS NULL
-		JOIN public.env_builds eb ON eb.id = eba.build_id`)
+		JOIN public.envs e ON e.id = eba.env_id
+		 AND (e.deleted_at IS NULL OR e.deleted_at >= now() - $1::interval)
+		JOIN public.env_builds eb ON eb.id = eba.build_id`, interval(purgeDelay))
 	if err != nil {
 		return nil, err
 	}
 
-	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (liveBuild, error) {
-		var b liveBuild
+	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (rootBuild, error) {
+		var b rootBuild
 		err := row.Scan(&b.id, &b.createdAt)
 
 		return b, err
@@ -241,6 +249,7 @@ func (d *database) purgeBuild(ctx context.Context, c purgeCandidate, purgeDelay 
 		SELECT id, deleted_at, now() - $2::interval
 		FROM public.envs
 		WHERE id = ANY($1)
+		ORDER BY id
 		FOR UPDATE`, c.envIDs, interval(purgeDelay))
 	if err != nil {
 		return err

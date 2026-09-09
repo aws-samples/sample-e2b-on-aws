@@ -187,14 +187,14 @@ func TestProtectedSet(t *testing.T) {
 	store.put(storage.Paths{BuildID: F.String()}.RootfsHeader(), serializedHeader(t, 3, F, T, []uuid.UUID{T, F}), nil)
 
 	now := time.Now()
-	live := []liveBuild{
+	roots := []rootBuild{
 		{id: C1, createdAt: now.Add(-100 * 24 * time.Hour)},
 		{id: F, createdAt: now.Add(-time.Hour)},
 		{id: B, createdAt: now.Add(-10 * 24 * time.Hour)},
 	}
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	protected, err := protectedSet(context.Background(), store, live, 4, 48*time.Hour, now, log)
+	protected, err := protectedSet(context.Background(), store, roots, 4, 48*time.Hour, now, log)
 	if err != nil {
 		t.Fatalf("protectedSet: %v", err)
 	}

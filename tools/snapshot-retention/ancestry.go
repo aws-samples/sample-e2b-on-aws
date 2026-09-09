@@ -64,22 +64,23 @@ func refsFromHeader(data []byte) ([]uuid.UUID, error) {
 	return refs, nil
 }
 
-// protectedSet downloads both headers of every live build and returns, for
-// each build referenced by any of them (including the live builds themselves),
-// the live builds that reference it. A build in this map must not be deleted.
+// protectedSet downloads both headers of every root build (the builds of live
+// envs, and of envs still inside the undo window) and returns, for each build
+// referenced by any of them (including the roots themselves), the roots that
+// reference it. A build in this map must not be deleted.
 //
 // A missing header is not an error: filesystem-only snapshots have no memfile
 // header, and a build whose upload failed has none at all; neither can point
 // at anything. Every other failure aborts, because an incomplete set would let
 // the purge phase delete something that is still in use.
-func protectedSet(ctx context.Context, store objectStore, live []liveBuild, workers int, grace time.Duration, now time.Time, log *slog.Logger) (map[uuid.UUID][]uuid.UUID, error) {
+func protectedSet(ctx context.Context, store objectStore, roots []rootBuild, workers int, grace time.Duration, now time.Time, log *slog.Logger) (map[uuid.UUID][]uuid.UUID, error) {
 	protected := make(map[uuid.UUID][]uuid.UUID)
 	var mu sync.Mutex
 
 	g, ctx := errgroup.WithContext(ctx)
 	g.SetLimit(workers)
 
-	for _, b := range live {
+	for _, b := range roots {
 		g.Go(func() error {
 			paths := storage.Paths{BuildID: b.id.String()}
 			refs := map[uuid.UUID]struct{}{b.id: {}}
@@ -106,7 +107,7 @@ func protectedSet(ctx context.Context, store objectStore, live []liveBuild, work
 			}
 
 			if missing == 2 && now.Sub(b.createdAt) > grace {
-				log.Warn("live build has no headers in the bucket; it cannot be resumed", "build", b.id, "created", b.createdAt.UTC().Format(time.RFC3339))
+				log.Warn("build has no headers in the bucket; it cannot be resumed", "build", b.id, "created", b.createdAt.UTC().Format(time.RFC3339))
 			}
 
 			mu.Lock()

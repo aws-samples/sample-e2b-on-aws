@@ -69,6 +69,10 @@ job "snapshot-retention" {
         # the API) and deleting its objects. Must exceed the longest sandbox
         # lifetime (tiers.max_length_hours); the tool checks and refuses.
         PURGE_DELAY_DAYS = "7"
+        # Objects uploaded before upstream stamped build_origin metadata are
+        # skipped (SKIP_MISSING_METADATA) unless this is true, in which case the
+        # database alone decides that they belong to an expired snapshot.
+        RETENTION_ALLOW_MISSING_ORIGIN = "false"
       }
 
       config {

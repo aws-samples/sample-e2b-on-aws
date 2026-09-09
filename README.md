@@ -496,17 +496,33 @@ bash nomad/prepare.sh
 bash nomad/deploy.sh snapshot-retention
 ```
 
+Only one run executes at a time: a manual run started while the nightly one is
+active exits at once with `another snapshot-retention run holds the lock`.
+
 Within the 7-day window a marked sandbox can be brought back by clearing the
-soft delete on its snapshot env (the `env` in the `MARK` log line):
+soft delete on its snapshot env (the `env` in the `MARK` log line). The extra
+conditions keep a mistyped id from resurrecting a template someone deleted on
+purpose:
 
 ```sql
-UPDATE envs SET deleted_at = NULL WHERE id = '<env-id>';
+UPDATE envs SET deleted_at = NULL
+WHERE id = '<env-id>' AND source = 'snapshot' AND deleted_at IS NOT NULL;
 ```
 
 The same statement covers the one edge case the job does not handle itself: a
 sandbox that was running at the moment it was marked stays hidden after its
 next pause. Its objects are safe — that pause keeps them for another 90 days —
-it just needs the soft delete cleared to show up again.
+it just needs the soft delete cleared to show up again. These envs are the ones
+that gained a build after they were soft-deleted, so they can be listed without
+the log:
+
+```sql
+SELECT e.id, s.sandbox_id, e.deleted_at
+FROM envs e JOIN snapshots s ON s.env_id = e.id
+WHERE e.source = 'snapshot' AND e.deleted_at IS NOT NULL
+  AND EXISTS (SELECT 1 FROM env_build_assignments a JOIN env_builds b ON b.id = a.build_id
+              WHERE a.env_id = e.id AND GREATEST(b.created_at, a.created_at) > e.deleted_at);
+```
 
 `RETENTION_DAYS` and `PURGE_DELAY_DAYS` live in the job spec. The delay must
 exceed the longest sandbox lifetime (`tiers.max_length_hours`); the job refuses

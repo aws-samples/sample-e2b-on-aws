@@ -465,15 +465,29 @@ bash nomad/prepare.sh
 bash nomad/deploy.sh snapshot-retention
 ```
 
-7 天窗口内，清掉快照 env（`MARK` 日志行里的 `env`）上的软删标记即可把沙箱找回来：
+同一时刻只会有一轮在跑：定时任务活跃期间手工启动的那一轮会立刻退出，并提示
+`another snapshot-retention run holds the lock`。
+
+7 天窗口内，清掉快照 env（`MARK` 日志行里的 `env`）上的软删标记即可把沙箱找回来。
+后面两个条件防止 id 贴错时把用户有意删除的模板复活：
 
 ```sql
-UPDATE envs SET deleted_at = NULL WHERE id = '<env-id>';
+UPDATE envs SET deleted_at = NULL
+WHERE id = '<env-id>' AND source = 'snapshot' AND deleted_at IS NOT NULL;
 ```
 
 同一条语句也覆盖任务自身不处理的唯一边界情况：沙箱恰好在被标记的那一刻正在运行，
 下次 pause 之后它会保持隐藏。它的对象是安全的——那次 pause 让它们再保留 90 天——
-只需清掉软删标记就能重新出现。
+只需清掉软删标记就能重新出现。这类 env 的特征是"软删之后又有了新 build"，不依赖日志
+也能列出来：
+
+```sql
+SELECT e.id, s.sandbox_id, e.deleted_at
+FROM envs e JOIN snapshots s ON s.env_id = e.id
+WHERE e.source = 'snapshot' AND e.deleted_at IS NOT NULL
+  AND EXISTS (SELECT 1 FROM env_build_assignments a JOIN env_builds b ON b.id = a.build_id
+              WHERE a.env_id = e.id AND GREATEST(b.created_at, a.created_at) > e.deleted_at);
+```
 
 `RETENTION_DAYS` 与 `PURGE_DELAY_DAYS` 在任务定义里。延迟必须大于沙箱最长存活时间
 （`tiers.max_length_hours`），否则任务拒绝运行。

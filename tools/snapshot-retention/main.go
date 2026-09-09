@@ -40,8 +40,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/e2b-dev/infra/packages/db/pkg/pool"
 	"github.com/e2b-dev/infra/packages/shared/pkg/storage"
 )
 
@@ -63,14 +63,24 @@ type config struct {
 func parseConfig(args []string, getenv func(string) string) (config, error) {
 	fs := flag.NewFlagSet("snapshot-retention", flag.ContinueOnError)
 
+	// The environment is what the Nomad job spec sets; flags override it.
+	retentionDefault, err := envInt(getenv("RETENTION_DAYS"), 90)
+	if err != nil {
+		return config{}, fmt.Errorf("RETENTION_DAYS: %w", err)
+	}
+	purgeDelayDefault, err := envInt(getenv("PURGE_DELAY_DAYS"), 7)
+	if err != nil {
+		return config{}, fmt.Errorf("PURGE_DELAY_DAYS: %w", err)
+	}
+
 	var cfg config
 	fs.BoolVar(&cfg.apply, "apply", envBool(getenv("RETENTION_APPLY")), "write to the database and delete objects; without it every action is only logged (env RETENTION_APPLY)")
-	retentionDays := fs.Int("retention-days", envInt(getenv("RETENTION_DAYS"), 90), "a snapshot whose newest pause is older than this is expired (env RETENTION_DAYS)")
-	purgeDelayDays := fs.Int("purge-delay-days", envInt(getenv("PURGE_DELAY_DAYS"), 7), "days between soft-deleting an expired snapshot and deleting its objects (env PURGE_DELAY_DAYS)")
+	retentionDays := fs.Int("retention-days", retentionDefault, "a snapshot whose newest pause is older than this is expired (env RETENTION_DAYS)")
+	purgeDelayDays := fs.Int("purge-delay-days", purgeDelayDefault, "days between soft-deleting an expired snapshot and deleting its objects (env PURGE_DELAY_DAYS)")
 	fs.DurationVar(&cfg.headerGrace, "header-grace", 48*time.Hour, "a live build younger than this may still be uploading; missing headers are not warned about")
 	fs.DurationVar(&cfg.maxRuntime, "max-runtime", 2*time.Hour, "abort the run after this long")
 	fs.IntVar(&cfg.workers, "workers", 16, "concurrent header downloads")
-	fs.BoolVar(&cfg.allowMissingOrigin, "allow-missing-origin", false, "purge objects that carry no build_origin metadata (written before upstream stamped it)")
+	fs.BoolVar(&cfg.allowMissingOrigin, "allow-missing-origin", envBool(getenv("RETENTION_ALLOW_MISSING_ORIGIN")), "purge objects that carry no build_origin metadata (written before upstream stamped it) (env RETENTION_ALLOW_MISSING_ORIGIN)")
 	fs.BoolVar(&cfg.force, "force", false, "skip the check that the purge delay exceeds the longest sandbox lifetime (tests only)")
 
 	if err := fs.Parse(args); err != nil {
@@ -88,8 +98,11 @@ func parseConfig(args []string, getenv func(string) string) (config, error) {
 		return config{}, errors.New("POSTGRES_CONNECTION_STRING is required")
 	case cfg.bucket == "":
 		return config{}, errors.New("TEMPLATE_BUCKET_NAME is required")
-	case *retentionDays < 0 || *purgeDelayDays < 0:
-		return config{}, errors.New("retention and purge delay cannot be negative")
+	case *retentionDays < 1:
+		// Zero would match every paused sandbox in the deployment.
+		return config{}, errors.New("retention must be at least 1 day")
+	case *purgeDelayDays < 0:
+		return config{}, errors.New("purge delay cannot be negative")
 	case cfg.workers < 1:
 		return config{}, errors.New("workers must be at least 1")
 	}
@@ -106,13 +119,21 @@ func envBool(v string) bool {
 	return false
 }
 
-func envInt(v string, def int) int {
-	n, err := strconv.Atoi(strings.TrimSpace(v))
-	if err != nil {
-		return def
+// envInt reads an integer from the environment. Unset or empty means the
+// default; anything else has to parse, because a typo here ("30d", "9O")
+// silently falling back to 90 days would delete on the wrong schedule.
+func envInt(v string, def int) (int, error) {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return def, nil
 	}
 
-	return n
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return 0, fmt.Errorf("%q is not an integer", v)
+	}
+
+	return n, nil
 }
 
 func main() {
@@ -137,14 +158,32 @@ func main() {
 // aborted or when a build had to be skipped for a reason that indicates an
 // inconsistency between the database and the bucket.
 func run(ctx context.Context, cfg config, log *slog.Logger) int {
-	pool, err := pgxpool.New(ctx, cfg.dbURL)
+	// Upstream's client: it pings, and it owns the session-scoped advisory lock.
+	client, err := pool.Connect(ctx, cfg.dbURL, "snapshot-retention")
 	if err != nil {
 		log.Error("connect to postgres", "err", err)
 
 		return 1
 	}
-	defer pool.Close()
-	db := &database{pool: pool}
+	defer client.Close()
+	db := &database{pool: client.Pool()}
+
+	// One round at a time. Nomad's prohibit_overlap only serializes scheduled
+	// launches; a manual `nomad job periodic force` or a run started by hand
+	// would otherwise overlap with the nightly one and duplicate its work and
+	// its log lines.
+	lock, err := client.TryAcquireAdvisoryLock(ctx, "snapshot-retention")
+	if errors.Is(err, pool.ErrAdvisoryLockBusy) {
+		log.Error("another snapshot-retention run holds the lock; exiting")
+
+		return 1
+	}
+	if err != nil {
+		log.Error("acquire advisory lock", "err", err)
+
+		return 1
+	}
+	defer func() { _ = lock.Release(context.WithoutCancel(ctx)) }()
 
 	// The queries below were verified against one schema version. A newer
 	// database (an upstream sync added migrations) may have changed what they
@@ -208,13 +247,13 @@ func run(ctx context.Context, cfg config, log *slog.Logger) int {
 		return 1
 	}
 
-	live, err := db.liveBuilds(ctx)
+	roots, err := db.protectedRootBuilds(ctx, cfg.purgeDelay)
 	if err != nil {
-		log.Error("list live builds", "err", err)
+		log.Error("list protected root builds", "err", err)
 
 		return 1
 	}
-	protected, err := protectedSet(ctx, store, live, cfg.workers, cfg.headerGrace, time.Now(), log)
+	protected, err := protectedSet(ctx, store, roots, cfg.workers, cfg.headerGrace, time.Now(), log)
 	if err != nil {
 		// Without a complete picture of what is still referenced nothing may
 		// be deleted. The mark phase above stands: it only hid snapshots that
@@ -223,7 +262,7 @@ func run(ctx context.Context, cfg config, log *slog.Logger) int {
 
 		return 1
 	}
-	log.Info("protected set computed", "live_builds", len(live), "protected_builds", len(protected))
+	log.Info("protected set computed", "root_builds", len(roots), "protected_builds", len(protected))
 
 	stats := runPurge(ctx, db, store, cfg, protected, log)
 
@@ -252,6 +291,10 @@ func runMark(ctx context.Context, db *database, cfg config, log *slog.Logger) (i
 
 	marked := 0
 	for _, c := range candidates {
+		if err := ctx.Err(); err != nil {
+			return marked, fmt.Errorf("run aborted after marking %d envs: %w", marked, err)
+		}
+
 		l := log.With("phase", "mark", "env", c.envID, "sandbox", c.sandboxID, "team", c.teamID, "last_pause", c.newestAt.UTC().Format(time.RFC3339), "builds", c.builds)
 		if !cfg.apply {
 			l.Info("MARK")

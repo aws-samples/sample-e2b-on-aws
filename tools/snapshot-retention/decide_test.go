@@ -151,6 +151,25 @@ func TestParseConfig(t *testing.T) {
 		t.Fatalf("flags must override env: %+v", cfg)
 	}
 
+	if _, err := parseConfig([]string{"-retention-days=0"}, getenv); err == nil {
+		t.Fatal("a zero retention would expire every paused sandbox and must be rejected")
+	}
+
+	env["RETENTION_ALLOW_MISSING_ORIGIN"] = "true"
+	cfg, err = parseConfig(nil, getenv)
+	if err != nil {
+		t.Fatalf("parseConfig: %v", err)
+	}
+	if !cfg.allowMissingOrigin {
+		t.Fatal("RETENTION_ALLOW_MISSING_ORIGIN=true must enable -allow-missing-origin")
+	}
+
+	env["RETENTION_DAYS"] = "30d"
+	if _, err := parseConfig(nil, getenv); err == nil {
+		t.Fatal("a malformed RETENTION_DAYS must be rejected, not defaulted")
+	}
+	env["RETENTION_DAYS"] = "30"
+
 	delete(env, "TEMPLATE_BUCKET_NAME")
 	if _, err := parseConfig(nil, getenv); err == nil {
 		t.Fatal("missing bucket must be rejected")
