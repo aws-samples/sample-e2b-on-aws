@@ -23,7 +23,9 @@ job "snapshot-retention" {
   priority    = 50
 
   periodic {
-    cron             = "0 3 * * *"
+    # crons, not the singular cron: Nomad 1.8 deprecates the latter and warns
+    # about it on every registration.
+    crons            = ["0 3 * * *"]
     time_zone        = "UTC"
     prohibit_overlap = true
   }
