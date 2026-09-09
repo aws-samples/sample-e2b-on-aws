@@ -2,11 +2,12 @@
 # published next to them, where nomad/origin/snapshot-retention.hcl fetches it.
 # tools/build-and-upload.sh exports AWS_BUCKET_PREFIX and AWS_PROFILE.
 
+BUILD_ARCH ?= amd64
 BIN := bin/snapshot-retention
 
 .PHONY: build
 build:
-	CGO_ENABLED=0 go build -o $(BIN) .
+	CGO_ENABLED=0 GOOS=linux GOARCH=$(BUILD_ARCH) go build -o $(BIN) .
 
 .PHONY: test
 test:

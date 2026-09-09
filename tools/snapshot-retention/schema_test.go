@@ -41,20 +41,3 @@ func TestVerifiedMigrationIsNewest(t *testing.T) {
 			newest, verifiedMigration, newest, newest)
 	}
 }
-
-func TestCompareSchema(t *testing.T) {
-	cases := []struct {
-		applied, verified int64
-		want              schemaVerdict
-	}{
-		{20260826075153, 20260826075153, schemaMatch},
-		{20260901000000, 20260826075153, schemaNewer},
-		{20260823120000, 20260826075153, schemaOlder},
-		{0, 20260826075153, schemaOlder},
-	}
-	for _, tc := range cases {
-		if got := compareSchema(tc.applied, tc.verified); got != tc.want {
-			t.Errorf("compareSchema(%d, %d) = %d, want %d", tc.applied, tc.verified, got, tc.want)
-		}
-	}
-}

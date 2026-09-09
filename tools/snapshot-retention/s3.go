@@ -12,40 +12,53 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
+
+	"github.com/e2b-dev/infra/packages/shared/pkg/storage"
 )
 
-// s3Store talks to the template bucket with the raw SDK. The vendored AWS
-// storage provider is not used because it exposes neither object metadata
-// (it implements no MetadataReader) nor a listing.
+// s3Store reads the template bucket with the raw SDK - upstream's AWS provider
+// exposes neither object metadata nor a listing - and deletes through the
+// provider, so a build's prefix goes away by the same code the orchestrator
+// uses to delete its own builds.
 type s3Store struct {
-	client *s3.Client
-	bucket string
+	client   *s3.Client
+	bucket   string
+	provider storage.StorageProvider
 }
 
 func newS3Store(ctx context.Context, bucket, region string) (*s3Store, error) {
+	provider, err := storage.NewProvider(ctx, storage.Spec{Provider: storage.AWSStorageProvider, Bucket: bucket, Region: region})
+	if err != nil {
+		return nil, fmt.Errorf("storage provider: %w", err)
+	}
+
 	var opts []func(*awsconfig.LoadOptions) error
 	if region != "" {
 		opts = append(opts, awsconfig.WithRegion(region))
 	}
-
 	cfg, err := awsconfig.LoadDefaultConfig(ctx, opts...)
 	if err != nil {
 		return nil, err
 	}
 
-	return &s3Store{client: s3.NewFromConfig(cfg), bucket: bucket}, nil
+	return &s3Store{client: s3.NewFromConfig(cfg), bucket: bucket, provider: provider}, nil
 }
 
 func (s *s3Store) Get(ctx context.Context, key string) ([]byte, error) {
 	out, err := s.client.GetObject(ctx, &s3.GetObjectInput{Bucket: &s.bucket, Key: &key})
 	if err != nil {
-		if isNotFound(err) {
-			return nil, errNotFound
-		}
-
-		return nil, err
+		return nil, mapNotFound(err)
 	}
 	defer out.Body.Close()
+
+	if size := aws.ToInt64(out.ContentLength); size > 0 {
+		buf := make([]byte, size)
+		if _, err := io.ReadFull(out.Body, buf); err != nil {
+			return nil, err
+		}
+
+		return buf, nil
+	}
 
 	return io.ReadAll(out.Body)
 }
@@ -54,11 +67,7 @@ func (s *s3Store) Get(ctx context.Context, key string) ([]byte, error) {
 func (s *s3Store) Head(ctx context.Context, key string) (map[string]string, error) {
 	out, err := s.client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: &s.bucket, Key: &key})
 	if err != nil {
-		if isNotFound(err) {
-			return nil, errNotFound
-		}
-
-		return nil, err
+		return nil, mapNotFound(err)
 	}
 
 	meta := make(map[string]string, len(out.Metadata))
@@ -86,56 +95,26 @@ func (s *s3Store) List(ctx context.Context, prefix string) ([]string, error) {
 	return keys, nil
 }
 
-// Delete removes the keys in batches of 1000 (the DeleteObjects limit) and
-// fails unless S3 reports every key as deleted.
-func (s *s3Store) Delete(ctx context.Context, keys []string) error {
-	const batchSize = 1000
-
-	for start := 0; start < len(keys); start += batchSize {
-		batch := keys[start:min(start+batchSize, len(keys))]
-
-		ids := make([]types.ObjectIdentifier, len(batch))
-		for i, k := range batch {
-			ids[i] = types.ObjectIdentifier{Key: aws.String(k)}
-		}
-
-		out, err := s.client.DeleteObjects(ctx, &s3.DeleteObjectsInput{
-			Bucket: &s.bucket,
-			Delete: &types.Delete{Objects: ids, Quiet: aws.Bool(false)},
-		})
-		if err != nil {
-			return err
-		}
-		if len(out.Errors) > 0 {
-			e := out.Errors[0]
-
-			return fmt.Errorf("%d of %d objects failed, first: %s: %s %s", len(out.Errors), len(batch), aws.ToString(e.Key), aws.ToString(e.Code), aws.ToString(e.Message))
-		}
-		if len(out.Deleted) != len(batch) {
-			return fmt.Errorf("s3 reported %d deleted of %d requested", len(out.Deleted), len(batch))
-		}
-	}
-
-	return nil
+// DeletePrefix removes every object under prefix with upstream's
+// DeleteObjectsWithPrefix: paged listing, batches of 1000, and a refusal to
+// run on an empty prefix.
+func (s *s3Store) DeletePrefix(ctx context.Context, prefix string) error {
+	return s.provider.DeleteObjectsWithPrefix(ctx, prefix)
 }
 
-func isNotFound(err error) bool {
+// mapNotFound turns the SDK's spellings of "no such object" into upstream's
+// sentinel and passes every other error through.
+func mapNotFound(err error) error {
 	var noSuchKey *types.NoSuchKey
-	if errors.As(err, &noSuchKey) {
-		return true
-	}
 	var notFound *types.NotFound
-	if errors.As(err, &notFound) {
-		return true
-	}
-
 	var apiErr smithy.APIError
-	if errors.As(err, &apiErr) {
-		switch apiErr.ErrorCode() {
-		case "NoSuchKey", "NotFound":
-			return true
-		}
+
+	switch {
+	case errors.As(err, &noSuchKey), errors.As(err, &notFound):
+		return storage.ErrObjectNotExist
+	case errors.As(err, &apiErr) && (apiErr.ErrorCode() == "NoSuchKey" || apiErr.ErrorCode() == "NotFound"):
+		return storage.ErrObjectNotExist
 	}
 
-	return false
+	return err
 }

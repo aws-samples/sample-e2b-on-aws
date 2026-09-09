@@ -14,27 +14,6 @@ import "context"
 // a runtime one.
 const verifiedMigration int64 = 20260826075153
 
-type schemaVerdict int
-
-const (
-	schemaMatch schemaVerdict = iota
-	// schemaNewer: the database is ahead of verifiedMigration.
-	schemaNewer
-	// schemaOlder: the database is behind verifiedMigration.
-	schemaOlder
-)
-
-func compareSchema(applied, verified int64) schemaVerdict {
-	switch {
-	case applied > verified:
-		return schemaNewer
-	case applied < verified:
-		return schemaOlder
-	default:
-		return schemaMatch
-	}
-}
-
 // appliedMigration returns the newest goose version applied to the database.
 // public._migrations is the table upstream's packages/db/Makefile and this
 // deployment's infra-iac/db scripts use.

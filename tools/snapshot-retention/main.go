@@ -14,9 +14,9 @@
 //     period are soft-deleted, exactly like DELETE /sandboxes/{id}.
 //  2. purge: builds that belong only to envs soft-deleted for longer than the
 //     purge delay, are themselves older than the retention period, are not
-//     referenced by the header of any live build, and carry snapshot object
-//     metadata, have their {buildID}/ prefix deleted and their env_builds row
-//     removed.
+//     referenced by the header of any restorable build, and carry snapshot
+//     object metadata, have their {buildID}/ prefix deleted and their
+//     env_builds row removed.
 //
 // The purge delay is what makes the mark reversible: a wrongly marked sandbox
 // is brought back with UPDATE envs SET deleted_at = NULL, and a sandbox that
@@ -53,7 +53,6 @@ type config struct {
 	maxRuntime         time.Duration
 	workers            int
 	allowMissingOrigin bool
-	force              bool
 
 	dbURL  string
 	bucket string
@@ -64,24 +63,23 @@ func parseConfig(args []string, getenv func(string) string) (config, error) {
 	fs := flag.NewFlagSet("snapshot-retention", flag.ContinueOnError)
 
 	// The environment is what the Nomad job spec sets; flags override it.
-	retentionDefault, err := envInt(getenv("RETENTION_DAYS"), 90)
+	retentionDefault, err := envInt(getenv, "RETENTION_DAYS", 90)
 	if err != nil {
-		return config{}, fmt.Errorf("RETENTION_DAYS: %w", err)
+		return config{}, err
 	}
-	purgeDelayDefault, err := envInt(getenv("PURGE_DELAY_DAYS"), 7)
+	purgeDelayDefault, err := envInt(getenv, "PURGE_DELAY_DAYS", 7)
 	if err != nil {
-		return config{}, fmt.Errorf("PURGE_DELAY_DAYS: %w", err)
+		return config{}, err
 	}
 
 	var cfg config
 	fs.BoolVar(&cfg.apply, "apply", envBool(getenv("RETENTION_APPLY")), "write to the database and delete objects; without it every action is only logged (env RETENTION_APPLY)")
 	retentionDays := fs.Int("retention-days", retentionDefault, "a snapshot whose newest pause is older than this is expired (env RETENTION_DAYS)")
 	purgeDelayDays := fs.Int("purge-delay-days", purgeDelayDefault, "days between soft-deleting an expired snapshot and deleting its objects (env PURGE_DELAY_DAYS)")
-	fs.DurationVar(&cfg.headerGrace, "header-grace", 48*time.Hour, "a live build younger than this may still be uploading; missing headers are not warned about")
+	fs.DurationVar(&cfg.headerGrace, "header-grace", 48*time.Hour, "a build younger than this may still be uploading; missing headers are not warned about")
 	fs.DurationVar(&cfg.maxRuntime, "max-runtime", 2*time.Hour, "abort the run after this long")
-	fs.IntVar(&cfg.workers, "workers", 16, "concurrent header downloads")
+	fs.IntVar(&cfg.workers, "workers", 8, "concurrent header downloads; each decodes a whole header in memory")
 	fs.BoolVar(&cfg.allowMissingOrigin, "allow-missing-origin", envBool(getenv("RETENTION_ALLOW_MISSING_ORIGIN")), "purge objects that carry no build_origin metadata (written before upstream stamped it) (env RETENTION_ALLOW_MISSING_ORIGIN)")
-	fs.BoolVar(&cfg.force, "force", false, "skip the check that the purge delay exceeds the longest sandbox lifetime (tests only)")
 
 	if err := fs.Parse(args); err != nil {
 		return config{}, err
@@ -111,26 +109,23 @@ func parseConfig(args []string, getenv func(string) string) (config, error) {
 }
 
 func envBool(v string) bool {
-	switch strings.ToLower(strings.TrimSpace(v)) {
-	case "1", "true", "yes", "on":
-		return true
-	}
+	b, err := strconv.ParseBool(strings.TrimSpace(v))
 
-	return false
+	return err == nil && b
 }
 
 // envInt reads an integer from the environment. Unset or empty means the
 // default; anything else has to parse, because a typo here ("30d", "9O")
 // silently falling back to 90 days would delete on the wrong schedule.
-func envInt(v string, def int) (int, error) {
-	v = strings.TrimSpace(v)
+func envInt(getenv func(string) string, name string, def int) (int, error) {
+	v := strings.TrimSpace(getenv(name))
 	if v == "" {
 		return def, nil
 	}
 
 	n, err := strconv.Atoi(v)
 	if err != nil {
-		return 0, fmt.Errorf("%q is not an integer", v)
+		return 0, fmt.Errorf("%s: %q is not an integer", name, v)
 	}
 
 	return n, nil
@@ -155,9 +150,16 @@ func main() {
 
 // run executes one round and returns the process exit code: 0 when every
 // decision was carried out (or, in a dry run, logged), 1 when the run was
-// aborted or when a build had to be skipped for a reason that indicates an
-// inconsistency between the database and the bucket.
+// aborted or when a build had to be left alone for a reason that indicates
+// an inconsistency between the database and the bucket.
 func run(ctx context.Context, cfg config, log *slog.Logger) int {
+	store, err := newS3Store(ctx, cfg.bucket, cfg.region)
+	if err != nil {
+		log.Error("create s3 client", "err", err)
+
+		return 1
+	}
+
 	// Upstream's client: it pings, and it owns the session-scoped advisory lock.
 	client, err := pool.Connect(ctx, cfg.dbURL, "snapshot-retention")
 	if err != nil {
@@ -185,9 +187,9 @@ func run(ctx context.Context, cfg config, log *slog.Logger) int {
 	}
 	defer func() { _ = lock.Release(context.WithoutCancel(ctx)) }()
 
-	// The queries below were verified against one schema version. A newer
-	// database (an upstream sync added migrations) may have changed what they
-	// mean without breaking them, so nothing is written until someone has
+	// The queries were verified against one schema version. A newer database
+	// (an upstream sync added migrations) may have changed what they mean
+	// without breaking them, so nothing is written until someone has
 	// re-verified and bumped verifiedMigration; the dry run still shows what
 	// would happen. An older database cannot be reasoned about at all.
 	applied, err := db.appliedMigration(ctx)
@@ -197,12 +199,12 @@ func run(ctx context.Context, cfg config, log *slog.Logger) int {
 		return 1
 	}
 	schemaAhead := false
-	switch compareSchema(applied, verifiedMigration) {
-	case schemaOlder:
+	switch {
+	case applied < verifiedMigration:
 		log.Error("database schema is older than the version this tool was verified against; refusing to run", "applied", applied, "verified", verifiedMigration)
 
 		return 1
-	case schemaNewer:
+	case applied > verifiedMigration:
 		log.Error("database schema is newer than the version this tool was verified against; forcing a dry run until tools/snapshot-retention is re-verified and verifiedMigration is bumped", "applied", applied, "verified", verifiedMigration)
 		cfg.apply = false
 		schemaAhead = true
@@ -220,22 +222,12 @@ func run(ctx context.Context, cfg config, log *slog.Logger) int {
 	// longest lifetime a sandbox can have.
 	maxHours, err := db.maxSandboxLengthHours(ctx)
 	if err != nil {
-		log.Error("read tiers.max_length_hours", "err", err)
+		log.Error("read team_limits.max_length_hours", "err", err)
 
 		return 1
 	}
 	if longest := time.Duration(maxHours) * time.Hour; longest >= cfg.purgeDelay {
-		if !cfg.force {
-			log.Error("purge delay must exceed the longest sandbox lifetime", "purge_delay", cfg.purgeDelay, "max_length_hours", maxHours)
-
-			return 1
-		}
-		log.Warn("purge delay does not exceed the longest sandbox lifetime; continuing because of -force", "purge_delay", cfg.purgeDelay, "max_length_hours", maxHours)
-	}
-
-	store, err := newS3Store(ctx, cfg.bucket, cfg.region)
-	if err != nil {
-		log.Error("create s3 client", "err", err)
+		log.Error("purge delay must exceed the longest sandbox lifetime", "purge_delay", cfg.purgeDelay, "max_length_hours", maxHours)
 
 		return 1
 	}
@@ -264,7 +256,12 @@ func run(ctx context.Context, cfg config, log *slog.Logger) int {
 	}
 	log.Info("protected set computed", "root_builds", len(roots), "protected_builds", len(protected))
 
-	stats := runPurge(ctx, db, store, cfg, protected, log)
+	stats, err := runPurge(ctx, db, store, cfg, protected, log)
+	if err != nil {
+		log.Error("purge phase aborted", "err", err, "purged_so_far", stats.purged)
+
+		return 1
+	}
 
 	log.Info("finished",
 		"marked", marked,
@@ -296,22 +293,17 @@ func runMark(ctx context.Context, db *database, cfg config, log *slog.Logger) (i
 		}
 
 		l := log.With("phase", "mark", "env", c.envID, "sandbox", c.sandboxID, "team", c.teamID, "last_pause", c.newestAt.UTC().Format(time.RFC3339), "builds", c.builds)
-		if !cfg.apply {
-			l.Info("MARK")
-			marked++
+		if cfg.apply {
+			done, err := db.markEnv(ctx, c, cfg.retention)
+			if err != nil {
+				return marked, fmt.Errorf("mark env %s: %w", c.envID, err)
+			}
+			if !done {
+				// The sandbox was paused again between the select and the update.
+				l.Info("MARK skipped: env changed since selection")
 
-			continue
-		}
-
-		done, err := db.markEnv(ctx, c, cfg.retention)
-		if err != nil {
-			return marked, fmt.Errorf("mark env %s: %w", c.envID, err)
-		}
-		if !done {
-			// The sandbox was paused again between the select and the update.
-			l.Info("MARK skipped: env changed since selection")
-
-			continue
+				continue
+			}
 		}
 		l.Info("MARK")
 		marked++
@@ -324,26 +316,29 @@ type purgeStats struct {
 	purged, dbOnly, kept, skipped, errors, objects int
 }
 
-func runPurge(ctx context.Context, db *database, store objectStore, cfg config, protected map[uuid.UUID][]uuid.UUID, log *slog.Logger) purgeStats {
+func runPurge(ctx context.Context, db *database, store objectStore, cfg config, protected map[uuid.UUID]uuid.UUID, log *slog.Logger) (purgeStats, error) {
 	var stats purgeStats
 
-	candidates, err := db.purgeCandidates(ctx, cfg.purgeDelay, cfg.retention)
+	candidates, err := purgeCandidates(ctx, db.pool, cfg.purgeDelay, cfg.retention, nil)
 	if err != nil {
-		log.Error("list purge candidates", "err", err)
-		stats.errors++
-
-		return stats
+		return stats, fmt.Errorf("list purge candidates: %w", err)
 	}
 
 	for _, c := range candidates {
-		if ctx.Err() != nil {
-			log.Error("run aborted", "err", ctx.Err())
-			stats.errors++
-
-			return stats
+		if err := ctx.Err(); err != nil {
+			return stats, err
 		}
 
 		l := log.With("phase", "purge", "build", c.buildID, "envs", c.envIDs, "created", c.createdAt.UTC().Format(time.RFC3339))
+
+		// Decided from memory, before any request is spent on the build.
+		if referrer, ok := protected[c.buildID]; ok {
+			l.Info("KEEP_REFERENCED_BY " + referrer.String())
+			stats.kept++
+
+			continue
+		}
+
 		paths := storage.Paths{BuildID: c.buildID.String()}
 		prefix := paths.StorageDir() + "/"
 
@@ -354,110 +349,94 @@ func runPurge(ctx context.Context, db *database, store objectStore, cfg config, 
 
 			continue
 		}
-
-		facts, err := objectFactsFor(ctx, store, paths)
+		facts, err := objectFactsFor(ctx, store, paths, keys)
 		if err != nil {
 			l.Error("read object metadata", "err", err)
 			stats.errors++
 
 			continue
 		}
-		facts.objectCount = len(keys)
-
-		d := decidePurge(c, protected, facts, cfg.allowMissingOrigin)
-		switch d.action {
-		case actionKeep:
-			l.Info(d.reason)
-			stats.kept++
-
-			continue
-		case actionSkip:
-			if d.failure {
-				l.Error(d.reason)
-				stats.errors++
-			} else {
-				l.Warn(d.reason)
-				stats.skipped++
-			}
-
-			continue
-		}
 
 		l = l.With("objects", len(keys))
-		if !cfg.apply {
-			l.Info(d.reason)
-			if d.dbOnly {
-				stats.dbOnly++
-			} else {
-				stats.purged++
-				stats.objects += len(keys)
-			}
+		d := decidePurge(c, facts, cfg.allowMissingOrigin)
+		switch d.action {
+		case actionSkip:
+			l.Warn(d.reason)
+			stats.skipped++
+
+			continue
+		case actionFail:
+			l.Error(d.reason)
+			stats.errors++
 
 			continue
 		}
 
-		deleted := 0
-		deleteObjects := func(ctx context.Context) error {
-			// List again under the row lock: the set is immutable for a build
-			// this old, but a re-list costs one request and removes any doubt.
-			current, err := store.List(ctx, prefix)
-			if err != nil {
-				return err
-			}
-			if len(current) == 0 {
-				return nil
-			}
-			if err := store.Delete(ctx, current); err != nil {
-				return err
-			}
-			deleted = len(current)
+		if cfg.apply {
+			deleteObjects := func(ctx context.Context) error {
+				if len(keys) == 0 {
+					return nil
+				}
 
-			return nil
+				return store.DeletePrefix(ctx, prefix)
+			}
+			if err := db.purgeBuild(ctx, c, cfg.purgeDelay, cfg.retention, deleteObjects); err != nil {
+				if errors.Is(err, errRecheckFailed) {
+					l.Info(reasonRecheckFailed)
+					stats.kept++
+				} else {
+					l.Error("purge failed", "err", err)
+					stats.errors++
+				}
+
+				continue
+			}
 		}
 
-		if err := db.purgeBuild(ctx, c, cfg.purgeDelay, deleteObjects); err != nil {
-			if errors.Is(err, errRecheckFailed) {
-				l.Info("KEEP_LIVE_ASSIGNMENT: env state changed since selection")
-				stats.kept++
-			} else {
-				l.Error("purge failed", "err", err)
-				stats.errors++
-			}
-
-			continue
-		}
-
-		l.Info(d.reason, "deleted", deleted)
-		if d.dbOnly {
+		l.Info(d.reason)
+		if len(keys) == 0 {
 			stats.dbOnly++
 		} else {
 			stats.purged++
-			stats.objects += deleted
+			stats.objects += len(keys)
 		}
 	}
 
-	return stats
+	return stats, nil
 }
 
-// objectFactsFor reads the snapshot's object metadata. The rootfs header is
-// present for every real build (memory-only and filesystem-only alike); the
-// metadata.json is the fallback for a build whose header upload failed.
-func objectFactsFor(ctx context.Context, store objectStore, paths storage.Paths) (objectFacts, error) {
+// objectFactsFor reads the metadata stamped on the build's objects. The rootfs
+// header exists for every complete build (memory-only and filesystem-only
+// alike); metadata.json is the fallback for one whose header upload failed.
+// Only a key the listing reported is HEADed, so a build with neither costs no
+// request.
+func objectFactsFor(ctx context.Context, store objectStore, paths storage.Paths, keys []string) (objectFacts, error) {
+	facts := objectFacts{objectCount: len(keys)}
+
+	present := make(map[string]struct{}, len(keys))
+	for _, k := range keys {
+		present[k] = struct{}{}
+	}
+
 	for _, key := range []string{paths.RootfsHeader(), paths.Metadata()} {
+		if _, ok := present[key]; !ok {
+			continue
+		}
+
 		meta, err := store.Head(ctx, key)
-		if errors.Is(err, errNotFound) {
+		if errors.Is(err, storage.ErrObjectNotExist) {
 			continue
 		}
 		if err != nil {
 			return objectFacts{}, fmt.Errorf("head %s: %w", key, err)
 		}
 
-		return objectFacts{
-			origin:     meta[storage.ObjectMetadataBuildOrigin],
-			templateID: meta[storage.ObjectMetadataTemplateID],
-			teamID:     meta[storage.ObjectMetadataTeamID],
-		}, nil
+		facts.origin = meta[storage.ObjectMetadataBuildOrigin]
+		facts.templateID = meta[storage.ObjectMetadataTemplateID]
+		facts.teamID = meta[storage.ObjectMetadataTeamID]
+
+		return facts, nil
 	}
 
-	return objectFacts{missing: true}, nil
+	return facts, nil
 }

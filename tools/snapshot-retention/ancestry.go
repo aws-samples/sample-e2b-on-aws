@@ -1,12 +1,10 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
-	"slices"
 	"sync"
 	"time"
 
@@ -17,15 +15,14 @@ import (
 	"github.com/e2b-dev/infra/packages/shared/pkg/storage/header"
 )
 
-var errNotFound = errors.New("object not found")
-
-// objectStore is the slice of S3 this tool needs; s3Store implements it and
-// the tests use an in-memory map.
+// objectStore is the slice of the bucket this tool needs. s3Store implements
+// it; the tests use an in-memory map. A missing object is reported as
+// upstream's storage.ErrObjectNotExist.
 type objectStore interface {
 	Get(ctx context.Context, key string) ([]byte, error)
 	Head(ctx context.Context, key string) (map[string]string, error)
 	List(ctx context.Context, prefix string) ([]string, error)
-	Delete(ctx context.Context, keys []string) error
+	DeletePrefix(ctx context.Context, prefix string) error
 }
 
 // refsFromHeader returns every build a serialized memfile or rootfs header
@@ -41,13 +38,18 @@ func refsFromHeader(data []byte) ([]uuid.UUID, error) {
 		return nil, err
 	}
 
-	seen := make(map[uuid.UUID]struct{})
+	mapped := h.Mapping.Builds()
+	refs := make([]uuid.UUID, 0, len(mapped)+2)
+	seen := make(map[uuid.UUID]struct{}, len(mapped)+2)
 	add := func(id uuid.UUID) {
-		if id != uuid.Nil {
-			seen[id] = struct{}{}
+		if _, dup := seen[id]; id == uuid.Nil || dup {
+			return
 		}
+		seen[id] = struct{}{}
+		refs = append(refs, id)
 	}
-	for _, id := range h.Mapping.Builds() {
+
+	for _, id := range mapped {
 		add(id)
 	}
 	if h.Metadata != nil {
@@ -55,26 +57,20 @@ func refsFromHeader(data []byte) ([]uuid.UUID, error) {
 		add(h.Metadata.BaseBuildId)
 	}
 
-	refs := make([]uuid.UUID, 0, len(seen))
-	for id := range seen {
-		refs = append(refs, id)
-	}
-	slices.SortFunc(refs, func(a, b uuid.UUID) int { return bytes.Compare(a[:], b[:]) })
-
 	return refs, nil
 }
 
 // protectedSet downloads both headers of every root build (the builds of live
-// envs, and of envs still inside the undo window) and returns, for each build
-// referenced by any of them (including the roots themselves), the roots that
-// reference it. A build in this map must not be deleted.
+// envs, and of envs still inside the undo window) and returns every build any
+// of them refers to - the roots included - mapped to one root that refers to
+// it, for the log. A build in this map must not be deleted.
 //
 // A missing header is not an error: filesystem-only snapshots have no memfile
 // header, and a build whose upload failed has none at all; neither can point
 // at anything. Every other failure aborts, because an incomplete set would let
 // the purge phase delete something that is still in use.
-func protectedSet(ctx context.Context, store objectStore, roots []rootBuild, workers int, grace time.Duration, now time.Time, log *slog.Logger) (map[uuid.UUID][]uuid.UUID, error) {
-	protected := make(map[uuid.UUID][]uuid.UUID)
+func protectedSet(ctx context.Context, store objectStore, roots []rootBuild, workers int, grace time.Duration, now time.Time, log *slog.Logger) (map[uuid.UUID]uuid.UUID, error) {
+	protected := make(map[uuid.UUID]uuid.UUID)
 	var mu sync.Mutex
 
 	g, ctx := errgroup.WithContext(ctx)
@@ -83,12 +79,12 @@ func protectedSet(ctx context.Context, store objectStore, roots []rootBuild, wor
 	for _, b := range roots {
 		g.Go(func() error {
 			paths := storage.Paths{BuildID: b.id.String()}
-			refs := map[uuid.UUID]struct{}{b.id: {}}
+			refs := []uuid.UUID{b.id}
 
 			missing := 0
 			for _, key := range []string{paths.MemfileHeader(), paths.RootfsHeader()} {
 				data, err := store.Get(ctx, key)
-				if errors.Is(err, errNotFound) {
+				if errors.Is(err, storage.ErrObjectNotExist) {
 					missing++
 
 					continue
@@ -101,9 +97,7 @@ func protectedSet(ctx context.Context, store objectStore, roots []rootBuild, wor
 				if err != nil {
 					return fmt.Errorf("parse %s: %w", key, err)
 				}
-				for _, id := range ids {
-					refs[id] = struct{}{}
-				}
+				refs = append(refs, ids...)
 			}
 
 			if missing == 2 && now.Sub(b.createdAt) > grace {
@@ -111,8 +105,10 @@ func protectedSet(ctx context.Context, store objectStore, roots []rootBuild, wor
 			}
 
 			mu.Lock()
-			for id := range refs {
-				protected[id] = append(protected[id], b.id)
+			for _, id := range refs {
+				if _, ok := protected[id]; !ok {
+					protected[id] = b.id
+				}
 			}
 			mu.Unlock()
 

@@ -9,14 +9,12 @@ import (
 )
 
 func TestDecidePurge(t *testing.T) {
-	build := uuid.New()
-	live := uuid.New()
 	snapshotEnv := "snap-env"
 	templateEnv := "tpl-env"
 	team := uuid.New().String()
 
 	cand := purgeCandidate{
-		buildID:   build,
+		buildID:   uuid.New(),
 		createdAt: time.Now().Add(-100 * 24 * time.Hour),
 		envIDs:    []string{snapshotEnv, templateEnv},
 		teamIDs:   []string{team},
@@ -27,86 +25,27 @@ func TestDecidePurge(t *testing.T) {
 
 	cases := []struct {
 		name         string
-		protected    map[uuid.UUID][]uuid.UUID
 		facts        objectFacts
 		allowMissing bool
 		wantAction   action
 		wantReason   string
-		wantDBOnly   bool
-		wantFailure  bool
 	}{
-		{
-			name:       "referenced by a live build is kept",
-			protected:  map[uuid.UUID][]uuid.UUID{build: {live}},
-			facts:      stamped("pause", snapshotEnv, team),
-			wantAction: actionKeep, wantReason: "KEEP_REFERENCED_BY " + live.String(),
-		},
-		{
-			name:       "empty prefix only removes the row",
-			facts:      objectFacts{objectCount: 0, missing: true},
-			wantAction: actionPurge, wantReason: "PURGE_DB_ONLY", wantDBOnly: true,
-		},
-		{
-			name:       "no metadata is skipped by default",
-			facts:      objectFacts{objectCount: 6, missing: true},
-			wantAction: actionSkip, wantReason: "SKIP_MISSING_METADATA",
-		},
-		{
-			name:       "empty build_origin counts as no metadata",
-			facts:      stamped("", "", ""),
-			wantAction: actionSkip, wantReason: "SKIP_MISSING_METADATA",
-		},
-		{
-			name:         "no metadata is purged when allowed",
-			facts:        objectFacts{objectCount: 6, missing: true},
-			allowMissing: true,
-			wantAction:   actionPurge, wantReason: "PURGE",
-		},
-		{
-			name:       "template build objects are never touched",
-			facts:      stamped("template_build", snapshotEnv, team),
-			wantAction: actionSkip, wantReason: "SKIP_ORIGIN_TEMPLATE", wantFailure: true,
-		},
-		{
-			name:       "template layer cache objects are never touched",
-			facts:      stamped("template_build_cache", snapshotEnv, team),
-			wantAction: actionSkip, wantReason: "SKIP_ORIGIN_TEMPLATE", wantFailure: true,
-		},
-		{
-			name:       "unknown origin is treated like a template",
-			facts:      stamped("something_new", snapshotEnv, team),
-			wantAction: actionSkip, wantReason: "SKIP_ORIGIN_TEMPLATE", wantFailure: true,
-		},
-		{
-			name:       "pause snapshot is purged",
-			facts:      stamped("pause", snapshotEnv, team),
-			wantAction: actionPurge, wantReason: "PURGE",
-		},
-		{
-			name:       "checkpoint stamped as snapshot_template is purged",
-			facts:      stamped("snapshot_template", templateEnv, team),
-			wantAction: actionPurge, wantReason: "PURGE",
-		},
-		{
-			name:       "template_id pointing at a foreign env is an inconsistency",
-			facts:      stamped("pause", "someone-else", team),
-			wantAction: actionSkip, wantReason: "SKIP_METADATA_MISMATCH", wantFailure: true,
-		},
-		{
-			name:       "team_id of another team is an inconsistency",
-			facts:      stamped("pause", snapshotEnv, uuid.New().String()),
-			wantAction: actionSkip, wantReason: "SKIP_METADATA_MISMATCH", wantFailure: true,
-		},
-		{
-			name:       "origin alone is enough when the other keys are absent",
-			facts:      stamped("pause", "", ""),
-			wantAction: actionPurge, wantReason: "PURGE",
-		},
+		{"empty prefix only removes the row", objectFacts{}, false, actionPurge, "PURGE_DB_ONLY"},
+		{"no metadata is skipped by default", objectFacts{objectCount: 6}, false, actionSkip, "SKIP_MISSING_METADATA"},
+		{"no metadata is purged when allowed", objectFacts{objectCount: 6}, true, actionPurge, "PURGE"},
+		{"template build objects are never touched", stamped("template_build", snapshotEnv, team), false, actionFail, "FAIL_ORIGIN_TEMPLATE"},
+		{"template layer cache objects are never touched", stamped("template_build_cache", snapshotEnv, team), false, actionFail, "FAIL_ORIGIN_TEMPLATE"},
+		{"unknown origin is treated like a template", stamped("something_new", snapshotEnv, team), false, actionFail, "FAIL_ORIGIN_TEMPLATE"},
+		{"pause snapshot is purged", stamped("pause", snapshotEnv, team), false, actionPurge, "PURGE"},
+		{"checkpoint stamped as snapshot_template is purged", stamped("snapshot_template", templateEnv, team), false, actionPurge, "PURGE"},
+		{"template_id pointing at a foreign env is an inconsistency", stamped("pause", "someone-else", team), false, actionFail, "FAIL_METADATA_MISMATCH"},
+		{"team_id of another team is an inconsistency", stamped("pause", snapshotEnv, uuid.New().String()), false, actionFail, "FAIL_METADATA_MISMATCH"},
+		{"origin alone is enough when the other keys are absent", stamped("pause", "", ""), false, actionPurge, "PURGE"},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			d := decidePurge(cand, tc.protected, tc.facts, tc.allowMissing)
+			d := decidePurge(cand, tc.facts, tc.allowMissing)
 
 			if d.action != tc.wantAction {
 				t.Errorf("action = %s, want %s (%s)", d.action, tc.wantAction, d.reason)
@@ -114,18 +53,12 @@ func TestDecidePurge(t *testing.T) {
 			if !strings.HasPrefix(d.reason, tc.wantReason) {
 				t.Errorf("reason = %q, want prefix %q", d.reason, tc.wantReason)
 			}
-			if d.dbOnly != tc.wantDBOnly {
-				t.Errorf("dbOnly = %v, want %v", d.dbOnly, tc.wantDBOnly)
-			}
-			if d.failure != tc.wantFailure {
-				t.Errorf("failure = %v, want %v", d.failure, tc.wantFailure)
-			}
 		})
 	}
 }
 
 func TestParseConfig(t *testing.T) {
-	env := map[string]string{
+	base := map[string]string{
 		"POSTGRES_CONNECTION_STRING": "postgresql://u:p@h/db",
 		"TEMPLATE_BUCKET_NAME":       "bucket",
 		"AWS_REGION":                 "us-east-1",
@@ -133,45 +66,73 @@ func TestParseConfig(t *testing.T) {
 		"RETENTION_DAYS":             "30",
 		"PURGE_DELAY_DAYS":           "3",
 	}
-	getenv := func(k string) string { return env[k] }
 
-	cfg, err := parseConfig(nil, getenv)
-	if err != nil {
-		t.Fatalf("parseConfig: %v", err)
-	}
-	if !cfg.apply || cfg.retention != 30*24*time.Hour || cfg.purgeDelay != 3*24*time.Hour {
-		t.Fatalf("env defaults not applied: %+v", cfg)
+	cases := []struct {
+		name    string
+		env     map[string]string // overrides base; "" removes the key
+		args    []string
+		wantErr bool
+		check   func(config) bool
+	}{
+		{
+			name: "environment supplies the defaults",
+			check: func(c config) bool {
+				return c.apply && c.retention == 30*24*time.Hour && c.purgeDelay == 3*24*time.Hour
+			},
+		},
+		{
+			name: "flags override the environment",
+			args: []string{"-apply=false", "-retention-days=90"},
+			check: func(c config) bool {
+				return !c.apply && c.retention == 90*24*time.Hour && c.purgeDelay == 3*24*time.Hour
+			},
+		},
+		{
+			name:  "RETENTION_ALLOW_MISSING_ORIGIN enables the flag",
+			env:   map[string]string{"RETENTION_ALLOW_MISSING_ORIGIN": "true"},
+			check: func(c config) bool { return c.allowMissingOrigin },
+		},
+		{
+			name:    "a zero retention would expire every paused sandbox",
+			args:    []string{"-retention-days=0"},
+			wantErr: true,
+		},
+		{
+			name:    "a malformed RETENTION_DAYS is rejected, not defaulted",
+			env:     map[string]string{"RETENTION_DAYS": "30d"},
+			wantErr: true,
+		},
+		{
+			name:    "the bucket is required",
+			env:     map[string]string{"TEMPLATE_BUCKET_NAME": ""},
+			wantErr: true,
+		},
 	}
 
-	cfg, err = parseConfig([]string{"-apply=false", "-retention-days=90"}, getenv)
-	if err != nil {
-		t.Fatalf("parseConfig with flags: %v", err)
-	}
-	if cfg.apply || cfg.retention != 90*24*time.Hour || cfg.purgeDelay != 3*24*time.Hour {
-		t.Fatalf("flags must override env: %+v", cfg)
-	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			env := make(map[string]string, len(base)+len(tc.env))
+			for k, v := range base {
+				env[k] = v
+			}
+			for k, v := range tc.env {
+				env[k] = v
+			}
 
-	if _, err := parseConfig([]string{"-retention-days=0"}, getenv); err == nil {
-		t.Fatal("a zero retention would expire every paused sandbox and must be rejected")
-	}
+			cfg, err := parseConfig(tc.args, func(k string) string { return env[k] })
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("expected an error")
+				}
 
-	env["RETENTION_ALLOW_MISSING_ORIGIN"] = "true"
-	cfg, err = parseConfig(nil, getenv)
-	if err != nil {
-		t.Fatalf("parseConfig: %v", err)
-	}
-	if !cfg.allowMissingOrigin {
-		t.Fatal("RETENTION_ALLOW_MISSING_ORIGIN=true must enable -allow-missing-origin")
-	}
-
-	env["RETENTION_DAYS"] = "30d"
-	if _, err := parseConfig(nil, getenv); err == nil {
-		t.Fatal("a malformed RETENTION_DAYS must be rejected, not defaulted")
-	}
-	env["RETENTION_DAYS"] = "30"
-
-	delete(env, "TEMPLATE_BUCKET_NAME")
-	if _, err := parseConfig(nil, getenv); err == nil {
-		t.Fatal("missing bucket must be rejected")
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseConfig: %v", err)
+			}
+			if !tc.check(cfg) {
+				t.Fatalf("unexpected config: %+v", cfg)
+			}
+		})
 	}
 }

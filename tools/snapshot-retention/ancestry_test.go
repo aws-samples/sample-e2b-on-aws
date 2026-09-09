@@ -117,44 +117,29 @@ func TestRefsFromHeader(t *testing.T) {
 	})
 }
 
-// fakeStore is an in-memory objectStore.
-type fakeStore struct {
-	objects map[string][]byte
-	meta    map[string]map[string]string
-	deleted []string
-}
+// fakeStore is an in-memory objectStore: keys to bytes, no metadata.
+type fakeStore map[string][]byte
 
-func newFakeStore() *fakeStore {
-	return &fakeStore{objects: map[string][]byte{}, meta: map[string]map[string]string{}}
-}
-
-func (f *fakeStore) put(key string, data []byte, meta map[string]string) {
-	f.objects[key] = data
-	if meta != nil {
-		f.meta[key] = meta
-	}
-}
-
-func (f *fakeStore) Get(_ context.Context, key string) ([]byte, error) {
-	data, ok := f.objects[key]
+func (f fakeStore) Get(_ context.Context, key string) ([]byte, error) {
+	data, ok := f[key]
 	if !ok {
-		return nil, errNotFound
+		return nil, storage.ErrObjectNotExist
 	}
 
 	return data, nil
 }
 
-func (f *fakeStore) Head(_ context.Context, key string) (map[string]string, error) {
-	if _, ok := f.objects[key]; !ok {
-		return nil, errNotFound
+func (f fakeStore) Head(_ context.Context, key string) (map[string]string, error) {
+	if _, ok := f[key]; !ok {
+		return nil, storage.ErrObjectNotExist
 	}
 
-	return f.meta[key], nil
+	return map[string]string{}, nil
 }
 
-func (f *fakeStore) List(_ context.Context, prefix string) ([]string, error) {
+func (f fakeStore) List(_ context.Context, prefix string) ([]string, error) {
 	var keys []string
-	for k := range f.objects {
+	for k := range f {
 		if strings.HasPrefix(k, prefix) {
 			keys = append(keys, k)
 		}
@@ -164,11 +149,11 @@ func (f *fakeStore) List(_ context.Context, prefix string) ([]string, error) {
 	return keys, nil
 }
 
-func (f *fakeStore) Delete(_ context.Context, keys []string) error {
-	for _, k := range keys {
-		delete(f.objects, k)
-		delete(f.meta, k)
-		f.deleted = append(f.deleted, k)
+func (f fakeStore) DeletePrefix(_ context.Context, prefix string) error {
+	for k := range f {
+		if strings.HasPrefix(k, prefix) {
+			delete(f, k)
+		}
 	}
 
 	return nil
@@ -181,10 +166,11 @@ func TestProtectedSet(t *testing.T) {
 	F := uuid.New()  // live filesystem-only snapshot: rootfs header only
 	B := uuid.New()  // live build whose upload never happened
 
-	store := newFakeStore()
-	store.put(storage.Paths{BuildID: C1.String()}.MemfileHeader(), serializedHeader(t, header.MetadataVersionV4, C1, T, []uuid.UUID{K, C1, T}), nil)
-	store.put(storage.Paths{BuildID: C1.String()}.RootfsHeader(), serializedHeader(t, header.MetadataVersionV4, C1, T, []uuid.UUID{T, C1}), nil)
-	store.put(storage.Paths{BuildID: F.String()}.RootfsHeader(), serializedHeader(t, 3, F, T, []uuid.UUID{T, F}), nil)
+	store := fakeStore{
+		storage.Paths{BuildID: C1.String()}.MemfileHeader(): serializedHeader(t, header.MetadataVersionV4, C1, T, []uuid.UUID{K, C1, T}),
+		storage.Paths{BuildID: C1.String()}.RootfsHeader():  serializedHeader(t, header.MetadataVersionV4, C1, T, []uuid.UUID{T, C1}),
+		storage.Paths{BuildID: F.String()}.RootfsHeader():   serializedHeader(t, 3, F, T, []uuid.UUID{T, F}),
+	}
 
 	now := time.Now()
 	roots := []rootBuild{
@@ -204,8 +190,8 @@ func TestProtectedSet(t *testing.T) {
 			t.Errorf("build %s should be protected", id)
 		}
 	}
-	if refs := protected[K]; !slices.Equal(refs, []uuid.UUID{C1}) {
-		t.Errorf("K should be referenced only by C1, got %v", refs)
+	if referrer := protected[K]; referrer != C1 {
+		t.Errorf("K should be reported as referenced by C1, got %s", referrer)
 	}
 	if got := len(protected); got != 5 {
 		t.Errorf("expected exactly 5 protected builds, got %d: %v", got, protected)
