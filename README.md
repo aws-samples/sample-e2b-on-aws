@@ -507,6 +507,13 @@ UPDATE envs SET deleted_at = NULL WHERE id = '<env-id>';
 exceed the longest sandbox lifetime (`tiers.max_length_hours`); the job refuses
 to run otherwise.
 
+The tool is compiled against the vendored code layer and pinned to the newest
+database migration it was verified with (`verifiedMigration` in
+`tools/snapshot-retention/schema.go`). After an upstream sync that adds
+migrations, `go test` for the tool fails until the constant is bumped, and a
+deployed binary that meets a newer schema runs as a dry run and exits non-zero.
+Treat a failing build or test of `tools/snapshot-retention` as a failed sync.
+
 ---
 
 ## 🔧 Troubleshooting

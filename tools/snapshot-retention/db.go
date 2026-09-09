@@ -9,12 +9,15 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/e2b-dev/infra/packages/db/queries"
 )
 
-// database wraps the handful of statements this tool runs. It touches only
-// envs, snapshots, env_builds, env_build_assignments and tiers, and it mirrors
-// the API's own soft delete (packages/db/queries/templates/delete_template.sql)
-// rather than inventing a state of its own.
+// database wraps the handful of statements this tool runs. It reads envs,
+// snapshots, env_builds, env_build_assignments, tiers and _migrations; the one
+// state transition it shares with the API - the soft delete - it performs by
+// calling upstream's generated queries rather than copying their SQL, so an
+// upstream change there surfaces as a compile error at the next sync.
 type database struct {
 	pool *pgxpool.Pool
 }
@@ -62,7 +65,7 @@ func (d *database) maxSandboxLengthHours(ctx context.Context) (int64, error) {
 
 type markCandidate struct {
 	envID     string
-	teamID    string
+	teamID    uuid.UUID
 	sandboxID string
 	newestAt  time.Time
 	builds    int64
@@ -82,7 +85,7 @@ func (d *database) markCandidates(ctx context.Context, retention time.Duration) 
 			JOIN public.env_builds eb ON eb.id = eba.build_id
 			GROUP BY eba.env_id
 		)
-		SELECT e.id, e.team_id::text, s.sandbox_id, n.newest_at, n.n
+		SELECT e.id, e.team_id, s.sandbox_id, n.newest_at, n.n
 		FROM public.envs e
 		JOIN public.snapshots s ON s.env_id = e.id
 		JOIN newest n ON n.env_id = e.id
@@ -103,27 +106,72 @@ func (d *database) markCandidates(ctx context.Context, retention time.Duration) 
 	})
 }
 
-// markEnv soft-deletes a snapshot env the way DELETE /sandboxes/{id} does, and
-// only if it still has no build younger than the retention period.
-func (d *database) markEnv(ctx context.Context, envID string, retention time.Duration) (bool, error) {
-	tag, err := d.pool.Exec(ctx, `
-		UPDATE public.envs
-		SET deleted_at = now(), updated_at = now()
-		WHERE id = $1
-		  AND deleted_at IS NULL
-		  AND source = 'snapshot'
-		  AND NOT EXISTS (
+// markEnv soft-deletes a snapshot env exactly the way DELETE /sandboxes/{id}
+// does: the three generated queries the API's softDeleteTemplate runs
+// (packages/api/internal/handlers/template_delete.go), in one transaction.
+// What cannot be mirrored from outside the API is its cache invalidation; the
+// snapshot cache expires on its own within five minutes.
+//
+// The env row is locked first and the retention check repeated under the lock,
+// so a sandbox paused between selection and here is left alone. Returns false
+// when nothing was changed.
+func (d *database) markEnv(ctx context.Context, c markCandidate, retention time.Duration) (bool, error) {
+	tx, err := d.pool.Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback(context.WithoutCancel(ctx)) //nolint:errcheck // no-op after Commit
+
+	var locked bool
+	err = tx.QueryRow(ctx, `
+		SELECT true
+		FROM public.envs
+		WHERE id = $1 AND deleted_at IS NULL AND source = 'snapshot'
+		FOR UPDATE`, c.envID).Scan(&locked)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+
+	var pausedRecently bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS (
 			SELECT 1
 			FROM public.env_build_assignments eba
 			JOIN public.env_builds eb ON eb.id = eba.build_id
 			WHERE eba.env_id = $1
 			  AND GREATEST(eb.created_at, eba.created_at) >= now() - $2::interval)`,
-		envID, interval(retention))
-	if err != nil {
+		c.envID, interval(retention)).Scan(&pausedRecently); err != nil {
+		return false, err
+	}
+	if pausedRecently {
+		return false, nil
+	}
+
+	q := queries.New(tx)
+	if _, err := q.SoftDeleteTemplate(ctx, queries.SoftDeleteTemplateParams{TemplateID: c.envID, TeamID: c.teamID}); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			// Already deleted, or the team no longer owns it: same outcome as
+			// the API, which treats this as nothing to do.
+			return false, nil
+		}
+
+		return false, fmt.Errorf("soft delete: %w", err)
+	}
+	if _, err := q.ReleaseTemplateAliases(ctx, c.envID); err != nil {
+		return false, fmt.Errorf("release aliases: %w", err)
+	}
+	if err := q.DeleteActiveTemplateBuilds(ctx, c.envID); err != nil {
+		return false, fmt.Errorf("delete active builds: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
 		return false, err
 	}
 
-	return tag.RowsAffected() == 1, nil
+	return true, nil
 }
 
 type restoreCandidate struct {
@@ -161,6 +209,8 @@ func (d *database) restoreCandidates(ctx context.Context) ([]restoreCandidate, e
 	})
 }
 
+// restoreEnv undoes a mark. Upstream has no un-delete, so this is the one
+// state change with no generated query to call.
 func (d *database) restoreEnv(ctx context.Context, envID string) (bool, error) {
 	tag, err := d.pool.Exec(ctx, `
 		UPDATE public.envs

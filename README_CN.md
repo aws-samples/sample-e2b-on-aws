@@ -474,6 +474,11 @@ UPDATE envs SET deleted_at = NULL WHERE id = '<env-id>';
 `RETENTION_DAYS` 与 `PURGE_DELAY_DAYS` 在任务定义里。延迟必须大于沙箱最长存活时间
 （`tiers.max_length_hours`），否则任务拒绝运行。
 
+工具针对 vendored 代码层编译，并钉在它已验证过的最新数据库迁移版本上
+（`tools/snapshot-retention/schema.go` 里的 `verifiedMigration`）。上游同步带来新迁移后，
+工具的 `go test` 会失败直到常量被更新；已部署的二进制遇到更新的 schema 时只做演习并以非零
+退出码结束。请把 `tools/snapshot-retention` 构建或测试失败视为同步失败。
+
 ---
 
 ## 🔧 故障排查

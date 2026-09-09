@@ -134,13 +134,6 @@ func main() {
 // aborted or when a build had to be skipped for a reason that indicates an
 // inconsistency between the database and the bucket.
 func run(ctx context.Context, cfg config, log *slog.Logger) int {
-	mode := "apply"
-	if !cfg.apply {
-		mode = "dry-run"
-	}
-	log = log.With("mode", mode)
-	log.Info("starting", "retention", cfg.retention, "purge_delay", cfg.purgeDelay, "bucket", cfg.bucket)
-
 	pool, err := pgxpool.New(ctx, cfg.dbURL)
 	if err != nil {
 		log.Error("connect to postgres", "err", err)
@@ -149,6 +142,36 @@ func run(ctx context.Context, cfg config, log *slog.Logger) int {
 	}
 	defer pool.Close()
 	db := &database{pool: pool}
+
+	// The queries below were verified against one schema version. A newer
+	// database (an upstream sync added migrations) may have changed what they
+	// mean without breaking them, so nothing is written until someone has
+	// re-verified and bumped verifiedMigration; the dry run still shows what
+	// would happen. An older database cannot be reasoned about at all.
+	applied, err := db.appliedMigration(ctx)
+	if err != nil {
+		log.Error("read applied schema version", "err", err)
+
+		return 1
+	}
+	schemaAhead := false
+	switch compareSchema(applied, verifiedMigration) {
+	case schemaOlder:
+		log.Error("database schema is older than the version this tool was verified against; refusing to run", "applied", applied, "verified", verifiedMigration)
+
+		return 1
+	case schemaNewer:
+		log.Error("database schema is newer than the version this tool was verified against; forcing a dry run until tools/snapshot-retention is re-verified and verifiedMigration is bumped", "applied", applied, "verified", verifiedMigration)
+		cfg.apply = false
+		schemaAhead = true
+	}
+
+	mode := "apply"
+	if !cfg.apply {
+		mode = "dry-run"
+	}
+	log = log.With("mode", mode)
+	log.Info("starting", "retention", cfg.retention, "purge_delay", cfg.purgeDelay, "bucket", cfg.bucket, "schema", applied)
 
 	release, locked, err := db.tryLock(ctx)
 	if err != nil {
@@ -232,7 +255,7 @@ func run(ctx context.Context, cfg config, log *slog.Logger) int {
 		"objects_deleted", stats.objects,
 	)
 
-	if stats.errors > 0 {
+	if stats.errors > 0 || schemaAhead {
 		return 1
 	}
 
@@ -255,7 +278,7 @@ func runMark(ctx context.Context, db *database, cfg config, log *slog.Logger) (i
 			continue
 		}
 
-		done, err := db.markEnv(ctx, c.envID, cfg.retention)
+		done, err := db.markEnv(ctx, c, cfg.retention)
 		if err != nil {
 			return marked, fmt.Errorf("mark env %s: %w", c.envID, err)
 		}

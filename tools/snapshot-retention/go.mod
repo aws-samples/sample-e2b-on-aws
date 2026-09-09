@@ -4,11 +4,14 @@ go 1.26.6
 
 replace github.com/e2b-dev/infra/packages/shared => ../../packages/shared
 
+replace github.com/e2b-dev/infra/packages/db => ../../packages/db
+
 require (
 	github.com/aws/aws-sdk-go-v2 v1.43.3
 	github.com/aws/aws-sdk-go-v2/config v1.32.12
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.100.0
 	github.com/aws/smithy-go v1.27.6
+	github.com/e2b-dev/infra/packages/db v0.0.0
 	github.com/e2b-dev/infra/packages/shared v0.0.0
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.10.0
