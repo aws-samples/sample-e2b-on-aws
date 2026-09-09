@@ -29,33 +29,6 @@ func interval(d time.Duration) string {
 	return fmt.Sprintf("%d seconds", int64(d.Seconds()))
 }
 
-// tryLock takes a session-level advisory lock so two rounds never overlap. The
-// connection stays checked out until release is called.
-func (d *database) tryLock(ctx context.Context) (release func(), locked bool, err error) {
-	conn, err := d.pool.Acquire(ctx)
-	if err != nil {
-		return nil, false, err
-	}
-
-	if err := conn.QueryRow(ctx, `SELECT pg_try_advisory_lock(hashtext('snapshot-retention'))`).Scan(&locked); err != nil {
-		conn.Release()
-
-		return nil, false, err
-	}
-	if !locked {
-		conn.Release()
-
-		return nil, false, nil
-	}
-
-	release = func() {
-		_, _ = conn.Exec(context.WithoutCancel(ctx), `SELECT pg_advisory_unlock(hashtext('snapshot-retention'))`)
-		conn.Release()
-	}
-
-	return release, true, nil
-}
-
 func (d *database) maxSandboxLengthHours(ctx context.Context) (int64, error) {
 	var hours int64
 	err := d.pool.QueryRow(ctx, `SELECT COALESCE(MAX(max_length_hours), 0) FROM public.tiers`).Scan(&hours)
@@ -172,55 +145,6 @@ func (d *database) markEnv(ctx context.Context, c markCandidate, retention time.
 	}
 
 	return true, nil
-}
-
-type restoreCandidate struct {
-	envID     string
-	deletedAt time.Time
-}
-
-// restoreCandidates lists soft-deleted snapshot envs that were paused again
-// after the soft delete: the sandbox was running when the env was marked. The
-// API invalidates its snapshot cache when a user deletes a paused sandbox, so
-// a user-deleted env can never be resumed and never gains a newer build; the
-// only envs this can match are the ones this tool marked.
-func (d *database) restoreCandidates(ctx context.Context) ([]restoreCandidate, error) {
-	rows, err := d.pool.Query(ctx, `
-		SELECT e.id, e.deleted_at
-		FROM public.envs e
-		WHERE e.source = 'snapshot'
-		  AND e.deleted_at IS NOT NULL
-		  AND e.cluster_id IS NULL
-		  AND EXISTS (
-			SELECT 1
-			FROM public.env_build_assignments eba
-			JOIN public.env_builds eb ON eb.id = eba.build_id
-			WHERE eba.env_id = e.id
-			  AND GREATEST(eb.created_at, eba.created_at) > e.deleted_at)`)
-	if err != nil {
-		return nil, err
-	}
-
-	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (restoreCandidate, error) {
-		var c restoreCandidate
-		err := row.Scan(&c.envID, &c.deletedAt)
-
-		return c, err
-	})
-}
-
-// restoreEnv undoes a mark. Upstream has no un-delete, so this is the one
-// state change with no generated query to call.
-func (d *database) restoreEnv(ctx context.Context, envID string) (bool, error) {
-	tag, err := d.pool.Exec(ctx, `
-		UPDATE public.envs
-		SET deleted_at = NULL, updated_at = now()
-		WHERE id = $1 AND deleted_at IS NOT NULL AND source = 'snapshot'`, envID)
-	if err != nil {
-		return false, err
-	}
-
-	return tag.RowsAffected() == 1, nil
 }
 
 type liveBuild struct {

@@ -10,15 +10,18 @@
 // newer snapshot still mapping blocks to them, so this tool decides from the
 // database and from the headers, and S3 only executes:
 //
-//  1. mark:    snapshot envs whose newest pause is older than the retention
+//  1. mark:  snapshot envs whose newest pause is older than the retention
 //     period are soft-deleted, exactly like DELETE /sandboxes/{id}.
-//  2. restore: a marked env that gained a newer build (the sandbox was running
-//     when it was marked and paused again) is un-deleted.
-//  3. purge:   builds that belong only to envs soft-deleted for longer than the
-//     purge delay, are themselves older than the retention period,
-//     are not referenced by the header of any live build, and carry
-//     snapshot object metadata, have their {buildID}/ prefix deleted
-//     and their env_builds row removed.
+//  2. purge: builds that belong only to envs soft-deleted for longer than the
+//     purge delay, are themselves older than the retention period, are not
+//     referenced by the header of any live build, and carry snapshot object
+//     metadata, have their {buildID}/ prefix deleted and their env_builds row
+//     removed.
+//
+// The purge delay is what makes the mark reversible: a wrongly marked sandbox
+// is brought back with UPDATE envs SET deleted_at = NULL, and a sandbox that
+// happened to be running when it was marked keeps its objects, because its
+// next pause adds a build younger than the retention period.
 //
 // Everything is a dry run unless -apply (or RETENTION_APPLY=true) is set.
 package main
@@ -173,19 +176,6 @@ func run(ctx context.Context, cfg config, log *slog.Logger) int {
 	log = log.With("mode", mode)
 	log.Info("starting", "retention", cfg.retention, "purge_delay", cfg.purgeDelay, "bucket", cfg.bucket, "schema", applied)
 
-	release, locked, err := db.tryLock(ctx)
-	if err != nil {
-		log.Error("acquire advisory lock", "err", err)
-
-		return 1
-	}
-	if !locked {
-		log.Error("another snapshot-retention run holds the lock; exiting")
-
-		return 1
-	}
-	defer release()
-
 	// A sandbox resumed just before its snapshot was marked keeps reading the
 	// snapshot's objects until it stops. The purge delay has to outlast the
 	// longest lifetime a sandbox can have.
@@ -218,13 +208,6 @@ func run(ctx context.Context, cfg config, log *slog.Logger) int {
 		return 1
 	}
 
-	restored, err := runRestore(ctx, db, cfg, log)
-	if err != nil {
-		log.Error("restore phase failed", "err", err)
-
-		return 1
-	}
-
 	live, err := db.liveBuilds(ctx)
 	if err != nil {
 		log.Error("list live builds", "err", err)
@@ -246,7 +229,6 @@ func run(ctx context.Context, cfg config, log *slog.Logger) int {
 
 	log.Info("finished",
 		"marked", marked,
-		"restored", restored,
 		"purged", stats.purged,
 		"purged_db_only", stats.dbOnly,
 		"kept", stats.kept,
@@ -293,27 +275,6 @@ func runMark(ctx context.Context, db *database, cfg config, log *slog.Logger) (i
 	}
 
 	return marked, nil
-}
-
-func runRestore(ctx context.Context, db *database, cfg config, log *slog.Logger) (int, error) {
-	candidates, err := db.restoreCandidates(ctx)
-	if err != nil {
-		return 0, err
-	}
-
-	restored := 0
-	for _, c := range candidates {
-		l := log.With("phase", "restore", "env", c.envID, "deleted_at", c.deletedAt.UTC().Format(time.RFC3339))
-		if cfg.apply {
-			if _, err := db.restoreEnv(ctx, c.envID); err != nil {
-				return restored, fmt.Errorf("restore env %s: %w", c.envID, err)
-			}
-		}
-		l.Info("RESTORE: env was paused again after it was soft-deleted")
-		restored++
-	}
-
-	return restored, nil
 }
 
 type purgeStats struct {

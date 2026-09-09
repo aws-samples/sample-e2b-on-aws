@@ -450,8 +450,8 @@ Nomad 任务（`nomad/origin/snapshot-retention.hcl`，由 `tools/snapshot-reten
 为什么用任务而不是 S3 生命周期规则：快照是增量的。新快照的 header 指向旧快照和模板
 的数据块，运行中的沙箱按需读取它们。按对象年龄过期会把它们弄坏。
 
-任务默认是**演习模式**：只记录它将要做的每一条 `MARK`、`RESTORE`、`PURGE`，不改动
-任何数据。先看一轮日志，再启用：
+任务默认是**演习模式**：只记录它将要做的每一条 `MARK`、`PURGE`，不改动任何数据。
+先看一轮日志，再启用：
 
 ```bash
 # 立即触发一轮并查看日志
@@ -470,6 +470,10 @@ bash nomad/deploy.sh snapshot-retention
 ```sql
 UPDATE envs SET deleted_at = NULL WHERE id = '<env-id>';
 ```
+
+同一条语句也覆盖任务自身不处理的唯一边界情况：沙箱恰好在被标记的那一刻正在运行，
+下次 pause 之后它会保持隐藏。它的对象是安全的——那次 pause 让它们再保留 90 天——
+只需清掉软删标记就能重新出现。
 
 `RETENTION_DAYS` 与 `PURGE_DELAY_DAYS` 在任务定义里。延迟必须大于沙箱最长存活时间
 （`tiers.max_length_hours`），否则任务拒绝运行。

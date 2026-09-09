@@ -481,8 +481,8 @@ Why a job rather than an S3 lifecycle rule: snapshots are diffs. A newer
 snapshot's header points at blocks of older snapshots and of the template, and a
 running sandbox reads them lazily. Expiring objects by age would corrupt them.
 
-The job ships as a **dry run**: it logs every `MARK`, `RESTORE` and `PURGE` it
-would make and changes nothing. Review a run, then enable it:
+The job ships as a **dry run**: it logs every `MARK` and `PURGE` it would make
+and changes nothing. Review a run, then enable it:
 
 ```bash
 # Trigger a run now and read its log
@@ -502,6 +502,11 @@ soft delete on its snapshot env (the `env` in the `MARK` log line):
 ```sql
 UPDATE envs SET deleted_at = NULL WHERE id = '<env-id>';
 ```
+
+The same statement covers the one edge case the job does not handle itself: a
+sandbox that was running at the moment it was marked stays hidden after its
+next pause. Its objects are safe — that pause keeps them for another 90 days —
+it just needs the soft delete cleared to show up again.
 
 `RETENTION_DAYS` and `PURGE_DELAY_DAYS` live in the job spec. The delay must
 exceed the longest sandbox lifetime (`tiers.max_length_hours`); the job refuses
