@@ -13,7 +13,11 @@ readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly CONSUL_CONFIG_FILE="default.json"
 readonly SYSTEMD_CONFIG_PATH="/etc/systemd/system/consul.service"
 
-readonly EC2_METADATA_URL="http://169.254.169.254/latest"
+readonly EC2_INSTANCE_METADATA_URL="http://169.254.169.254/latest/meta-data"
+readonly EC2_DYNAMIC_METADATA_URL="http://169.254.169.254/latest/dynamic/instance-identity/document"
+readonly EC2_METADATA_TOKEN_URL="http://169.254.169.254/latest/api/token"
+readonly EC2_METADATA_TOKEN_TTL_SECONDS="21600"
+readonly EC2_METADATA_TOKEN_MAX_ATTEMPTS="5"
 readonly CLUSTER_SIZE_INSTANCE_METADATA_KEY_NAME="cluster-size"
 
 readonly DEFAULT_RAFT_PROTOCOL="3"
@@ -38,15 +42,16 @@ function print_usage {
   echo
   echo "Usage: run-consul [OPTIONS]"
   echo
-  echho "This script is used to configure and run Consul on a Google Compute Instance."
+  echo "This script is used to configure and run Consul on an AWS EC2 Instance."
   echo
   echo "Options:"
   echo
   echo -e "  --server\t\tIf set, run in server mode. Optional. Exactly one of --server or --client must be set."
   echo -e "  --client\t\tIf set, run in client mode. Optional. Exactly one of --server or --client must be set."
   echo -e "  --consul-token\t\tThe Consul ACL token to use."
-  echo -e "  --cluster-tag-name\tAutomatically form a cluster with Instances that have the same value for this Compute Instance tag name. Optional."
-  echo -e "  --datacenter\t\tThe name of the datacenter Consul is running in. Optional. If not specified, will default to GCP region name."
+  echo -e "  --cluster-tag-name\tThe tag name to use for EC2 auto-discovery. Optional."
+  echo -e "  --cluster-tag-value\tThe tag value to use for EC2 auto-discovery. Optional."
+  echo -e "  --datacenter\t\tThe name of the datacenter Consul is running in. Optional. If not specified, will default to AWS availability zone."
   echo -e "  --config-dir\t\tThe path to the Consul config folder. Optional. Default is the absolute path of '../config', relative to this script."
   echo -e "  --data-dir\t\tThe path to the Consul data folder. Optional. Default is the absolute path of '../data', relative to this script."
   echo -e "  --systemd-stdout\t\tThe StandardOutput option of the systemd unit.  Optional.  If not configured, uses systemd's default (journal)."
@@ -78,31 +83,73 @@ function print_usage {
   echo
   echo "Example:"
   echo
-  echo "  run-consul.sh --server --cluster-tag-name consul-xyz --config-dir /custom/path/to/consul/config"
+  echo "  run-consul.sh --server --cluster-tag-name consul-cluster --cluster-tag-value production --config-dir /custom/path/to/consul/config"
 }
 
-# Get the value at a specific EC2 Instance Metadata path
+# Get the value at a specific Instance Metadata path.
 function get_instance_metadata_value {
   local -r path="$1"
+  local token=""
+  local -a token_header=()
 
-  # AWS IMDSv2 requires a token first for security
-  TOKEN=$(curl -X PUT --silent --show-error "$EC2_METADATA_URL/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 60")
+  token=$(get_instance_metadata_token)
+  token_header=(--header "X-aws-ec2-metadata-token: $token")
 
-  log_info "Looking up Metadata value at $EC2_METADATA_URL/$path"
-  curl --silent --show-error --location -H "X-aws-ec2-metadata-token: $TOKEN" "$EC2_METADATA_URL/$path"
+  log_info "Looking up Metadata value at $EC2_INSTANCE_METADATA_URL/$path"
+  curl --silent --show-error --location --fail "${token_header[@]}" "$EC2_INSTANCE_METADATA_URL/$path"
 }
 
-# Get the value of a tag from EC2 Instance Tags
+# Get an IMDSv2 token for Instance Metadata calls.
+function get_instance_metadata_token {
+  local token=""
+
+  for attempt in $(seq 1 "$EC2_METADATA_TOKEN_MAX_ATTEMPTS"); do
+    if token=$(curl --silent --show-error --location --fail \
+      --connect-timeout 2 \
+      --max-time 5 \
+      --request PUT \
+      --header "X-aws-ec2-metadata-token-ttl-seconds: $EC2_METADATA_TOKEN_TTL_SECONDS" \
+      "$EC2_METADATA_TOKEN_URL"); then
+      printf '%s' "$token"
+      return 0
+    fi
+
+    log_warn "Failed to get IMDSv2 token, retrying ($attempt/$EC2_METADATA_TOKEN_MAX_ATTEMPTS)"
+    sleep "$attempt"
+  done
+
+  log_error "Failed to get IMDSv2 token after $EC2_METADATA_TOKEN_MAX_ATTEMPTS attempts"
+  return 1
+}
+
+# Get dynamic instance metadata (includes region, account-id, etc.)
+function get_instance_dynamic_metadata {
+  local token=""
+  local -a token_header=()
+
+  token=$(get_instance_metadata_token)
+  token_header=(--header "X-aws-ec2-metadata-token: $token")
+
+  log_info "Looking up dynamic instance metadata"
+  curl --silent --show-error --location --fail "${token_header[@]}" "$EC2_DYNAMIC_METADATA_URL"
+}
+
+# Get the value of the given tag from EC2 instance tags
 function get_instance_tag_value {
   local -r key="$1"
+  local instance_id=$(get_instance_metadata_value "instance-id")
+  local region=$(get_instance_region)
 
-  log_info "Looking up Instance Tag value for key \"$key\""
-  # This requires instance profile with permission to describe tags
-  # Using the instance-id from metadata to find the tags
-  aws ec2 describe-tags --filters "Name=resource-id,Values=$(get_instance_id)" "Name=key,Values=$key" --query "Tags[0].Value" --output text
+  log_info "Looking up EC2 tag value for key \"$key\""
+  aws ec2 describe-tags --region "$region" --filters "Name=resource-id,Values=$instance_id" "Name=key,Values=$key" --query 'Tags[0].Value' --output text 2>/dev/null || echo ""
 }
 
-# Get the value of a custom metadata tag for the EC2 instance
+# E2B-on-AWS addition (not in upstream): read a "custom metadata" key from EC2
+# tags with a sane fallback. Upstream reads cluster-size straight from
+# get_instance_tag_value, which returns "" when the tag is absent — and our
+# nodes carry no cluster-size tag, so bootstrap_expect would end up blank and
+# the Consul servers would never bootstrap. Defaults to 3, the server count in
+# locals.clusters.server.
 function get_instance_custom_metadata_value {
   local -r key="$1"
 
@@ -126,35 +173,28 @@ function get_instance_custom_metadata_value {
   fi
 }
 
-# Get the AWS account ID
-function get_aws_account_id {
-  log_info "Looking up AWS Account ID"
-  aws sts get-caller-identity --query "Account" --output text
-}
-
 # Get the AWS Region in which this EC2 Instance currently resides
 function get_instance_region {
   log_info "Looking up Region of the current EC2 Instance"
+  get_instance_dynamic_metadata | jq -r '.region'
+}
 
-  # Extract region from availability zone (e.g., us-east-1a -> us-east-1)
-  get_instance_metadata_value "meta-data/placement/availability-zone" | sed 's/[a-z]$//'
+# Get the availability zone of the current EC2 Instance
+function get_instance_zone {
+  log_info "Looking up Availability Zone of the current EC2 Instance"
+  get_instance_metadata_value "placement/availability-zone"
 }
 
 # Get the ID of the current EC2 Instance
 function get_instance_name {
   log_info "Looking up current EC2 Instance ID"
-  get_instance_metadata_value "meta-data/instance-id"
-}
-
-# Get the ID of the current EC2 Instance (alternative name)
-function get_instance_id {
-  get_instance_metadata_value "meta-data/instance-id"
+  get_instance_metadata_value "instance-id"
 }
 
 # Get the IP Address of the current EC2 Instance
 function get_instance_ip_address {
   log_info "Looking up EC2 Instance IP Address"
-  get_instance_metadata_value "meta-data/local-ipv4"
+  get_instance_metadata_value "local-ipv4"
 }
 
 function split_by_lines {
@@ -172,7 +212,7 @@ function generate_consul_config {
   local -r config_dir="${3}"
   local -r user="${4}"
   local -r cluster_tag_name="${5}"
-  local -r cluster_size_instance_metadata_key_name="${6}"
+  local -r cluster_tag_value="${6}"
   local -r datacenter="${7}"
   local -r enable_gossip_encryption="${8}"
   local -r gossip_encryption_key="${9}"
@@ -194,26 +234,42 @@ function generate_consul_config {
   local -ar recursors=("$@")
 
   local instance_id=""
+  local instance_name=""
   local instance_ip_address=""
+  local instance_region=""
   local ui="false"
 
-  instance_id=$(get_instance_id)
   instance_ip_address=$(get_instance_ip_address)
-  # Configure Cloud Auto Join. See https://www.consul.io/docs/install/cloud-auto-join#amazon-ec2 for more info.
+  instance_name=$(get_instance_name)
+  instance_region=$(get_instance_region)
+
+  # Configure Cloud Auto Join for AWS EC2. See https://developer.hashicorp.com/consul/docs/install/cloud-auto-join#amazon-ec2
+  #
+  # E2B-on-AWS deviation from upstream — the ONE functional change grafted onto
+  # this otherwise-verbatim 91f3173ae AWS script. All four node pools
+  # (server/client/api/build) must join ONE Consul cluster, so retry_join keys
+  # on a shared tag ec2-e2b-key=<prefix>, where <prefix> is derived from the
+  # per-pool --cluster-tag-name ("<prefix>-<type>-cluster"). Upstream keys on
+  # cluster-tag-name/cluster-tag-value directly; we never pass
+  # --cluster-tag-value and each pool's --cluster-tag-name differs, so the
+  # upstream form would split the pools into separate clusters and none would
+  # form. terraform tags every node with ec2-e2b-key=<prefix>. Do NOT revert.
   local retry_join_json=""
   if [[ -z "$cluster_tag_name" ]]; then
     log_warn "The --cluster-tag-name property is empty. Will not automatically try to form a cluster based on Cluster Tag Name."
   else
-    # Get region from instance metadata
     local aws_region=$(get_instance_region)
-    # Get prefix from cluster_tag_name (e.g. e2b-us-east-1)
-    local prefix=${cluster_tag_name%-*}
+    local prefix=${cluster_tag_name%-*-cluster}
+    if [[ -z "$prefix" || "$prefix" == *-cluster ]]; then
+      log_error "Could not derive deployment prefix from cluster tag name '$cluster_tag_name'; expected '<prefix>-<type>-cluster'"
+      exit 1
+    fi
     retry_join_json=$(
       cat <<EOF
-"retry_join": ["provider=aws region=$aws_region tag_key=ec2-e2b-key tag_value=ec2-e2b-value"],
+"retry_join": ["provider=aws region=$aws_region tag_key=ec2-e2b-key tag_value=$prefix"],
 EOF
     )
-    log_info "Configuring auto-join with tag: $cluster_tag_name"
+    log_info "Configuring auto-join with tag: ec2-e2b-key=$prefix"
   fi
 
   local recursors_config=""
@@ -229,11 +285,14 @@ EOF
   if [[ "$server" == "true" ]]; then
     local cluster_size=""
 
-    cluster_size=$(get_instance_custom_metadata_value "$cluster_size_instance_metadata_key_name")
+    # E2B-on-AWS deviation: our nodes carry no "cluster-size" EC2 tag, so read
+    # via get_instance_custom_metadata_value, which falls back to 3 (the server
+    # count) instead of the empty string upstream's get_instance_tag_value would
+    # return — a blank bootstrap_expect would keep Consul from bootstrapping.
+    cluster_size=$(get_instance_custom_metadata_value "$CLUSTER_SIZE_INSTANCE_METADATA_KEY_NAME")
 
     bootstrap_expect="\"bootstrap_expect\": $cluster_size,"
     ui="true"
-    log_info "Configuring Consul as a server in a cluster with expected size: $cluster_size"
   fi
 
   local autopilot_configuration
@@ -300,7 +359,7 @@ EOF
   $bootstrap_expect
   "client_addr": "0.0.0.0",
   "datacenter": "$datacenter",
-  "node_name": "$instance_id",
+  "node_name": "$instance_name",
   "leave_on_terminate": true,
   "skip_leave_on_interrupt": true,
   $recursors_config
@@ -404,7 +463,7 @@ function bootstrap {
       log_info "Bootstrapping Consul"
       echo "${consul_token}" >/tmp/consul.token
       consul acl bootstrap /tmp/consul.token
-      # rm /tmp/consul.token
+      rm /tmp/consul.token
 
       break
     fi
@@ -424,7 +483,8 @@ function setup_dns_resolving {
   local consul_token="$1"
   local dns_request_token="$2"
 
-  until consul info -token="${consul_token}" >/dev/null 2>&1; do
+  until consul info -token="${consul_token}" > /dev/null 2>&1;
+  do
     log_info "Waiting for Consul to start"
     sleep 1
   done
@@ -451,12 +511,13 @@ service_prefix "" {
   policy = "write"
 }
 EOF
-    consul acl policy create -name "dns-request-policy" -rules @dns-request-policy.hcl -token="${consul_token}"
-    consul acl policy create -name "register-service-policy" -rules @register-service-policy.hcl -token="${consul_token}"
-    consul acl token create -secret "${dns_request_token}" -description "Client Token" -policy-name "dns-request-policy" -policy-name "register-service-policy" -token="${consul_token}"
-    rm dns-request-policy.hcl
-    rm register-service-policy.hcl
+      consul acl policy create -name "dns-request-policy" -rules @dns-request-policy.hcl -token="${consul_token}"
+      consul acl policy create -name "register-service-policy" -rules @register-service-policy.hcl -token="${consul_token}"
+      consul acl token create -secret "${dns_request_token}" -description "Client Token" -policy-name "dns-request-policy" -policy-name "register-service-policy" -token="${consul_token}"
+      rm dns-request-policy.hcl
+      rm register-service-policy.hcl
   fi
+
 
   consul acl set-agent-token -token="${consul_token}" default "${dns_request_token}"
   log_info "Client token set"
@@ -475,7 +536,7 @@ function get_owner_home_dir {
   home_dir=$(sudo su - $user -c 'echo $HOME')
 
   if [[ "$home_dir" == "/" ]]; then
-    log_error "No \$HOME directory is set for user $user. This may cause unpredictable behavior with Consul in GCP. Exiting."
+    log_error "No \$HOME directory is set for user $user. This may cause unpredictable behavior with Consul. Exiting."
     exit 1
   fi
 
@@ -492,6 +553,7 @@ function run {
   local bin_dir=""
   local user=""
   local cluster_tag_name=""
+  local cluster_tag_value=""
   local datacenter=""
   local upgrade_version_tag=""
   local enable_gossip_encryption="false"
@@ -524,6 +586,11 @@ function run {
     --consul-token)
       assert_not_empty "$key" "$2"
       consul_token="$2"
+      shift
+      ;;
+    --cluster-tag-value)
+      assert_not_empty "$key" "$2"
+      cluster_tag_value="$2"
       shift
       ;;
     --config-dir)
@@ -709,7 +776,7 @@ function run {
       "$config_dir" \
       "$user" \
       "$cluster_tag_name" \
-      "$CLUSTER_SIZE_INSTANCE_METADATA_KEY_NAME" \
+      "$cluster_tag_value" \
       "$datacenter" \
       "$enable_gossip_encryption" \
       "$gossip_encryption_key" \

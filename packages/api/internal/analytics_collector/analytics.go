@@ -1,6 +1,7 @@
 package analyticscollector
 
 import (
+	"context"
 	"log"
 	"net/http"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/e2b-dev/infra/packages/api/internal/utils"
+	"github.com/e2b-dev/infra/packages/shared/pkg/logger"
 )
 
 const (
@@ -20,18 +22,23 @@ const (
 
 	infraVersionKey = "infra_version"
 	infraVersion    = "v1"
+
+	// duplicates the team group key: PostHog is not promoting $groups.team to $group_0
+	teamIDKey = "team_id"
+
+	jsSDKUserAgentPrefix     = "e2b-js-sdk/"
+	pythonSDKUserAgentPrefix = "e2b-python-sdk/"
 )
 
 type PosthogClient struct {
 	client posthog.Client
 }
 
-func NewPosthogClient() (*PosthogClient, error) {
-	posthogAPIKey := os.Getenv("POSTHOG_API_KEY")
+func NewPosthogClient(ctx context.Context, posthogAPIKey string) (*PosthogClient, error) {
 	posthogLogger := posthog.StdLogger(log.New(os.Stderr, "posthog ", log.LstdFlags))
 
 	if strings.TrimSpace(posthogAPIKey) == "" {
-		zap.L().Info("No Posthog API key provided, silencing logs")
+		logger.L().Info(ctx, "No Posthog API key provided, silencing logs")
 
 		writer := &utils.NoOpWriter{}
 		posthogLogger = posthog.StdLogger(log.New(writer, "posthog ", log.LstdFlags))
@@ -44,7 +51,7 @@ func NewPosthogClient() (*PosthogClient, error) {
 		Logger:    posthogLogger,
 	})
 	if err != nil {
-		zap.L().Fatal("error initializing Posthog client", zap.Error(err))
+		logger.L().Fatal(ctx, "error initializing Posthog client", zap.Error(err))
 	}
 
 	return &PosthogClient{
@@ -56,7 +63,7 @@ func (p *PosthogClient) Close() error {
 	return p.client.Close()
 }
 
-func (p *PosthogClient) IdentifyAnalyticsTeam(teamID string, teamName string) {
+func (p *PosthogClient) IdentifyAnalyticsTeam(ctx context.Context, teamID string, teamName string) {
 	err := p.client.Enqueue(posthog.GroupIdentify{
 		Type: teamGroup,
 		Key:  teamID,
@@ -66,33 +73,33 @@ func (p *PosthogClient) IdentifyAnalyticsTeam(teamID string, teamName string) {
 	},
 	)
 	if err != nil {
-		zap.L().Error("error when setting group property in Posthog", zap.Error(err))
+		logger.L().Error(ctx, "error when setting group property in Posthog", zap.Error(err))
 	}
 }
 
-func (p *PosthogClient) CreateAnalyticsTeamEvent(teamID, event string, properties posthog.Properties) {
+func (p *PosthogClient) CreateAnalyticsTeamEvent(ctx context.Context, teamID, event string, properties posthog.Properties) {
 	err := p.client.Enqueue(posthog.Capture{
 		DistinctId: placeholderTeamGroupUser,
 		Event:      event,
-		Properties: properties.Set(infraVersionKey, infraVersion),
+		Properties: properties.Set(infraVersionKey, infraVersion).Set(teamIDKey, teamID),
 		Groups: posthog.NewGroups().
 			Set("team", teamID),
 	})
 	if err != nil {
-		zap.L().Error("error when sending event to Posthog", zap.Error(err))
+		logger.L().Error(ctx, "error when sending event to Posthog", zap.Error(err))
 	}
 }
 
-func (p *PosthogClient) CreateAnalyticsUserEvent(userID string, teamID string, event string, properties posthog.Properties) {
+func (p *PosthogClient) CreateAnalyticsUserEvent(ctx context.Context, userID string, teamID string, event string, properties posthog.Properties) {
 	err := p.client.Enqueue(posthog.Capture{
 		DistinctId: userID,
 		Event:      event,
-		Properties: properties.Set(infraVersionKey, infraVersion),
+		Properties: properties.Set(infraVersionKey, infraVersion).Set(teamIDKey, teamID),
 		Groups: posthog.NewGroups().
 			Set("team", teamID),
 	})
 	if err != nil {
-		zap.L().Error("error when sending event to Posthog", zap.Error(err))
+		logger.L().Error(ctx, "error when sending event to Posthog", zap.Error(err))
 	}
 }
 
@@ -110,5 +117,41 @@ func (p *PosthogClient) GetPackageToPosthogProperties(header *http.Header) posth
 		Set("sdk_runtime", header.Get("sdk_runtime")).
 		Set("system", header.Get("system"))
 
+	if userAgent := header.Get("User-Agent"); userAgent != "" {
+		properties = properties.Set("user_agent", userAgent)
+
+		if name, version, ok := integrationFromUserAgent(userAgent); ok {
+			properties = properties.
+				Set("integration", name).
+				Set("integration_version", version)
+		}
+	}
+
 	return properties
+}
+
+// integrationFromUserAgent extracts the integration wrapping the E2B SDK from
+// a User-Agent like "e2b-js-sdk/1.2.3 e2b-cli/1.0.5": the first "name/version"
+// token following an SDK token. Requiring the SDK token first prevents
+// misreading browser User-Agents (e.g. "Mozilla/5.0 ...") as integrations.
+func integrationFromUserAgent(userAgent string) (name, version string, ok bool) {
+	sawSDK := false
+
+	for token := range strings.FieldsSeq(userAgent) {
+		if strings.HasPrefix(token, jsSDKUserAgentPrefix) || strings.HasPrefix(token, pythonSDKUserAgentPrefix) {
+			sawSDK = true
+
+			continue
+		}
+
+		if !sawSDK {
+			continue
+		}
+
+		if name, version, found := strings.Cut(token, "/"); found && name != "" && version != "" {
+			return name, version, true
+		}
+	}
+
+	return "", "", false
 }

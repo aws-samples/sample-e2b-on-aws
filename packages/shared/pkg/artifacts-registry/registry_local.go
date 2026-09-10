@@ -15,16 +15,16 @@ func NewLocalArtifactsRegistry() (*LocalArtifactsRegistry, error) {
 	return &LocalArtifactsRegistry{}, nil
 }
 
-func (g *LocalArtifactsRegistry) Delete(ctx context.Context, templateId string, buildId string) error {
+func (g *LocalArtifactsRegistry) Delete(context.Context, string, string) error {
 	// for now, just assume local image can be deleted manually
 	return nil
 }
 
-func (g *LocalArtifactsRegistry) GetTag(ctx context.Context, templateId string, buildId string) (string, error) {
+func (g *LocalArtifactsRegistry) GetTag(_ context.Context, templateId string, buildId string) (string, error) {
 	return fmt.Sprintf("%s:%s", templateId, buildId), nil
 }
 
-func (g *LocalArtifactsRegistry) GetImage(ctx context.Context, templateId string, buildId string, platform containerregistry.Platform) (containerregistry.Image, error) {
+func (g *LocalArtifactsRegistry) GetImage(ctx context.Context, templateId string, buildId string, _ containerregistry.Platform) (containerregistry.Image, error) {
 	imageUrl, err := g.GetTag(ctx, templateId, buildId)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get image URL: %w", err)

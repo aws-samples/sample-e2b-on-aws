@@ -1,0 +1,17 @@
+[{*.yaml,*.yml}]
+indent_size = 2
+indent_style = space
+ij_yaml_spaces_within_braces = false
+ij_yaml_spaces_within_brackets = false
+
+[*.hcl]
+indent_size = 2
+indent_style = space
+
+[*.toml]
+indent_size = 2
+indent_style = space
+
+[*.ts]
+indent_size = 2
+indent_style = space

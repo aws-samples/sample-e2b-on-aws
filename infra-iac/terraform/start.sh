@@ -159,6 +159,15 @@ if [ -n "$CFNAZ2" ]; then
 else
     echo "Warning: CFNAZ2 not found in config file, cannot set aws_az2"
 fi
+
+# Extract CFNAZ3 value from the config file. Nomad job datacenters are built
+# from aws_az*, so a missing aws_az3 silently keeps AZ3 nodes unschedulable.
+CFNAZ3=$(grep "^CFNAZ3=" "$CONFIG_FILE" | cut -d'=' -f2)
+if [ -n "$CFNAZ3" ]; then
+    echo "aws_az3=${CFNAZ3}" >> "$CONFIG_FILE"
+else
+    echo "Warning: CFNAZ3 not found in config file, cannot set aws_az3"
+fi
 # Database credentials are stored in Secrets Manager (CFNDBCredentialSecretName in config file)
 # No DB parameters (host, port, user, password) written to config file
 
@@ -182,13 +191,36 @@ fi
 ADMIN_TOKEN=$(openssl rand -base64 32 | tr -dc 'a-zA-Z0-9!@#$%^&*()_+{}|:<>?=-' | head -c 30)
 echo "admin_token=${ADMIN_TOKEN}" >> "$CONFIG_FILE"
 
-# Get ECR token
-ECR_TOKEN=$(aws ecr get-login-password --region "$AWSREGION" 2>/dev/null)
-if [ -n "$ECR_TOKEN" ]; then
-    echo "ecr_token=${ECR_TOKEN}" >> "$CONFIG_FILE"
+# The SECRET_* keys written above are prefixed with the stack name, so the Nomad
+# job templates cannot reference them directly. Normalise the ones the jobs need
+# into stable lower-case keys, the same way nomad_acl_token is derived above.
+
+# template-manager: API_SECRET
+API_SECRET=$(grep -i "_API_SECRET=" "$CONFIG_FILE" | head -1 | cut -d'=' -f2-)
+if [ -n "$API_SECRET" ]; then
+    echo "api_secret=${API_SECRET}" >> "$CONFIG_FILE"
 else
-    echo "Warning: Failed to get ECR token"
+    echo "Warning: API secret not found in config file"
 fi
+
+# All services: LAUNCH_DARKLY_API_KEY. Blank is valid and means "use the
+# offline flag store", so an empty value is not an error.
+LAUNCH_DARKLY_API_KEY=$(grep -i "_LAUNCH_DARKLY_API_KEY=" "$CONFIG_FILE" | head -1 | cut -d'=' -f2-)
+echo "launch_darkly_api_key=${LAUNCH_DARKLY_API_KEY}" >> "$CONFIG_FILE"
+
+# api: VOLUME_TOKEN_SIGNING_KEY. Emitted as a plain (sensitive) Terraform
+# output rather than a Secrets Manager entry, so read it directly.
+VOLUME_TOKEN_KEY=$(terraform output -raw volume_token_key 2>/dev/null)
+if [ -n "$VOLUME_TOKEN_KEY" ]; then
+    echo "volume_token_key=${VOLUME_TOKEN_KEY}" >> "$CONFIG_FILE"
+else
+    echo "Warning: Failed to read volume_token_key from Terraform outputs"
+fi
+
+# ECR authentication is handled on the nodes by amazon-ecr-credential-helper
+# using their instance profile, so no ECR token is materialised here. The
+# bastion's own docker login happens in tools/build-and-upload.sh, right before
+# the images are pushed.
 
 # Extract CFNREDISNAME value from the config file
 CFNREDISNAME=$(grep "^CFNREDISNAME=" "$CONFIG_FILE" | cut -d'=' -f2)

@@ -3,16 +3,16 @@ package header
 import (
 	"fmt"
 	"os"
+	"slices"
 
-	"github.com/bits-and-blooms/bitset"
+	"github.com/RoaringBitmap/roaring/v2"
 	"github.com/google/uuid"
 )
 
-// Start, Length and SourceStart are in bytes of the data file
-// Length will be a multiple of BlockSize
-// The list of block mappings will be in order of increasing Start, covering the entire file
+// BuildMap maps a byte range in the block device to a region in a build's storage.
+// Offset, Length, and BuildStorageOffset are in bytes.
 type BuildMap struct {
-	// Offset defines which block of the current layer this mapping starts at
+	// Offset is the starting position of this range in the block device.
 	Offset             uint64
 	Length             uint64
 	BuildId            uuid.UUID
@@ -21,45 +21,48 @@ type BuildMap struct {
 
 func CreateMapping(
 	buildId *uuid.UUID,
-	dirty *bitset.BitSet,
+	dirty *roaring.Bitmap,
 	blockSize int64,
-) []*BuildMap {
-	var mappings []*BuildMap
-
-	var startBlock uint
-	var blockLength uint
+) []BuildMap {
+	var mappings []BuildMap
 	var buildStorageOffset uint64
 
-	for blockIdx, e := dirty.NextSet(0); e; blockIdx, e = dirty.NextSet(blockIdx + 1) {
-		if startBlock+blockLength == blockIdx {
-			blockLength++
-
-			continue
+	for start, endExcl := range dirty.Ranges() {
+		blockLength := int64(endExcl) - int64(start)
+		m := BuildMap{
+			Offset:             uint64(BlockOffset(int64(start), blockSize)),
+			BuildId:            *buildId,
+			Length:             uint64(BlockOffset(blockLength, blockSize)),
+			BuildStorageOffset: buildStorageOffset,
 		}
 
-		if blockLength > 0 {
-			m := &BuildMap{
-				Offset:             uint64(startBlock) * uint64(blockSize),
-				BuildId:            *buildId,
-				Length:             uint64(blockLength) * uint64(blockSize),
-				BuildStorageOffset: buildStorageOffset,
-			}
-
-			mappings = append(mappings, m)
-
-			buildStorageOffset += m.Length
-		}
-
-		startBlock = blockIdx
-		blockLength = 1
+		mappings = append(mappings, m)
+		buildStorageOffset += m.Length
 	}
 
-	if blockLength > 0 {
-		mappings = append(mappings, &BuildMap{
-			Offset:             uint64(startBlock) * uint64(blockSize),
+	return mappings
+}
+
+// createIdentityMapping is like CreateMapping but sets each range's
+// BuildStorageOffset equal to its device Offset instead of packing the ranges
+// contiguously. It is for a build whose data is addressed by absolute device
+// offset (e.g. a still-mapped memfd) rather than a compacted diff artifact —
+// used to build a provisional, local-only header while dedup is still running.
+func createIdentityMapping(
+	buildId *uuid.UUID,
+	dirty *roaring.Bitmap,
+	blockSize int64,
+) []BuildMap {
+	var mappings []BuildMap
+
+	for start, endExcl := range dirty.Ranges() {
+		blockLength := int64(endExcl) - int64(start)
+		off := uint64(BlockOffset(int64(start), blockSize))
+		mappings = append(mappings, BuildMap{
+			Offset:             off,
 			BuildId:            *buildId,
-			Length:             uint64(blockLength) * uint64(blockSize),
-			BuildStorageOffset: buildStorageOffset,
+			Length:             uint64(BlockOffset(blockLength, blockSize)),
+			BuildStorageOffset: off,
 		})
 	}
 
@@ -73,26 +76,26 @@ func CreateMapping(
 //
 // It returns a new set of mappings that covers the whole size.
 func MergeMappings(
-	baseMapping []*BuildMap,
-	diffMapping []*BuildMap,
-) []*BuildMap {
+	baseMapping []BuildMap,
+	diffMapping []BuildMap,
+) []BuildMap {
 	if len(diffMapping) == 0 {
 		return baseMapping
 	}
 
-	baseMappingCopy := make([]*BuildMap, len(baseMapping))
+	baseMappingCopy := make([]BuildMap, len(baseMapping))
 
 	copy(baseMappingCopy, baseMapping)
 
 	baseMapping = baseMappingCopy
 
-	mappings := make([]*BuildMap, 0)
+	mappings := make([]BuildMap, 0)
 
 	var baseIdx int
 	var diffIdx int
 
 	for baseIdx < len(baseMapping) && diffIdx < len(diffMapping) {
-		base := baseMapping[baseIdx]
+		base := &baseMapping[baseIdx]
 		diff := diffMapping[diffIdx]
 
 		if base.Length == 0 {
@@ -110,7 +113,7 @@ func MergeMappings(
 		// base is before diff and there is no overlap
 		// add base to the result, because it will not be overlapping by any diff
 		if base.Offset+base.Length <= diff.Offset {
-			mappings = append(mappings, base)
+			mappings = append(mappings, *base)
 
 			baseIdx++
 
@@ -144,15 +147,13 @@ func MergeMappings(
 			leftBaseLength := int64(diff.Offset) - int64(base.Offset)
 
 			if leftBaseLength > 0 {
-				leftBase := &BuildMap{
+				mappings = append(mappings, BuildMap{
 					Offset:  base.Offset,
 					Length:  uint64(leftBaseLength),
 					BuildId: base.BuildId,
 					// the build storage offset is the same as the base mapping
 					BuildStorageOffset: base.BuildStorageOffset,
-				}
-
-				mappings = append(mappings, leftBase)
+				})
 			}
 
 			mappings = append(mappings, diff)
@@ -163,14 +164,12 @@ func MergeMappings(
 			rightBaseLength := int64(base.Length) - rightBaseShift
 
 			if rightBaseLength > 0 {
-				rightBase := &BuildMap{
+				baseMapping[baseIdx] = BuildMap{
 					Offset:             base.Offset + uint64(rightBaseShift),
 					Length:             uint64(rightBaseLength),
 					BuildId:            base.BuildId,
 					BuildStorageOffset: base.BuildStorageOffset + uint64(rightBaseShift),
 				}
-
-				baseMapping[baseIdx] = rightBase
 			} else {
 				baseIdx++
 			}
@@ -190,14 +189,12 @@ func MergeMappings(
 			rightBaseLength := int64(base.Length) - rightBaseShift
 
 			if rightBaseLength > 0 {
-				rightBase := &BuildMap{
+				baseMapping[baseIdx] = BuildMap{
 					Offset:             base.Offset + uint64(rightBaseShift),
 					Length:             uint64(rightBaseLength),
 					BuildId:            base.BuildId,
 					BuildStorageOffset: base.BuildStorageOffset + uint64(rightBaseShift),
 				}
-
-				baseMapping[baseIdx] = rightBase
 			} else {
 				baseIdx++
 			}
@@ -211,14 +208,12 @@ func MergeMappings(
 			leftBaseLength := int64(diff.Offset) - int64(base.Offset)
 
 			if leftBaseLength > 0 {
-				leftBase := &BuildMap{
+				mappings = append(mappings, BuildMap{
 					Offset:             base.Offset,
 					Length:             uint64(leftBaseLength),
 					BuildId:            base.BuildId,
 					BuildStorageOffset: base.BuildStorageOffset,
-				}
-
-				mappings = append(mappings, leftBase)
+				})
 			}
 
 			baseIdx++
@@ -236,13 +231,39 @@ func MergeMappings(
 }
 
 // NormalizeMappings joins adjacent mappings that have the same buildId.
-func NormalizeMappings(mappings []*BuildMap) []*BuildMap {
-	for i := 0; i < len(mappings); i++ {
-		if i+1 < len(mappings) && mappings[i].BuildId == mappings[i+1].BuildId {
-			mappings[i].Length += mappings[i+1].Length
-			mappings = append(mappings[:i+1], mappings[i+2:]...)
+//
+// Same-build runs are only merged when their storage is contiguous, i.e.
+// mp.BuildStorageOffset == current end. The read path resolves bytes as
+// BuildStorageOffset + shift, so merging a run across a storage discontinuity
+// would silently remap reads to the wrong bytes. Empty (uuid.Nil) regions are
+// served as zeros and never read from storage (see build.ReadAt), so their
+// storage offset is irrelevant and they always merge.
+//
+// Clone the result so the oversized intermediate (cap == len(input)) is
+// released; the merged Header is cached for up to 25h. slices.Clip will
+// not do — it only retightens cap on the same backing array.
+func NormalizeMappings(mappings []BuildMap) []BuildMap {
+	if len(mappings) == 0 {
+		return nil
+	}
+
+	result := make([]BuildMap, 0, len(mappings))
+
+	current := mappings[0]
+
+	for i := 1; i < len(mappings); i++ {
+		mp := mappings[i]
+		storageContiguous := mp.BuildId == ignoreBuildID ||
+			mp.BuildStorageOffset == current.BuildStorageOffset+current.Length
+		if mp.BuildId == current.BuildId && storageContiguous {
+			current.Length += mp.Length
+		} else {
+			result = append(result, current)
+			current = mp
 		}
 	}
 
-	return mappings
+	result = append(result, current)
+
+	return slices.Clone(result)
 }

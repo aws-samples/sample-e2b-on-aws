@@ -44,18 +44,19 @@ sudo sysctl -p
 
 # These variables are passed in via Terraform template interpolation
 aws s3 cp "s3://${E2B_BUCKET}/cluster-setup/run-consul-${RUN_CONSUL_FILE_HASH}.sh" /opt/consul/bin/run-consul.sh
-aws s3 cp "s3://${E2B_BUCKET}/cluster-setup/run-api-nomad-${RUN_NOMAD_FILE_HASH}.sh" /opt/nomad/bin/run-nomad.sh
+aws s3 cp "s3://${E2B_BUCKET}/cluster-setup/run-nomad-${RUN_NOMAD_FILE_HASH}.sh" /opt/nomad/bin/run-nomad.sh
 chmod +x /opt/consul/bin/run-consul.sh /opt/nomad/bin/run-nomad.sh
 
 mkdir -p /root/docker
 touch /root/docker/config.json
-# export ECR_AUTH_TOKEN=$(aws ecr get-authorization-token --output text --query 'authorizationData[].authorizationToken')
+# Delegate ECR auth to amazon-ecr-credential-helper (installed in the AMI), which
+# mints tokens from the instance profile on demand instead of baking a 12-hour
+# token into this file at boot. The api and client-proxy jobs pull from ECR, so a
+# stale token here previously broke every restart past the 12-hour mark.
 cat <<EOF >/root/docker/config.json
 {
-    "auths": {
-        "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com": {
-            "auth": "$(aws ecr get-authorization-token --output text --query 'authorizationData[].authorizationToken')"
-        }
+    "credHelpers": {
+        "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com": "ecr-login"
     }
 }
 EOF
@@ -79,7 +80,9 @@ systemctl restart systemd-resolved
     --gossip-encryption-key "${CONSUL_GOSSIP_ENCRYPTION_KEY}" \
     --dns-request-token "${CONSUL_DNS_REQUEST_TOKEN}" &
 
-/opt/nomad/bin/run-nomad.sh --consul-token "${CONSUL_TOKEN}" &
+# One shared upstream run-nomad.sh for every pool, so --client and the pool name
+# are explicit flags. The retired run-api-nomad.sh hardcoded both.
+/opt/nomad/bin/run-nomad.sh --client --node-pool "api" --consul-token "${CONSUL_TOKEN}" &
 
 # Download and execute custom script if provided
 aws s3 cp "s3://${E2B_BUCKET}/cluster-setup/run-custom-script-${RUN_CUSTOM_SCRIPT_FILE_HASH}.sh" /opt/run-custom-script.sh

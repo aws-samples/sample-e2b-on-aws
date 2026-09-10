@@ -2,6 +2,7 @@ package filesystem
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,7 +12,6 @@ import (
 	"github.com/e2b-dev/fsnotify"
 	"github.com/rs/zerolog"
 
-	"github.com/e2b-dev/infra/packages/envd/internal/logs"
 	"github.com/e2b-dev/infra/packages/envd/internal/permissions"
 	rpc "github.com/e2b-dev/infra/packages/envd/internal/services/spec/filesystem"
 	"github.com/e2b-dev/infra/packages/envd/internal/utils"
@@ -21,46 +21,64 @@ import (
 type FileWatcher struct {
 	watcher *fsnotify.Watcher
 	Events  []*rpc.FilesystemEvent
-	ctx     context.Context
+	cancel  func()
 	Error   error
+
+	// Config captured so the watcher can be re-armed after an envd
+	// live-upgrade. WatchPath is the already-resolved
+	// absolute path.
+	WatchPath        string
+	Recursive        bool
+	IncludeEntryInfo bool
 
 	Lock sync.Mutex
 }
 
-func CreateFileWatcher(watchPath string, recursive bool, operationID string, logger *zerolog.Logger) (*FileWatcher, error) {
+func CreateFileWatcher(ctx context.Context, logger *zerolog.Logger, watchPath string, recursive bool, includeEntryInfo bool) (*FileWatcher, error) {
 	w, err := fsnotify.NewWatcher()
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("error creating watcher: %w", err))
 	}
 
+	// We don't want to cancel the context when the request is finished
+	ctx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+
 	err = w.Add(utils.FsnotifyPath(watchPath, recursive))
 	if err != nil {
 		_ = w.Close()
+		cancel()
+
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("error adding path %s to watcher: %w", watchPath, err))
 	}
 	fw := &FileWatcher{
-		watcher: w,
-		ctx:     context.Background(),
-		Events:  []*rpc.FilesystemEvent{},
-		Error:   nil,
+		watcher:          w,
+		cancel:           cancel,
+		Events:           []*rpc.FilesystemEvent{},
+		Error:            nil,
+		WatchPath:        watchPath,
+		Recursive:        recursive,
+		IncludeEntryInfo: includeEntryInfo,
 	}
 
 	go func() {
 		for {
 			select {
-			case <-fw.ctx.Done():
+			case <-ctx.Done():
 				return
 			case chErr, ok := <-w.Errors:
 				if !ok {
-					fw.Error = connect.NewError(connect.CodeInternal, fmt.Errorf("watcher error channel closed"))
+					fw.setError(connect.NewError(connect.CodeInternal, errors.New("watcher error channel closed")))
+
 					return
 				}
 
-				fw.Error = connect.NewError(connect.CodeInternal, fmt.Errorf("watcher error: %w", chErr))
+				fw.setError(connect.NewError(connect.CodeInternal, fmt.Errorf("watcher error: %w", chErr)))
+
 				return
 			case e, ok := <-w.Events:
 				if !ok {
-					fw.Error = connect.NewError(connect.CodeInternal, fmt.Errorf("watcher event channel closed"))
+					fw.setError(connect.NewError(connect.CodeInternal, errors.New("watcher event channel closed")))
+
 					return
 				}
 
@@ -90,34 +108,23 @@ func CreateFileWatcher(watchPath string, recursive bool, operationID string, log
 				for _, op := range ops {
 					name, nameErr := filepath.Rel(watchPath, e.Name)
 					if nameErr != nil {
-						fw.Error = connect.NewError(connect.CodeInternal, fmt.Errorf("error getting relative path: %w", nameErr))
+						fw.setError(connect.NewError(connect.CodeInternal, fmt.Errorf("error getting relative path: %w", nameErr)))
+
 						return
 					}
 
-					filesystemEvent := &rpc.WatchDirResponse_Filesystem{
-						Filesystem: &rpc.FilesystemEvent{
-							Name: name,
-							Type: op,
-						},
+					filesystemEvent := &rpc.FilesystemEvent{
+						Name: name,
+						Type: op,
 					}
 
-					event := &rpc.WatchDirResponse{
-						Event: filesystemEvent,
+					if includeEntryInfo && opCarriesEntry(op) {
+						filesystemEvent.Entry = eventEntryInfo(logger, e.Name)
 					}
 
 					fw.Lock.Lock()
-					fw.Events = append(fw.Events, &rpc.FilesystemEvent{
-						Name: name,
-						Type: op,
-					})
+					fw.Events = append(fw.Events, filesystemEvent)
 					fw.Lock.Unlock()
-
-					logger.
-						Debug().
-						Str("event_type", "filesystem_event").
-						Str(string(logs.OperationIDKey), operationID).
-						Interface("filesystem_event", event).
-						Msg("Streaming filesystem event")
 				}
 			}
 		}
@@ -128,16 +135,25 @@ func CreateFileWatcher(watchPath string, recursive bool, operationID string, log
 
 func (fw *FileWatcher) Close() {
 	_ = fw.watcher.Close()
-	fw.ctx.Done()
+	fw.cancel()
+}
+
+// setError records a terminal watcher error. Guarded by Lock so it is safe against
+// concurrent GetWatcherEvents reads.
+func (fw *FileWatcher) setError(err error) {
+	fw.Lock.Lock()
+	defer fw.Lock.Unlock()
+
+	fw.Error = err
 }
 
 func (s Service) CreateWatcher(ctx context.Context, req *connect.Request[rpc.CreateWatcherRequest]) (*connect.Response[rpc.CreateWatcherResponse], error) {
-	u, err := permissions.GetAuthUser(ctx)
+	u, err := permissions.GetAuthUser(ctx, s.defaults.User)
 	if err != nil {
 		return nil, err
 	}
 
-	watchPath, err := permissions.ExpandAndResolve(req.Msg.GetPath(), u)
+	watchPath, err := permissions.ExpandAndResolve(req.Msg.GetPath(), u, s.defaults.Workdir)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
@@ -155,14 +171,27 @@ func (s Service) CreateWatcher(ctx context.Context, req *connect.Request[rpc.Cre
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("path %s not a directory: %w", watchPath, err))
 	}
 
+	// Check if path is on a network filesystem mount
+	if !req.Msg.GetAllowNetworkMounts() {
+		isNetworkMount, err := IsPathOnNetworkMount(watchPath)
+		if err != nil {
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("error checking mount status: %w", err))
+		}
+		if isNetworkMount {
+			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("cannot watch path on network filesystem: %s", watchPath))
+		}
+	}
+
 	watcherId := "w" + id.Generate()
 
-	w, err := CreateFileWatcher(watchPath, req.Msg.Recursive, watcherId, s.logger)
+	w, err := CreateFileWatcher(ctx, s.logger, watchPath, req.Msg.GetRecursive(), req.Msg.GetIncludeEntry())
 	if err != nil {
 		return nil, err
 	}
 
+	s.watchersMu.Lock()
 	s.watchers.Store(watcherId, w)
+	s.watchersMu.Unlock()
 
 	return connect.NewResponse(&rpc.CreateWatcherResponse{
 		WatcherId: watcherId,
@@ -177,12 +206,21 @@ func (s Service) GetWatcherEvents(_ context.Context, req *connect.Request[rpc.Ge
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("watcher with id %s not found", watcherId))
 	}
 
+	// Serialize the drain against a live-upgrade handover snapshot
+	// (ExportWatchersHold holds watchersMu across the execve). Draining a
+	// watcher's events in that window would consume events the snapshot already
+	// carried, so the re-armed watcher would re-deliver them after the swap.
+	// watchersMu is taken before w.Lock, matching Export/CreateWatcher ordering.
+	s.watchersMu.Lock()
+	defer s.watchersMu.Unlock()
+
+	w.Lock.Lock()
+	defer w.Lock.Unlock()
+
 	if w.Error != nil {
 		return nil, w.Error
 	}
 
-	w.Lock.Lock()
-	defer w.Lock.Unlock()
 	events := w.Events
 	w.Events = []*rpc.FilesystemEvent{}
 
@@ -200,7 +238,9 @@ func (s Service) RemoveWatcher(_ context.Context, req *connect.Request[rpc.Remov
 	}
 
 	w.Close()
+	s.watchersMu.Lock()
 	s.watchers.Delete(watcherId)
+	s.watchersMu.Unlock()
 
 	return connect.NewResponse(&rpc.RemoveWatcherResponse{}), nil
 }

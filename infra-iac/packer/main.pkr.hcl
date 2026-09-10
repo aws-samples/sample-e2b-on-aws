@@ -9,7 +9,7 @@ packer {
 }
 
 source "amazon-ebs" "orch" {
-  ami_name      = "e2b-ubuntu-ami-${formatdate("YYYY-MM-DD-hh-mm-ss", timestamp())}"
+  ami_name      = "${var.prefix}-orch-${formatdate("YYYY-MM-DD-hh-mm-ss", timestamp())}"
   instance_type = var.architecture == "x86_64" ? "t3.xlarge" : "t4g.xlarge"
   region        = var.aws_region
   vpc_id        = var.vpc_id
@@ -121,7 +121,21 @@ build {
     ]
     inline = [
       "sudo -E apt-get update",
-      "sudo -E apt-get install -y unzip jq net-tools qemu-utils make build-essential openssh-client openssh-server", # TODO: openssh-server is updated to prevent security vulnerabilities
+      # nvme-cli and nfs-common match upstream's shared cluster disk image.
+      "sudo -E apt-get install -y unzip jq net-tools qemu-utils make build-essential openssh-client openssh-server nvme-cli nfs-common", # TODO: openssh-server is updated to prevent security vulnerabilities
+    ]
+  }
+
+  # ECR credential helper, so nodes authenticate to ECR through their instance
+  # profile. Without it the deploy chain has to mint a 12-hour ECR token, write
+  # it to /root/docker/config.json, and re-run the whole chain once it expires.
+  provisioner "shell" {
+    environment_vars = [
+      "DEBIAN_FRONTEND=noninteractive",
+      "DEBCONF_NONINTERACTIVE_SEEN=true"
+    ]
+    inline = [
+      "sudo -E apt-get install -y amazon-ecr-credential-helper",
     ]
   }
   

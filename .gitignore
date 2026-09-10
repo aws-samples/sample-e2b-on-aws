@@ -1,0 +1,44 @@
+.terraform
+.idea
+.DS_Store
+.env*
+!.env.aws.template
+!.env.gcp.template
+!/.envrc
+.last_used_env
+.tfplan.*
+*.tfvars
+terraform.tfstate
+terraform.tfstate.backup
+**/.tfplan.*
+tests/periodic-test/build-template/e2b.toml
+.air
+go.work.sum
+.infisical.json
+.vscode/mise-tools
+/packages/fc-kernels
+/packages/fc-versions
+**/bin/
+
+# Compiled binaries that sit at a package root rather than under bin/, so the
+# **/bin/ rule above does not catch them. packages/local-dev/local-dev was 23 MB
+# of committed build output, and every image build ships it: the service
+# Dockerfiles use `-f ./Dockerfile ..`, so the whole packages/ tree is the build
+# context. The package itself is deleted here (see HANDOFF.md §2); this keeps the
+# binary out if a future upstream sync brings it back.
+/packages/local-dev/local-dev
+
+# Local deployment inputs (never committed)
+.local/
+
+# Copies of the bastion's /opt/config.properties. One was committed once with a
+# live database connection string in it; nothing in the tree is ever named this.
+config.properties
+
+# Session handoff notes and the project operating manual. Both carry live
+# deployment identifiers (account, stack, bastion instance, domain, buckets)
+# and are specific to one environment, so they stay on the dev machine and the
+# bastion rather than in a public repository.
+/HANDOFF.md
+/CLAUDE.md
+__pycache__/

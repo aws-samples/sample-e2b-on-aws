@@ -54,10 +54,13 @@ Metadata:
         Parameters:
           - ExistingE2BBucketName
           - ExistingLokiBucketName
+          - ExistingTemplatesBucketName
+          - ExistingBuildCacheBucketName
       - Label:
           default: Custom Configuration
         Parameters:
           - CFNCustomScriptUrl
+          - RepoBranch
 
 # ===================================================================================================
 # Parameters - Input values required for the E2B infrastructure deployment
@@ -167,11 +170,33 @@ Parameters:
     Default: ""
     Description: "Name of an existing Loki log storage S3 bucket. Leave empty to auto-create."
 
+  # Dedicated buckets required by the orchestrator storage layer.
+  # Upstream removed TEMPLATE_BUCKET_PREFIX, so these roles cannot share the
+  # unified E2B bucket via key prefixes any more - each needs its own bucket.
+  ExistingTemplatesBucketName:
+    Type: String
+    Default: ""
+    Description: "Name of an existing sandbox template S3 bucket (TEMPLATE_BUCKET_NAME). Leave empty to auto-create."
+
+  ExistingBuildCacheBucketName:
+    Type: String
+    Default: ""
+    Description: "Name of an existing template build cache S3 bucket (BUILD_CACHE_BUCKET_NAME). Leave empty to auto-create."
+
   # Custom Script Configuration
   CFNCustomScriptUrl:
     Type: String
     Default: ""
     Description: "URL of a custom script to run on instances after startup (S3 or HTTP). Leave empty to skip."
+
+  # Source Configuration
+  RepoBranch:
+    Type: String
+    Default: main
+    Description: >-
+      Git branch of aws-samples/sample-e2b-on-aws that the bastion checks out.
+      Leaving the branch to the remote default would put the bastion on a
+      different code layer than the one this stack was built from.
 
 # ===================================================================================================
 # Conditions - Conditional logic for resource creation
@@ -185,6 +210,11 @@ Conditions:
   HasExternalLokiBucket: !Not [!Equals [!Ref ExistingLokiBucketName, ""]]
   CreateE2BBucket: !Equals [!Ref ExistingE2BBucketName, ""]
   CreateLokiBucket: !Equals [!Ref ExistingLokiBucketName, ""]
+  HasExternalTemplatesBucket: !Not [!Equals [!Ref ExistingTemplatesBucketName, ""]]
+  HasExternalBuildCacheBucket: !Not [!Equals [!Ref ExistingBuildCacheBucketName, ""]]
+  CreateTemplatesBucket: !Equals [!Ref ExistingTemplatesBucketName, ""]
+  CreateBuildCacheBucket: !Equals [!Ref ExistingBuildCacheBucketName, ""]
+  IsPrivateAccess: !Equals [!Ref PublicAccess, private]
 
 # ===================================================================================================
 # Resources - AWS resources to be provisioned for the E2B infrastructure
@@ -396,6 +426,11 @@ Resources:
                   - "arn:aws:s3:::terraform-*/*"
                   - "arn:aws:s3:::software-*"
                   - "arn:aws:s3:::software-*/*"
+                  # Covers every bucket this stack creates, including the
+                  # templates / build-cache buckets whose names do not
+                  # necessarily contain "e2b".
+                  - !Sub "arn:aws:s3:::${AWS::StackName}-*"
+                  - !Sub "arn:aws:s3:::${AWS::StackName}-*/*"
               - Sid: SecretsManagerAccess
                 Effect: Allow
                 Action:
@@ -590,6 +625,29 @@ Resources:
                   - ssm:DeleteParameter
                   - ssm:DescribeParameters
                 Resource: !Sub "arn:aws:ssm:*:${AWS::AccountId}:parameter/*e2b*"
+              # Run Command against the cluster nodes. The bastion drives the
+              # deploy chain but has no SSH key for the nodes, so this is the
+              # only way to read /var/log/cloud-init-output.log or a failing
+              # nomad/consul unit when a node does not join the cluster.
+              - Sid: SSMRunCommandInstances
+                Effect: Allow
+                Action:
+                  - ssm:SendCommand
+                Resource: !Sub "arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:instance/*"
+                Condition:
+                  StringLike:
+                    ssm:resourceTag/Name: !Sub "${AWS::StackName}-*"
+              - Sid: SSMRunCommandDocument
+                Effect: Allow
+                Action:
+                  - ssm:SendCommand
+                Resource: !Sub "arn:aws:ssm:${AWS::Region}::document/AWS-RunShellScript"
+              - Sid: SSMRunCommandResults
+                Effect: Allow
+                Action:
+                  - ssm:GetCommandInvocation
+                  - ssm:ListCommandInvocations
+                Resource: "*"
               - Sid: STSAccess
                 Effect: Allow
                 Action:
@@ -629,7 +687,177 @@ Resources:
           ValidationDomain: !Ref BaseDomain
 
   # ------------------------------------------------------------------------------------------------
-  # S3 Buckets - Unified E2B bucket and Loki log storage bucket
+  # Application Load Balancer
+  #
+  # Deliberately owned by CloudFormation rather than Terraform. The wildcard
+  # certificate above lives for the life of the stack, but a Terraform-managed
+  # load balancer is destroyed and recreated by `terraform destroy` / `apply`,
+  # and each new one gets a different DNS name. That forced the wildcard DNS
+  # record to be re-pointed by hand after every rebuild - the one manual step
+  # left in an otherwise unattended deployment. Keeping the load balancer on the
+  # same lifecycle as the certificate makes the DNS record a one-time setup.
+  #
+  # Terraform still owns the autoscaling groups and attaches them to the target
+  # groups below through the ARNs exported in this stack's outputs.
+  # ------------------------------------------------------------------------------------------------
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for the E2B application load balancer
+      VpcId: !Ref ExistingVpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          Description: HTTP
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: HTTPS
+      SecurityGroupEgress:
+        - IpProtocol: "-1"
+          CidrIp: 0.0.0.0/0
+          Description: Allow all outbound traffic
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-alb-sg"
+
+  ApplicationLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub "${AWS::StackName}-alb"
+      Type: application
+      Scheme: !If [IsPrivateAccess, internal, internet-facing]
+      SecurityGroups:
+        - !GetAtt ALBSecurityGroup.GroupId
+      Subnets: !If
+        - IsPrivateAccess
+        - [!Ref ExistingPrivateSubnet1Id, !Ref ExistingPrivateSubnet2Id]
+        - [!Ref ExistingPublicSubnet1Id, !Ref ExistingPublicSubnet2Id]
+      LoadBalancerAttributes:
+        # Long enough that a paused sandbox request is not cut off mid-flight.
+        - Key: idle_timeout.timeout_seconds
+          Value: "120"
+        - Key: deletion_protection.enabled
+          Value: !If [IsProd, "true", "false"]
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-alb"
+
+  # Nomad server UI / API.
+  NomadServerTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub "${AWS::StackName}-nomad-server"
+      VpcId: !Ref ExistingVpcId
+      Port: 4646
+      Protocol: HTTP
+      HealthCheckProtocol: HTTP
+      HealthCheckPath: /ui/
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 2
+      Matcher:
+        HttpCode: "200"
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-nomad-server"
+
+  # E2B API.
+  E2BApiTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub "${AWS::StackName}-e2b-api"
+      VpcId: !Ref ExistingVpcId
+      Port: 50001
+      Protocol: HTTP
+      HealthCheckProtocol: HTTP
+      HealthCheckPath: /health
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 2
+      Matcher:
+        HttpCode: "200"
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-e2b-api"
+
+  # Sandbox traffic. Served on 3002, health-checked on 3001, matching the
+  # proxy / health port pair in nomad/origin/edge.hcl.
+  ClientProxyTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub "${AWS::StackName}-client-proxy"
+      VpcId: !Ref ExistingVpcId
+      Port: 3002
+      Protocol: HTTP
+      HealthCheckProtocol: HTTP
+      HealthCheckPort: "3001"
+      HealthCheckPath: /health
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 2
+      Matcher:
+        HttpCode: "200"
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-client-proxy"
+
+  # Sandbox subdomains are dynamic, so client-proxy is the catch-all default and
+  # the two fixed hostnames are matched by higher-priority rules.
+  ALBHttpsListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Port: 443
+      Protocol: HTTPS
+      SslPolicy: ELBSecurityPolicy-TLS13-1-2-2021-06
+      Certificates:
+        - CertificateArn: !Ref WildcardCertificate
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref ClientProxyTargetGroup
+
+  ALBApiListenerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn: !Ref ALBHttpsListener
+      Priority: 10
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref E2BApiTargetGroup
+      Conditions:
+        - Field: host-header
+          Values:
+            - !Sub "api.${BaseDomain}"
+
+  ALBNomadListenerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn: !Ref ALBHttpsListener
+      Priority: 30
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref NomadServerTargetGroup
+      Conditions:
+        - Field: host-header
+          Values:
+            - !Sub "nomad.${BaseDomain}"
+
+  # ------------------------------------------------------------------------------------------------
+  # S3 Buckets - Unified E2B bucket, Loki log storage, and the two dedicated
+  # orchestrator storage buckets (templates / build cache).
+  #
+  # The unified E2B bucket still serves everything addressed by our own boot
+  # scripts via key prefixes (fc-env-pipeline/, fc-kernels/, fc-versions/,
+  # fc-busybox/, software/, cluster-setup/). The template and build-cache roles
+  # are addressed by the Go storage layer instead, which no longer supports a
+  # key prefix, so they each require a dedicated bucket.
   # ------------------------------------------------------------------------------------------------
   E2BBucket:
     Type: AWS::S3::Bucket
@@ -648,6 +876,27 @@ Resources:
       Tags:
         - Key: Name
           Value: !Sub "${AWS::StackName}-loki-bucket"
+
+  # TEMPLATE_BUCKET_NAME - sandbox template snapshots written by orchestrator
+  # and template-manager.
+  TemplatesBucket:
+    Type: AWS::S3::Bucket
+    Condition: CreateTemplatesBucket
+    Properties:
+      BucketName: !Sub "${AWS::StackName}-templates-${AWS::AccountId}"
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-templates-bucket"
+
+  # BUILD_CACHE_BUCKET_NAME - layer cache for template builds.
+  BuildCacheBucket:
+    Type: AWS::S3::Bucket
+    Condition: CreateBuildCacheBucket
+    Properties:
+      BucketName: !Sub "${AWS::StackName}-build-cache-${AWS::AccountId}"
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-build-cache-bucket"
 
   # ------------------------------------------------------------------------------------------------
   # RDS Database - PostgreSQL database for E2B platform data persistence
@@ -762,7 +1011,12 @@ Resources:
       BlockDeviceMappings:
         - DeviceName: /dev/sda1
           Ebs:
-            VolumeSize: 40
+            # 100 GiB, not 40: the deploy chain builds every service image on
+            # this host. A single run leaves ~15 GB of images plus ~10 GB of
+            # buildx cache in /var/lib/docker and a few GB of Go build cache,
+            # which filled a 40 GiB root mid-build and failed the link step with
+            # "no space left on device".
+            VolumeSize: 100
             VolumeType: gp3
             Encrypted: true
       SecurityGroupIds:
@@ -776,6 +1030,21 @@ Resources:
           - - |
               #!/bin/bash -v
               set -e
+              # One log for the whole bootstrap. Everything below - the apt work,
+              # the tool downloads, the clone and every deploy step - is written
+              # through this one stream, so /tmp/e2b.log is the single file to
+              # read when a bootstrap goes wrong, instead of half the output
+              # sitting somewhere else. Nothing further down redirects to the log
+              # by hand; adding such a redirect would take that command back out
+              # of cloud-init-output.log.
+              #
+              # tee keeps the stream flowing to /var/log/cloud-init-output.log as
+              # well, which is all the EC2 console has to show when the instance
+              # never gets far enough to SSH into.
+              #
+              # -a rather than truncating: a re-run through cloud-init, or a
+              # manual re-run of a step, appends to the existing history.
+              exec > >(tee -a /tmp/e2b.log) 2>&1
             - |
               export DEBIAN_FRONTEND=noninteractive
               systemctl stop apt-daily.service apt-daily-upgrade.service unattended-upgrades.service || true
@@ -794,7 +1063,13 @@ Resources:
               snap install go --classic
             - |
               # Install essential development and deployment tools
-              apt install unzip docker.io make jq postgresql-client-common git -y
+              # build-essential is required, not optional: the orchestrator and
+              # template-manager binaries are compiled on this host (not in a
+              # container) and packages/orchestrator/Makefile builds them with
+              # CGO_ENABLED=1, because pkg/sandbox/uffd/userfaultfd binds
+              # linux/userfaultfd.h through cgo. Without a C compiler the build
+              # step fails with: cgo: C compiler "gcc" not found.
+              apt install unzip docker.io make jq postgresql-client-common git build-essential -y
             - |
               # Install PostgreSQL client for database management
               apt install postgresql-client -y
@@ -807,14 +1082,14 @@ Resources:
                 wget -O /root/.docker/cli-plugins/docker-buildx https://github.com/docker/buildx/releases/download/v0.21.1/buildx-v0.21.1.linux-amd64
                 wget -O /opt/awscli.zip https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip
                 wget -O /opt/packer.zip https://releases.hashicorp.com/packer/1.12.0/packer_1.12.0_linux_amd64.zip
-                wget -O /opt/terraform.zip https://releases.hashicorp.com/terraform/1.5.7/terraform_1.5.7_linux_amd64.zip
-                wget -O /opt/nomad.zip https://releases.hashicorp.com/nomad/1.6.2/nomad_1.6.2_linux_amd64.zip
+                wget -O /opt/terraform.zip https://releases.hashicorp.com/terraform/1.7.5/terraform_1.7.5_linux_amd64.zip
+                wget -O /opt/nomad.zip https://releases.hashicorp.com/nomad/1.8.4/nomad_1.8.4_linux_amd64.zip
               - |
                 wget -O /root/.docker/cli-plugins/docker-buildx https://github.com/docker/buildx/releases/download/v0.21.1/buildx-v0.21.1.linux-arm64
                 wget -O /opt/awscli.zip https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip
                 wget -O /opt/packer.zip https://releases.hashicorp.com/packer/1.12.0/packer_1.12.0_linux_arm64.zip
-                wget -O /opt/terraform.zip https://releases.hashicorp.com/terraform/1.5.7/terraform_1.5.7_linux_arm64.zip
-                wget -O /opt/nomad.zip https://releases.hashicorp.com/nomad/1.6.2/nomad_1.6.2_linux_arm64.zip
+                wget -O /opt/terraform.zip https://releases.hashicorp.com/terraform/1.7.5/terraform_1.7.5_linux_arm64.zip
+                wget -O /opt/nomad.zip https://releases.hashicorp.com/nomad/1.8.4/nomad_1.8.4_linux_arm64.zip
             - |
               chmod +x /root/.docker/cli-plugins/docker-buildx
             - |
@@ -826,79 +1101,79 @@ Resources:
               # Configure AWS CLI default region
               aws configure set region ${AWS::Region}
             - |
-              # Install HashiCorp Packer for creating machine images
-              unzip packer.zip && mv packer /usr/local/bin/packer && rm packer.zip
-            - |
-              # Install HashiCorp Terraform for infrastructure as code
-              unzip terraform.zip && mv terraform /usr/local/bin/terraform && rm terraform.zip
-            - |
-              # Install HashiCorp Nomad for workload orchestration
-              unzip nomad.zip && mv nomad /usr/local/bin/ && rm nomad.zip
-            - |
-              # Create directory for E2B infrastructure code
-              mkdir -p /opt/infra/ && cd /opt/infra/
-              git clone https://github.com/aws-samples/sample-e2b-on-aws.git && cd sample-e2b-on-aws
+              # Install the HashiCorp tools.
+              #
+              # -o overwrites without prompting and the steps are not chained on
+              # &&: unzip exits 1 on non-fatal warnings, which silently aborted
+              # the rest of the chain and left the binary sitting in /opt
+              # instead of on PATH.
+              install_hashicorp_tool() {
+                TOOL=$1
+                unzip -o "/opt/$TOOL.zip" "$TOOL" -d /opt
+                install -m 0755 "/opt/$TOOL" "/usr/local/bin/$TOOL"
+                rm -f "/opt/$TOOL.zip" "/opt/$TOOL"
+                "/usr/local/bin/$TOOL" version | head -1
+              }
+              install_hashicorp_tool packer
+              install_hashicorp_tool terraform
+              install_hashicorp_tool nomad
             - !Sub |
-              # Initialize Configuration
-              touch /tmp/e2b.log
-              echo "StackName=${AWS::StackName}" >> /tmp/e2b.log
-              BUILD=$(git rev-parse --short HEAD)
-              echo "BUILD=$BUILD" >> /tmp/e2b.log
-              while true; do
-                STACK_STATUS=$(aws cloudformation describe-stacks --stack-name ${AWS::StackName} --query "Stacks[0].StackStatus" --output text)
-                echo "$(date '+%Y-%m-%d %H:%M:%S') - Stack current state: $STACK_STATUS" >> /tmp/e2b.log
-                case $STACK_STATUS in
-                  CREATE_COMPLETE)
-                    echo "========================================" >> /tmp/e2b.log
-                    echo "Start to execute init.sh" >> /tmp/e2b.log
-                    echo "========================================" >> /tmp/e2b.log
-                    bash infra-iac/init.sh >> /tmp/e2b.log 2>&1
-                    echo "========================================" >> /tmp/e2b.log
-                    echo "Start to execute packer.sh" >> /tmp/e2b.log
-                    echo "========================================" >> /tmp/e2b.log
-                    HOME=/root bash -l infra-iac/packer/packer.sh >> /tmp/e2b.log 2>&1
-                    echo "========================================" >> /tmp/e2b.log
-                    echo "Start to execute terraform" >> /tmp/e2b.log
-                    echo "========================================" >> /tmp/e2b.log
-                    bash infra-iac/terraform/start.sh >> /tmp/e2b.log 2>&1
-                    echo "========================================" >> /tmp/e2b.log
-                    echo "Start to execute init-db.sh" >> /tmp/e2b.log
-                    echo "========================================" >> /tmp/e2b.log
-                    bash infra-iac/db/init-db.sh >> /tmp/e2b.log 2>&1
-                    echo "========================================" >> /tmp/e2b.log
-                    echo "Start to execute build.sh" >> /tmp/e2b.log
-                    echo "========================================" >> /tmp/e2b.log
-                    HOME=/root bash packages/build.sh >> /tmp/e2b.log 2>&1
-                    echo "========================================" >> /tmp/e2b.log
-                    echo "Start to execute nomad.sh" >> /tmp/e2b.log
-                    echo "========================================" >> /tmp/e2b.log
-                    source nomad/nomad.sh >> /tmp/e2b.log 2>&1
-                    echo "========================================" >> /tmp/e2b.log
-                    echo "Start to execute prepare.sh" >> /tmp/e2b.log
-                    echo "========================================" >> /tmp/e2b.log
-                    bash nomad/prepare.sh >> /tmp/e2b.log 2>&1
-                    echo "========================================" >> /tmp/e2b.log
-                    echo "Start to execute deploy.sh" >> /tmp/e2b.log
-                    echo "========================================" >> /tmp/e2b.log
-                    bash nomad/deploy.sh >> /tmp/e2b.log 2>&1
-                    echo "========================================" >> /tmp/e2b.log
-                    echo "Start to execute create_template.sh" >> /tmp/e2b.log
-                    echo "========================================" >> /tmp/e2b.log
-                    bash packages/create_template.sh >> /tmp/e2b.log 2>&1
-                    echo "========================================" >> /tmp/e2b.log
-                    echo "E2B Deploy Done!" >> /tmp/e2b.log
-                    echo "========================================" >> /tmp/e2b.log
-                    break
-                    ;;
-                  CREATE_FAILED|ROLLBACK_COMPLETE|ROLLBACK_FAILED|UPDATE_ROLLBACK_COMPLETE|UPDATE_ROLLBACK_FAILED|DELETE_FAILED)
-                    echo "exit with error cloudformation state: $STACK_STATUS" >> /tmp/e2b.log
-                    exit 1
-                    ;;
-                  *)
-                    sleep 10
-                    ;;
-                esac
-              done
+              # --branch checks out ${RepoBranch} as part of the clone and fails
+              # loudly when that branch does not exist, rather than silently leaving
+              # the tree on the remote's default branch. That silent fallback is how
+              # a bastion ends up running main when it was meant to run the
+              # deployment branch, and the mismatch only surfaces much later as
+              # missing files or a stale job spec - deploy-all.sh, which the chain
+              # below invokes, is one of the files that would be missing.
+              #
+              # A directory that already has content is left untouched, so a tree
+              # delivered by rsync/scp is never clobbered. Without that guard
+              # git clone fails on a non-empty directory and set -e above turns
+              # that into a failed bootstrap.
+              mkdir -p /opt/infra
+              if [ -n "$(ls -A /opt/infra/sample-e2b-on-aws 2>/dev/null)" ]; then
+                echo "RepoDir=already-populated, left as is"
+              elif git clone --branch "${RepoBranch}" \
+                   https://github.com/aws-samples/sample-e2b-on-aws.git \
+                   /opt/infra/sample-e2b-on-aws; then
+                echo "RepoBranch=${RepoBranch}"
+              else
+                echo "RepoClone=FAILED for branch ${RepoBranch}, deliver the tree by hand"
+                mkdir -p /opt/infra/sample-e2b-on-aws
+              fi
+              # UserData runs as root, so the clone lands root-owned and git then
+              # refuses to operate for the login user ("detected dubious ownership").
+              # Hand the tree to ubuntu, which is who drives anything manual and who
+              # VS Code Remote-SSH connects as. Steps that need root still work -
+              # root can write regardless of owner.
+              chown -R ubuntu:ubuntu /opt/infra/sample-e2b-on-aws
+              cd /opt/infra/sample-e2b-on-aws
+              git rev-parse --abbrev-ref HEAD || true
+            - !Sub |
+              # Initialize Configuration.
+              #
+              # infra-iac/init.sh resolves the stack by grepping StackName out of
+              # /tmp/e2b.log. That grep is anchored on ^StackName=, so the
+              # bash -v trace of this line - which the funnel also captures -
+              # cannot be read as the value.
+              echo "StackName=${AWS::StackName}"
+            - |
+              # The chain itself lives in deploy-all.sh, which is also what a
+              # manual run uses, so the step order and the checkpoint names are
+              # defined once rather than drifting between this template and the
+              # instructions people follow by hand.
+              #
+              # The script waits for the stack to reach CREATE_COMPLETE before
+              # its first step, which is what makes it safe to start here while
+              # the stack is still coming up, and it records
+              # /opt/.e2b-step-<name>.done per step so a later re-run resumes
+              # instead of repeating work.
+              #
+              # E2B_LOG_FUNNEL tells it the single log stream is already open, so
+              # it does not tee into /tmp/e2b.log a second time and write every
+              # line twice. set -e above turns a failed chain into a failed
+              # bootstrap.
+              E2B_LOG_FUNNEL=1 bash /opt/infra/sample-e2b-on-aws/deploy-all.sh
 
 # ===================================================================================================
 # Outputs - Values exported after stack creation for reference by other stacks
@@ -980,6 +1255,28 @@ Outputs:
     Export:
       Name: !Sub "${AWS::StackName}-CFNLOKIBUCKET"
 
+  CFNTEMPLATESBUCKET:
+    Description: Sandbox template S3 bucket name (orchestrator TEMPLATE_BUCKET_NAME)
+    Value:
+      !If [
+        HasExternalTemplatesBucket,
+        !Ref ExistingTemplatesBucketName,
+        !Ref TemplatesBucket,
+      ]
+    Export:
+      Name: !Sub "${AWS::StackName}-CFNTEMPLATESBUCKET"
+
+  CFNBUILDCACHEBUCKET:
+    Description: Template build cache S3 bucket name (orchestrator BUILD_CACHE_BUCKET_NAME)
+    Value:
+      !If [
+        HasExternalBuildCacheBucket,
+        !Ref ExistingBuildCacheBucketName,
+        !Ref BuildCacheBucket,
+      ]
+    Export:
+      Name: !Sub "${AWS::StackName}-CFNBUILDCACHEBUCKET"
+
   # SSH key output
   CFNSSHKEY:
     Description: EC2 SSH Key Name for bastion host access
@@ -1014,6 +1311,37 @@ Outputs:
     Value: !Ref WildcardCertificate
     Export:
       Name: !Sub "${AWS::StackName}-CFNCERTARN"
+
+  # Load balancer outputs.
+  #
+  # The target group ARNs reach Terraform through infra-iac/init.sh ->
+  # /opt/config.properties -> infra-iac/terraform/prepare.sh -> var.tf, where the
+  # autoscaling attachments consume them. CFNALBDNS is the value the wildcard DNS
+  # record points at; because the load balancer now lives here rather than in
+  # Terraform, it survives terraform destroy/apply and only has to be set once.
+  CFNALBDNS:
+    Description: Application Load Balancer DNS name. Point *.{BaseDomain} at this.
+    Value: !GetAtt ApplicationLoadBalancer.DNSName
+    Export:
+      Name: !Sub "${AWS::StackName}-CFNALBDNS"
+
+  CFNNOMADSERVERTGARN:
+    Description: Nomad server target group ARN, attached to the server ASG by Terraform
+    Value: !Ref NomadServerTargetGroup
+    Export:
+      Name: !Sub "${AWS::StackName}-CFNNOMADSERVERTGARN"
+
+  CFNE2BAPITGARN:
+    Description: E2B API target group ARN, attached to the API ASG by Terraform
+    Value: !Ref E2BApiTargetGroup
+    Export:
+      Name: !Sub "${AWS::StackName}-CFNE2BAPITGARN"
+
+  CFNCLIENTPROXYTGARN:
+    Description: Client proxy target group ARN, attached to the API ASG by Terraform
+    Value: !Ref ClientProxyTargetGroup
+    Export:
+      Name: !Sub "${AWS::StackName}-CFNCLIENTPROXYTGARN"
 
   # Redis outputs
   REDISNAME:

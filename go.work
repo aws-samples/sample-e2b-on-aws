@@ -1,0 +1,16 @@
+go 1.26.6
+
+use (
+	./packages/api
+	./packages/auth
+	./packages/clickhouse
+	./packages/client-proxy
+	./packages/db
+	./packages/envd
+	./packages/orchestrator
+	./packages/shared
+
+	./tests/integration
+
+	./tools/snapshot-retention
+)

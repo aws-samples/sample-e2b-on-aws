@@ -1,0 +1,4 @@
+# Rendered by prepare.sh from origin/*.hcl via envsubst. The output embeds the
+# Nomad and Consul ACL tokens and the database connection string, so it must
+# never be committed. Edit origin/*.hcl instead.
+deploy/

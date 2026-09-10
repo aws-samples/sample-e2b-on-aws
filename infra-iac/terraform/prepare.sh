@@ -57,6 +57,24 @@ done < "$CONFIG_FILE"
 
 echo "Files generated successfully!"
 
+# Fail fast on placeholders the config file had no key for.
+#
+# Substitution above is per-key sed, so an absent key leaves the literal
+# ${CFNSOMETHING} in the output. Terraform then reads that as one of its own
+# interpolations and dies on an undefined reference somewhere inside init or
+# plan - far from the actual cause. Catching it here names the missing keys.
+#
+# This is the failure mode you get when a 3-AZ template variable meets a 2-AZ
+# stack: var.tf.tpl asks for CFNPRIVATESUBNET3, and only the 3-AZ template
+# exports it.
+LEFTOVER=$(grep -oh '\${CFN[A-Za-z0-9_]*}' "$PROVIDER_OUTPUT" "$TFVARS_OUTPUT" 2>/dev/null | sort -u)
+if [ -n "$LEFTOVER" ]; then
+    echo "Error: these placeholders had no matching key in $CONFIG_FILE:" >&2
+    echo "$LEFTOVER" | sed 's/^/       /' >&2
+    echo "       Check the stack's Outputs, then re-run infra-iac/init.sh." >&2
+    exit 1
+fi
+
 # Initialize Terraform
 echo "Initializing Terraform..."
 terraform init

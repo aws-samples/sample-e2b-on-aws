@@ -2,83 +2,36 @@ package header
 
 import (
 	"bytes"
-	"context"
-	"fmt"
-	"io"
 
-	"github.com/bits-and-blooms/bitset"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/trace"
+	"go.opentelemetry.io/otel"
 )
 
 const (
-	PageSize        = 2 << 11
-	HugepageSize    = 2 << 20
-	RootfsBlockSize = 2 << 11
+	PageSize        = 4 << 10 // 4 KiB
+	HugepageSize    = 2 << 20 // 2 MiB
+	RootfsBlockSize = 4 << 10 // 4 KiB
 )
 
-var (
-	EmptyHugePage = make([]byte, HugepageSize)
-	EmptyBlock    = make([]byte, RootfsBlockSize)
-)
+var tracer = otel.Tracer("github.com/e2b-dev/infra/packages/shared/pkg/storage/header")
 
-func WriteDiffWithTrace(ctx context.Context, tracer trace.Tracer, source io.ReaderAt, blockSize int64, dirty *bitset.BitSet, diff io.Writer) (*DiffMetadata, error) {
-	_, childSpan := tracer.Start(ctx, "create-diff")
-	defer childSpan.End()
-	childSpan.SetAttributes(attribute.Int64("dirty.length", int64(dirty.Count())))
-	childSpan.SetAttributes(attribute.Int64("block.size", blockSize))
+var EmptyHugePage = make([]byte, HugepageSize)
 
-	return WriteDiff(source, blockSize, dirty, diff)
-}
-
-func WriteDiff(source io.ReaderAt, blockSize int64, dirty *bitset.BitSet, diff io.Writer) (*DiffMetadata, error) {
-	b := make([]byte, blockSize)
-
-	empty := bitset.New(0)
-
-	for i, e := dirty.NextSet(0); e; i, e = dirty.NextSet(i + 1) {
-		_, err := source.ReadAt(b, int64(i)*blockSize)
-		if err != nil {
-			return nil, fmt.Errorf("error reading from source: %w", err)
-		}
-
-		// If the block is empty, we don't need to write it to the diff.
-		// Because we checked it does not equal to the base, so we keep it separately.
-		isEmpty, err := IsEmptyBlock(b, blockSize)
-		if err != nil {
-			return nil, fmt.Errorf("error checking empty block: %w", err)
-		}
-		if isEmpty {
-			dirty.Clear(i)
-			empty.Set(i)
-
-			continue
-		}
-
-		_, err = diff.Write(b)
-		if err != nil {
-			return nil, fmt.Errorf("error writing to diff: %w", err)
-		}
+// IsZero reports whether b is all-zero. Samples first/middle/last byte to
+// reject most non-zero buffers from one cache line, then falls back to
+// bytes.Equal(b[:n-1], b[1:]): true exactly when every adjacent pair of
+// bytes is equal, i.e. all bytes equal b[0] (which the sample already
+// proved is zero).
+func IsZero(b []byte) bool {
+	n := len(b)
+	if n == 0 {
+		return true
+	}
+	if b[0]|b[n-1]|b[n/2] != 0 {
+		return false
+	}
+	if n <= 3 {
+		return true
 	}
 
-	return &DiffMetadata{
-		Dirty: dirty,
-		Empty: empty,
-
-		BlockSize: blockSize,
-	}, nil
-}
-
-func IsEmptyBlock(block []byte, blockSize int64) (bool, error) {
-	var emptyBuf []byte
-	switch blockSize {
-	case HugepageSize:
-		emptyBuf = EmptyHugePage
-	case RootfsBlockSize:
-		emptyBuf = EmptyBlock
-	default:
-		return false, fmt.Errorf("block size not supported: %d", blockSize)
-	}
-
-	return bytes.Equal(block, emptyBuf), nil
+	return bytes.Equal(b[:n-1], b[1:])
 }
