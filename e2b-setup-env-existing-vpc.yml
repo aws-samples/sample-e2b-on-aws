@@ -192,7 +192,7 @@ Parameters:
   # Source Configuration
   RepoBranch:
     Type: String
-    Default: feat/code-sync-2026-08-29
+    Default: main
     Description: >-
       Git branch of aws-samples/sample-e2b-on-aws that the bastion checks out.
       Leaving the branch to the remote default would put the bastion on a

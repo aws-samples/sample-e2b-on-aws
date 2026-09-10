@@ -6,7 +6,7 @@ API runs more than one replica - that the replicas share state instead of each
 keeping their own. Standard library only, so it runs on the bastion as-is.
 
     python3 tools/api-smoke-test.py                      # through the ALB
-    python3 tools/api-smoke-test.py --replicas 10.0.1.5:50001,10.0.2.6:50001
+    python3 tools/api-smoke-test.py --replicas 192.0.2.10:50001,192.0.2.11:50001
 
 Credentials and domain come from /opt/config.properties and
 infra-iac/db/config.json, the same files the deploy chain writes, so there is

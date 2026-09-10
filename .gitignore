@@ -31,6 +31,10 @@ go.work.sum
 # Local deployment inputs (never committed)
 .local/
 
+# Copies of the bastion's /opt/config.properties. One was committed once with a
+# live database connection string in it; nothing in the tree is ever named this.
+config.properties
+
 # Session handoff notes and the project operating manual. Both carry live
 # deployment identifiers (account, stack, bastion instance, domain, buckets)
 # and are specific to one environment, so they stay on the dev machine and the

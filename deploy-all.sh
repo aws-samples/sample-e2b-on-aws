@@ -143,7 +143,7 @@ load_nomad_env() {
 # not close that gap: it checks that two servers are in the EC2 running state,
 # which says nothing about whether anything is listening on 4646. Without this
 # gate the deploy step ran 45 seconds after terraform finished and died on
-#   Error submitting job: dial tcp 10.0.55.63:4646: connect: connection refused
+#   Error submitting job: dial tcp 192.0.2.5:4646: connect: connection refused
 #
 # Waiting on a leader alone is not enough either. The jobs are placed per pool -
 # loki and api on api, orchestrator on the client nodes (default), and

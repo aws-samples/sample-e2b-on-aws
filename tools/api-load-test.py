@@ -14,7 +14,7 @@ after a failure, and each is created with a short timeout so a crash still lets
 them expire on their own.
 
     python3 tools/api-load-test.py --sandboxes 12 --concurrency 12 \
-        --replicas 10.0.83.123:50001,10.0.37.239:50001
+        --replicas 192.0.2.10:50001,192.0.2.11:50001
 
 Sizing note: each sandbox takes the template's cpuCount/memoryMB (4 vCPU /
 4096 MiB for the default build) off one client node, so --sandboxes is bounded by

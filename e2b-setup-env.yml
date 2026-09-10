@@ -220,7 +220,7 @@ Parameters:
   # Source Configuration
   RepoBranch:
     Type: String
-    Default: feat/code-sync-2026-08-29
+    Default: main
     Description: >-
       Git branch of aws-samples/sample-e2b-on-aws that the bastion checks out.
       The bastion clones this branch whether or not AutoDeploy is enabled, so
@@ -1153,8 +1153,8 @@ Resources:
       MasterUsername: !Ref DBUsername
       MasterUserPassword: !Ref DBPassword
       ServerlessV2ScalingConfiguration:
-        MinCapacity: 4
-        MaxCapacity: 128
+        MinCapacity: 0.5
+        MaxCapacity: 4
       StorageEncrypted: true
       DeletionProtection: !If [IsProd, true, false]
       VpcSecurityGroupIds:
