@@ -21,7 +21,7 @@
 - [部署（新建 VPC）](#-部署新建-vpc)
 - [部署（使用现有 VPC）](#-部署使用现有-vpc)
 - [使用 E2B CLI](#-使用-e2b-cli)
-- [E2B SDK Cookbook](#-e2b-sdk-cookbook)
+- [使用 Python SDK](#-使用-python-sdk)
 - [快照保留](#-快照保留)
 - [故障排查](#-故障排查)
 - [资源清理](#-资源清理)
@@ -298,32 +298,36 @@ EOF
 **创建模板：**
 
 ```bash
+# 在堡垒机上、于仓库根目录（/opt/infra/sample-e2b-on-aws）执行：
+# 脚本读取 /opt/config.properties，该文件只存在于堡垒机。
+
 # 从 e2bdev/code-interpreter 创建（默认）
-bash packages/create_template.sh
+bash tools/legacy/create_template.sh
 
 # 从 Dockerfile 创建
-bash packages/create_template.sh --docker-file <Docker_File_Path>
+bash tools/legacy/create_template.sh --docker-file <Docker_File_Path>
 
 # 示例：Desktop
-bash packages/create_template.sh --docker-file test_use_case/Dockerfile/e2b.Dockerfile.Desktop
+bash tools/legacy/create_template.sh --docker-file test_use_case/Dockerfile/e2b.Dockerfile.Desktop
 
 # 示例：BrowserUse
-bash packages/create_template.sh --docker-file test_use_case/Dockerfile/e2b.Dockerfile.BrowserUse
+bash tools/legacy/create_template.sh --docker-file test_use_case/Dockerfile/e2b.Dockerfile.BrowserUse
 
 # 示例：S3FS
-bash packages/create_template.sh --docker-file test_use_case/Dockerfile/e2b.Dockerfile.s3fs
+bash tools/legacy/create_template.sh --docker-file test_use_case/Dockerfile/e2b.Dockerfile.s3fs
 
 # 示例：Code Interpreter（自定义）
-bash packages/create_template.sh --docker-file test_use_case/Dockerfile/e2b.Dockerfile.code_interpreter
+bash tools/legacy/create_template.sh --docker-file test_use_case/Dockerfile/e2b.Dockerfile.code_interpreter
 
 # 从您账户中的 ECR 镜像创建
-bash packages/create_template.sh --ecr-image <ECR_IMAGE_URI>
+bash tools/legacy/create_template.sh --ecr-image <ECR_IMAGE_URI>
 ```
 
 **创建沙箱：**
 
 ```bash
-# 获取 e2b_API 值：cat ../infra-iac/db/config.json
+# e2b_API：    jq -r .teamApiKey infra-iac/db/config.json（在堡垒机上、于仓库根目录执行）
+# template_ID：e2b template list
 curl -X POST \
   https://api.<e2bdomain>/sandboxes \
   -H "X-API-Key: <e2b_API>" \
@@ -371,8 +375,8 @@ curl -X POST \
 
 ```bash
 # 安装指南：https://e2b.dev/docs/cli
-# macOS
-brew install e2b
+# 固定为本部署验证过的版本（见下表）。brew 无法指定版本，因此这里不用它。
+npm i -g @e2b/cli@2.16.1          # 或每条命令都写成：npx -y @e2b/cli@2.16.1 <命令>
 
 # 导出环境变量
 # （从 /opt/config.properties 查询 teamApiKey）
@@ -384,6 +388,7 @@ export E2B_API_KEY=xxx
 export E2B_DOMAIN="<e2bdomain>"
 
 # 常用命令
+e2b template list                 # 列出模板 —— SDK 需要的模板 ID 从这里取
 e2b sandbox list                  # 列出所有沙箱
 e2b sandbox connect <sandbox-id>  # 连接到沙箱
 e2b sandbox kill <sandbox-id>     # 终止沙箱
@@ -394,9 +399,9 @@ e2b sandbox kill --all            # 终止所有沙箱
 
 | 客户端 | 版本 | 安装方式 |
 |---|---|---|
-| E2B CLI | `2.16.1` | `npm i -g @e2b/cli`（或 `brew install e2b`） |
-| Python SDK `e2b` | `2.46.0` | 随 `pip install e2b-code-interpreter` 一起安装 |
-| Python SDK `e2b-code-interpreter` | `2.9.2` | `pip install e2b-code-interpreter` |
+| E2B CLI | `2.16.1` | `npm i -g @e2b/cli@2.16.1` |
+| Python SDK `e2b` | `2.46.0` | `pip install e2b==2.46.0 e2b-code-interpreter==2.9.2` |
+| Python SDK `e2b-code-interpreter` | `2.9.2` | 同上 —— 两个都要固定，否则依赖会浮动到最新的 `e2b` |
 | `envd`（沙箱内 agent，服务端） | `0.7.0` | 由部署链构建，无需手动安装 |
 
 以上针对上游 `225f963` 的代码层验证。`envd` 版本由 API 在每次创建时返回（`envdVersion`），
@@ -404,7 +409,9 @@ e2b sandbox kill --all            # 终止所有沙箱
 
 只需要 `E2B_API_KEY` 和 `E2B_DOMAIN`：`e2b sandbox list` 与 `e2b template list` 都在
 未设置 `E2B_ACCESS_TOKEN` 的情况下验证通过 —— 上游删除用户 access token 之后，这是本部署
-能提供的认证方式。
+能提供的认证方式。如果 `~/.e2b/config.json` 里存着旧的 E2B Cloud 登录态，每条命令都会先打印
+"Your CLI authentication config is deprecated. You have been signed out."。这在本部署下
+无害：CLI 不会改动该文件，仍使用上面两个环境变量。
 
 `tools/` 下有两个脚本用于对运行中的部署做 API 验证：
 
@@ -418,18 +425,52 @@ python3 tools/api-load-test.py --sandboxes 40    # 并发：突发创建、读�
 
 ---
 
-## 📚 E2B SDK Cookbook
+## 🐍 使用 Python SDK
+
+在任何能解析 `*.<e2bdomain>` 的机器上运行。它固定使用上表的 SDK 版本，走一遍沙箱生命周期：
+创建、执行命令、访问外网、写文件、列出、暂停并恢复，再通过 `e2b-code-interpreter` 执行代码。
+`uv` 不会污染你的现有环境；用 pip 的话，先安装 `e2b==2.46.0 e2b-code-interpreter==2.9.2`，
+再运行同一段脚本。
 
 ```bash
-git clone https://github.com/e2b-dev/e2b-cookbook.git
-cd e2b-cookbook/examples/hello-world-python
-poetry install
+export E2B_API_KEY=xxx               # 即 /opt/config.properties 里的 teamApiKey
+export E2B_DOMAIN="<e2bdomain>"      # 不设置的话 SDK 会连到 E2B Cloud（api.e2b.app）
+export E2B_TEMPLATE=<template_ID>    # 从 `e2b template list` 获取
 
-# 编辑 .env 并设置 E2B_API_KEY
-vim .env
+uv run --no-project --with e2b==2.46.0 --with e2b-code-interpreter==2.9.2 python - <<'EOF'
+import os
+from e2b import Sandbox
+from e2b_code_interpreter import Sandbox as CodeSandbox
 
-poetry run start
+template = os.environ["E2B_TEMPLATE"]
+
+sbx = Sandbox.create(template=template, timeout=300)
+print("sandbox:", sbx.sandbox_id)
+print(sbx.commands.run("echo hello && uname -r").stdout)
+print("egress:", sbx.commands.run("curl -s -o /dev/null -w '%{http_code}' https://pypi.org/simple/").stdout)
+sbx.files.write("/tmp/hello.txt", "hi")
+print("listed:", sbx.sandbox_id in [s.sandbox_id for s in Sandbox.list().next_items()])
+sbx.pause()
+sbx = Sandbox.connect(sbx.sandbox_id)       # resumes the paused sandbox
+print("after resume:", sbx.files.read("/tmp/hello.txt"))
+sbx.kill()
+
+code = CodeSandbox.create(template=template, timeout=300)
+print("run_code:", code.run_code("21 * 2").text)
+code.kill()
+EOF
 ```
+
+部署正常时会输出 `egress: 200`、`listed: True`、`after resume: hi` 和 `run_code: 42`。
+
+与 E2B Cloud 有两处不同，[e2b-cookbook](https://github.com/e2b-dev/e2b-cookbook) 的示例
+同样适用 —— 例如 `hello-world-python` 的 `.env.template` 里只有 `E2B_API_KEY`，并且调用的是
+不带模板的 `Sandbox.create()`：
+
+- **要设置 `E2B_DOMAIN`。** 不设置时所有请求都发往 `api.e2b.app`，本部署的 key 在那里无效。
+- **要传 `template=`。** 不传时 `e2b_code_interpreter` 会请求默认模板 `code-interpreter-v1`，
+  本部署没有这个模板，创建会以 404 失败。部署链构建的模板（别名 `test-<时间戳>`）来自
+  `e2bdev/code-interpreter`，`e2b.Sandbox` 和 `e2b_code_interpreter.Sandbox` 都能用。
 
 ---
 

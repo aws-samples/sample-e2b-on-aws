@@ -21,7 +21,7 @@
 - [Deployment (New VPC)](#-deployment-new-vpc)
 - [Deployment (Existing VPC)](#-deployment-existing-vpc)
 - [Using E2B CLI](#-using-e2b-cli)
-- [E2B SDK Cookbook](#-e2b-sdk-cookbook)
+- [Using the Python SDK](#-using-the-python-sdk)
 - [Snapshot Retention](#-snapshot-retention)
 - [Troubleshooting](#-troubleshooting)
 - [Resource Cleanup](#-resource-cleanup)
@@ -321,32 +321,36 @@ exporter sends no headers, which is what an unauthenticated collector wants.
 **Create a template:**
 
 ```bash
+# On the bastion, from the repository root (/opt/infra/sample-e2b-on-aws):
+# the script reads /opt/config.properties, which only exists there.
+
 # Create from e2bdev/code-interpreter (default)
-bash packages/create_template.sh
+bash tools/legacy/create_template.sh
 
 # Create from a Dockerfile
-bash packages/create_template.sh --docker-file <Docker_File_Path>
+bash tools/legacy/create_template.sh --docker-file <Docker_File_Path>
 
 # Example: Desktop
-bash packages/create_template.sh --docker-file test_use_case/Dockerfile/e2b.Dockerfile.Desktop
+bash tools/legacy/create_template.sh --docker-file test_use_case/Dockerfile/e2b.Dockerfile.Desktop
 
 # Example: BrowserUse
-bash packages/create_template.sh --docker-file test_use_case/Dockerfile/e2b.Dockerfile.BrowserUse
+bash tools/legacy/create_template.sh --docker-file test_use_case/Dockerfile/e2b.Dockerfile.BrowserUse
 
 # Example: S3FS
-bash packages/create_template.sh --docker-file test_use_case/Dockerfile/e2b.Dockerfile.s3fs
+bash tools/legacy/create_template.sh --docker-file test_use_case/Dockerfile/e2b.Dockerfile.s3fs
 
 # Example: Code Interpreter (customized)
-bash packages/create_template.sh --docker-file test_use_case/Dockerfile/e2b.Dockerfile.code_interpreter
+bash tools/legacy/create_template.sh --docker-file test_use_case/Dockerfile/e2b.Dockerfile.code_interpreter
 
 # Create from an ECR image in your own account
-bash packages/create_template.sh --ecr-image <ECR_IMAGE_URI>
+bash tools/legacy/create_template.sh --ecr-image <ECR_IMAGE_URI>
 ```
 
 **Create a sandbox:**
 
 ```bash
-# Get e2b_API value from: cat ../infra-iac/db/config.json
+# e2b_API:     jq -r .teamApiKey infra-iac/db/config.json   (on the bastion, from the repo root)
+# template_ID: e2b template list
 curl -X POST \
   https://api.<e2bdomain>/sandboxes \
   -H "X-API-Key: <e2b_API>" \
@@ -394,8 +398,9 @@ Domain validation, bastion access, DNS setup, monitoring, and testing follow the
 
 ```bash
 # Installation Guide: https://e2b.dev/docs/cli
-# macOS
-brew install e2b
+# Pin the version this deployment was verified with (see the table below).
+# brew cannot pin a version, so it is not used here.
+npm i -g @e2b/cli@2.16.1          # or run each command as: npx -y @e2b/cli@2.16.1 <command>
 
 # Export environment variables
 # (query teamApiKey from /opt/config.properties)
@@ -408,6 +413,7 @@ export E2B_API_KEY=xxx
 export E2B_DOMAIN="<e2bdomain>"
 
 # Common commands
+e2b template list                 # List templates - the template ID the SDK needs
 e2b sandbox list                  # List all sandboxes
 e2b sandbox connect <sandbox-id>  # Connect to a sandbox
 e2b sandbox kill <sandbox-id>     # Kill a sandbox
@@ -418,9 +424,9 @@ e2b sandbox kill --all            # Kill all sandboxes
 
 | Client | Version | Install |
 |---|---|---|
-| E2B CLI | `2.16.1` | `npm i -g @e2b/cli` (or `brew install e2b`) |
-| Python SDK `e2b` | `2.46.0` | `pip install e2b-code-interpreter` pulls it in |
-| Python SDK `e2b-code-interpreter` | `2.9.2` | `pip install e2b-code-interpreter` |
+| E2B CLI | `2.16.1` | `npm i -g @e2b/cli@2.16.1` |
+| Python SDK `e2b` | `2.46.0` | `pip install e2b==2.46.0 e2b-code-interpreter==2.9.2` |
+| Python SDK `e2b-code-interpreter` | `2.9.2` | same command - pin both, or the dependency floats to the newest `e2b` |
 | `envd` (in-sandbox agent, server side) | `0.7.0` | built by the deploy chain, not installed by you |
 
 Verified against the code layer at upstream `225f963`. `envd` is reported by the
@@ -430,6 +436,9 @@ quickest way to confirm which build a sandbox actually came from.
 Only `E2B_API_KEY` and `E2B_DOMAIN` are needed — `e2b sandbox list` and
 `e2b template list` were both checked with no `E2B_ACCESS_TOKEN` set, which is
 what this deployment can offer now that upstream dropped user access tokens.
+If `~/.e2b/config.json` holds an older E2B Cloud login, every command first
+prints "Your CLI authentication config is deprecated. You have been signed out."
+That is harmless here: the CLI leaves the file alone and uses the two variables.
 
 Two scripts in `tools/` exercise the API against a running deployment:
 
@@ -444,18 +453,58 @@ first, and both clean up every sandbox they create.
 
 ---
 
-## 📚 E2B SDK Cookbook
+## 🐍 Using the Python SDK
+
+Run this from any machine that resolves `*.<e2bdomain>`. It pins the SDK versions
+from the table above and goes through a sandbox's lifecycle: create, run a
+command, reach the internet, write a file, list, pause and resume, then run code
+through `e2b-code-interpreter`. `uv` keeps it out of your environments; with pip,
+install `e2b==2.46.0 e2b-code-interpreter==2.9.2` and run the same script.
 
 ```bash
-git clone https://github.com/e2b-dev/e2b-cookbook.git
-cd e2b-cookbook/examples/hello-world-python
-poetry install
+export E2B_API_KEY=xxx               # teamApiKey from /opt/config.properties
+export E2B_DOMAIN="<e2bdomain>"      # without it the SDK talks to E2B Cloud (api.e2b.app)
+export E2B_TEMPLATE=<template_ID>    # from `e2b template list`
 
-# Edit .env and set E2B_API_KEY
-vim .env
+uv run --no-project --with e2b==2.46.0 --with e2b-code-interpreter==2.9.2 python - <<'EOF'
+import os
+from e2b import Sandbox
+from e2b_code_interpreter import Sandbox as CodeSandbox
 
-poetry run start
+template = os.environ["E2B_TEMPLATE"]
+
+sbx = Sandbox.create(template=template, timeout=300)
+print("sandbox:", sbx.sandbox_id)
+print(sbx.commands.run("echo hello && uname -r").stdout)
+print("egress:", sbx.commands.run("curl -s -o /dev/null -w '%{http_code}' https://pypi.org/simple/").stdout)
+sbx.files.write("/tmp/hello.txt", "hi")
+print("listed:", sbx.sandbox_id in [s.sandbox_id for s in Sandbox.list().next_items()])
+sbx.pause()
+sbx = Sandbox.connect(sbx.sandbox_id)       # resumes the paused sandbox
+print("after resume:", sbx.files.read("/tmp/hello.txt"))
+sbx.kill()
+
+code = CodeSandbox.create(template=template, timeout=300)
+print("run_code:", code.run_code("21 * 2").text)
+code.kill()
+EOF
 ```
+
+A working deployment prints `egress: 200`, `listed: True`, `after resume: hi` and
+`run_code: 42`.
+
+Two things differ from E2B Cloud. Both apply to the
+[e2b-cookbook](https://github.com/e2b-dev/e2b-cookbook) examples as well:
+`hello-world-python`, for one, has only `E2B_API_KEY` in its `.env.template` and
+calls `Sandbox.create()` with no template.
+
+- **Set `E2B_DOMAIN`.** Without it every call goes to `api.e2b.app`, where this
+  deployment's key is not valid.
+- **Pass `template=`.** Without it `e2b_code_interpreter` asks for its default
+  template `code-interpreter-v1`, which this deployment does not have, and the
+  create fails with a 404. The template the deploy chain builds (alias
+  `test-<timestamp>`) comes from `e2bdev/code-interpreter`, so it serves both
+  `e2b.Sandbox` and `e2b_code_interpreter.Sandbox`.
 
 ---
 

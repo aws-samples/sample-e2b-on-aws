@@ -123,6 +123,10 @@ echo "Applying schema migrations with goose..."
 make -C "$REPO_ROOT/packages/db" migrate
 echo "Schema migrations applied successfully!"
 
+# Upstream's migrations put base_v1 on E2B Cloud's free-tier limits; restore
+# this deployment's own. See apply-tier-limits.sh for the values and why.
+bash ./apply-tier-limits.sh
+
 # Step 2: Seed the initial user, team and team API key.
 #
 # No access token: upstream migration 20260823120000 drops the access_tokens

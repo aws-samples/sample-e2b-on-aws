@@ -89,6 +89,13 @@ if [ "$(id -u)" -ne 0 ]; then
   exec sudo -- bash "$SELF" "$@"
 fi
 
+# The UserData path runs without HOME, and the toolchain the steps drive assumes
+# one: go keeps its build cache there (init-db's goose migrations die with
+# "GOCACHE is not defined and neither $XDG_CACHE_HOME nor $HOME are defined"),
+# and packer and docker keep their plugins, config and registry credentials
+# there. Pin it once, to the home of root, who runs every step.
+export HOME=/root
+
 # Funnel everything into one log, exactly as the UserData does, and skip it when
 # the caller has already set one up - nesting a second tee on the same file would
 # write every line twice.
@@ -98,6 +105,20 @@ if [ -z "${E2B_LOG_FUNNEL:-}" ]; then
 fi
 
 cd "$REPO_DIR" || exit 1
+
+# The UserData hands this tree to ubuntu so the login user can drive git, which
+# makes it "dubious ownership" for root - and every git call in the chain runs as
+# root. The upstream Makefiles take COMMIT_SHA from `git rev-parse`, so without
+# this the binaries and images ship with an empty commitSHA and "compare the
+# replicas' commit_sha with HEAD" can no longer tell a fresh build from a stale
+# one. --global (root's, given the HOME pinned above) so the exception widens
+# trust for root alone rather than for every user on the host.
+if ! git config --global --get-all safe.directory 2>/dev/null | grep -qxF "$REPO_DIR"; then
+  git config --global --add safe.directory "$REPO_DIR" || {
+    echo "Error: could not mark $REPO_DIR as a safe git directory for root." >&2
+    exit 1
+  }
+fi
 
 # Each deployment step records a marker on success so a re-run (after fixing
 # whatever failed) resumes instead of starting the whole chain over. This is the
@@ -180,15 +201,28 @@ wait_for_nomad() {
   return 1
 }
 
+# The api job's db-migrator prestart task applies whatever migrations a code-layer
+# sync brought in, and upstream migrations rewrite the tiers table more than once.
+# init-db's checkpoint keeps it from running again on a redeploy, so reapply this
+# deployment's tier limits right after the jobs are up - even when a job after
+# api fails, since by then the migrator may already have rewritten the tiers
+# under a running API. The step still fails if nomad/deploy.sh did.
+deploy_jobs() {
+  local rc=0
+  bash nomad/deploy.sh || rc=$?
+  bash infra-iac/db/apply-tier-limits.sh || return 1
+  return $rc
+}
+
 run_named() {
   case "$1" in
     init)            run_step init bash infra-iac/init.sh ;;
-    packer)          run_step packer env HOME=/root bash -l infra-iac/packer/packer.sh ;;
+    packer)          run_step packer bash -l infra-iac/packer/packer.sh ;;
     terraform)       run_step terraform bash infra-iac/terraform/start.sh ;;
     init-db)         run_step init-db bash infra-iac/db/init-db.sh ;;
-    build)           run_step build env HOME=/root bash tools/build-and-upload.sh ;;
+    build)           run_step build bash tools/build-and-upload.sh ;;
     prepare)         load_nomad_env && run_step prepare bash nomad/prepare.sh ;;
-    deploy)          load_nomad_env && wait_for_nomad && run_step deploy bash nomad/deploy.sh ;;
+    deploy)          load_nomad_env && wait_for_nomad && run_step deploy deploy_jobs ;;
     create-template) run_step create-template bash tools/legacy/create_template.sh ;;
     *) echo "Unknown step: $1" >&2; return 2 ;;
   esac
