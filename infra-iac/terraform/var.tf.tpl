@@ -80,6 +80,20 @@ variable "client_instance_type" {
   default     = "${CFNCLIENTINSTANCETYPE}"
 }
 
+# Client Subnet Type
+# Which subnets the client (sandbox host) pool runs in - CloudFormation's
+# ClientSubnetType. See local.client_in_public_subnets in main.tf.
+variable "client_subnet_type" {
+  description = "Subnets for the client pool: Private (egress via NAT) or Public (a public IP per node)"
+  type        = string
+  default     = "${CFNCLIENTSUBNETTYPE}"
+
+  validation {
+    condition     = contains(["public", "private"], lower(var.client_subnet_type))
+    error_message = "client_subnet_type must be Public or Private."
+  }
+}
+
 # Also unused by main.tf now: it only ever selected the load balancer's scheme
 # and subnets, and that decision moved to CloudFormation's IsPrivateAccess
 # condition along with the load balancer itself.

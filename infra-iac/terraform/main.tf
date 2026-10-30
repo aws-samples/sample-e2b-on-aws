@@ -88,6 +88,13 @@ locals {
   # would report x86 bare-metal facts for an arm64 stack.
   client_instance_type = var.architecture == "x86_64" ? local.client_instance_type_x86 : local.client_instance_type_arm
 
+  # CloudFormation's ClientSubnetType. Public puts the client pool in the public
+  # subnets with a public IP per node, so sandbox egress leaves through the
+  # internet gateway instead of the NAT gateway - no NAT data-processing charge
+  # and no NAT port limit, though the host's own conntrack still applies. Inbound
+  # is VPC-only either way: client_sg admits nothing from outside the VPC.
+  client_in_public_subnets = lower(var.client_subnet_type) == "public"
+
   # The build node runs template-manager on its own. It does not need bare
   # metal: nested virtualization is supported on 8th-generation Intel families
   # (c8i, m8i, r8i and their flex variants, per the CpuOptions API), which gives
@@ -702,8 +709,12 @@ resource "aws_launch_template" "client" {
     }
   }
 
+  # The public IP has to follow the subnet choice: this setting overrides the
+  # public subnets' MapPublicIpOnLaunch, and a node there without a public IP
+  # cannot reach the internet (only S3, through the gateway endpoint) - the
+  # public route table goes to the internet gateway, not the NAT.
   network_interfaces {
-    associate_public_ip_address = false
+    associate_public_ip_address = local.client_in_public_subnets
     security_groups             = [aws_security_group.client_sg.id]
   }
 
@@ -790,13 +801,20 @@ resource "null_resource" "build_nested_virtualization" {
 # Create client auto scaling group
 resource "aws_autoscaling_group" "client" {
   name                = "${var.prefix}-client-asg"
-  vpc_zone_identifier = var.VPC.private_subnets
+  vpc_zone_identifier = local.client_in_public_subnets ? var.VPC.public_subnets : var.VPC.private_subnets
   # desired_capacity    = var.client_asg_desired_capacity
   # max_size            = max(var.client_asg_max_size, var.client_asg_desired_capacity)
   # min_size            = var.client_asg_desired_capacity
   desired_capacity = local.clusters.client.desired_capacity
   max_size         = local.clusters.client.max_size
   min_size         = local.clusters.client.min_size
+
+  # Same ordering problem as the build pool, for a client type that is not bare
+  # metal: without it the first node launches from the launch template version
+  # that predates the nested-virtualization flag, comes up without /dev/kvm, and
+  # cannot run a single sandbox. A no-op for metal types, where the null_resource
+  # has count 0.
+  depends_on = [null_resource.client_nested_virtualization]
 
   launch_template {
     id      = aws_launch_template.client.id
@@ -823,8 +841,12 @@ resource "aws_autoscaling_group" "client" {
       # refresh calls it done.
       instance_warmup = 300
     }
-    # No triggers block: a launch_template change already triggers the refresh on
-    # its own, and naming it explicitly is what terraform validate warns about.
+    # No triggers block: naming launch_template explicitly is what terraform
+    # validate warns about. But the refresh only fires when this resource's own
+    # launch_template block changes, and that block is {id, "$Latest"} - a new
+    # launch template version leaves it as it was. So an instance-type, public-IP
+    # or subnet change is applied without a refresh (observed on a live stack);
+    # replace the node to pick it up.
   }
 
   tag {

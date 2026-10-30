@@ -93,6 +93,7 @@ Before deploying to production, verify these critical security and reliability s
 | **VPC Configuration** | New VPC environment configuration |
 | **Environment** | `dev` or `prod` (prod has stricter resource protection) |
 | **Architecture** | x64 or [AWS Graviton](https://aws.amazon.com/ec2/graviton/) |
+| **ClientSubnetType** | `Private` (default) or `Public`: which subnets the sandbox host nodes run in, see [Client node placement](#client-node-placement) |
 | **Domain** | A domain you own (e.g., `example.com`) |
 | **EC2 Key Pair** | Existing key pair for SSH access |
 | **AllowRemoteSSHIPs** | IP range for SSH access (defaults to private networks) |
@@ -101,6 +102,57 @@ Before deploying to production, verify these critical security and reliability s
 5. Complete all required fields and launch the stack
 
 > **Note:** See [AWS Graviton Technical Guide](https://github.com/aws/aws-graviton-getting-started) for Graviton best practices.
+
+#### Client node placement
+
+`ClientSubnetType` decides where the client nodes - the hosts that run the sandboxes - live:
+
+| | `Private` (default) | `Public` |
+|---|---|---|
+| Subnets | Private subnets | Public subnets, one public IP per node |
+| Sandbox egress | Through the NAT gateway | Out through the internet gateway, from the node's own public IP |
+| Inbound from the internet | None | None: the client security group admits traffic from inside the VPC only |
+| Trade-off | NAT data-processing charges and NAT port limits apply | No NAT charge or NAT port limit (the node's own connection tracking still applies); sandbox traffic leaves from each node's address rather than a fixed NAT address |
+
+To change it on a running stack (sandboxes on the client nodes are lost):
+
+```bash
+# 1. Record the new value on the stack, keeping the deployed template.
+#    Skip this step if the stack was created from a template without
+#    ClientSubnetType, or if CloudFormation wants to replace the bastion because
+#    the Ubuntu AMI moved on since the stack was created (the stack policy stops
+#    that update). terraform only reads what step 2 writes.
+aws cloudformation update-stack --stack-name <stack> --use-previous-template \
+  --capabilities CAPABILITY_IAM --parameters \
+  $(aws cloudformation describe-stacks --stack-name <stack> \
+      --query 'Stacks[0].Parameters[?ParameterKey!=`ClientSubnetType`].ParameterKey' --output text \
+    | tr '\t' '\n' | sed 's/.*/ParameterKey=&,UsePreviousValue=true/') \
+  ParameterKey=ClientSubnetType,ParameterValue=Public
+
+# 2. On the bastion. The chain reads the value from /opt/config.properties, which
+#    the init step wrote when the stack was created. Do not rerun --only init for
+#    this: it rewrites the file from the stack outputs and drops what later steps
+#    appended to it.
+if grep -q '^CFNCLIENTSUBNETTYPE=' /opt/config.properties; then
+  sudo sed -i 's/^CFNCLIENTSUBNETTYPE=.*/CFNCLIENTSUBNETTYPE=Public/' /opt/config.properties
+else
+  echo 'CFNCLIENTSUBNETTYPE=Public' | sudo tee -a /opt/config.properties
+fi
+sudo bash deploy-all.sh --only terraform
+
+# 3. Replace the client nodes; terraform applies the change without refreshing them.
+aws autoscaling terminate-instance-in-auto-scaling-group \
+  --instance-id <client-instance-id> --no-should-decrement-desired-capacity
+```
+
+If your public and private subnets cover different Availability Zones (possible
+with the existing-VPC template), the Auto Scaling group rebalances across the new
+zones by itself and may replace client nodes before step 3.
+
+**Stacks created before `ClientSubnetType` existed** have no `CFNCLIENTSUBNETTYPE`
+in `/opt/config.properties`, so the next `deploy-all.sh --only terraform` with this
+code stops in `prepare.sh`, naming the missing key. Add it with the value those
+stacks always had: `echo 'CFNCLIENTSUBNETTYPE=Private' | sudo tee -a /opt/config.properties`.
 
 ### Step 2 — Validate Domain Certificate
 
@@ -382,6 +434,7 @@ If you already have a VPC with subnets configured, use the `e2b-setup-env-existi
 | `ExistingPrivateSubnet1Id` / `2Id` | Private subnet IDs (two AZs) |
 | `ExistingPublicSubnet1Id` / `2Id` | Public subnet IDs (two AZs) |
 | `PublicAccess` | `public` or `private` access mode |
+| `ClientSubnetType` | `Private` (default) or `Public`; `Public` uses the two public subnets above, which must route `0.0.0.0/0` to an internet gateway |
 | **Architecture, Domain, Key Pair, DB** | Same as standard deployment |
 
 4. The template automatically discovers your VPC CIDR block via a Lambda function

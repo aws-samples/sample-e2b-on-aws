@@ -34,6 +34,7 @@ Metadata:
           default: Client Cluster Configuration
         Parameters:
           - ClientInstanceType
+          - ClientSubnetType
       - Label:
           default: Domain Configuration
         Parameters:
@@ -88,6 +89,19 @@ Parameters:
     Description: "Instance type for client cluster nodes (must support nested virtualization, e.g. *.metal). Leave empty to use architecture default (x86: c5.metal, arm64: c7g.metal)."
     Type: String
     Default: ""
+
+  ClientSubnetType:
+    Type: String
+    AllowedValues:
+      - Private
+      - Public
+    Default: Private
+    Description: >-
+      Subnets for the client (sandbox host) nodes. Private sends sandbox egress
+      through your private subnets' NAT. Public puts them in ExistingPublicSubnet1Id
+      and ExistingPublicSubnet2Id with a public IP each, so egress leaves through the
+      internet gateway - those subnets must route 0.0.0.0/0 to one - while the client
+      security group still admits inbound traffic from inside the VPC only.
 
   # Domain Configuration - Settings for SSL certificate and DNS
   BaseDomain:
@@ -1379,6 +1393,14 @@ Outputs:
         - c7g.metal
     Export:
       Name: !Sub "${AWS::StackName}-CFNCLIENTINSTANCETYPE"
+
+  # Read by terraform through var.tf.tpl's ${CFNCLIENTSUBNETTYPE}; both templates
+  # have to output it, or prepare.sh stops on the unreplaced placeholder.
+  CFNCLIENTSUBNETTYPE:
+    Description: Subnets the client nodes run in (Private or Public)
+    Value: !Ref ClientSubnetType
+    Export:
+      Name: !Sub "${AWS::StackName}-CFNCLIENTSUBNETTYPE"
 
   REGION:
     Description: E2B Cluster Deployment Region

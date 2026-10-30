@@ -90,6 +90,7 @@ E2B on AWS 为在您自己的 AWS 账户中运行 AI Agent 沙箱提供了安全
 | **VPC Configuration** | 新建 VPC 环境配置 |
 | **Environment** | `dev` 或 `prod`（prod 有更严格的资源保护机制） |
 | **Architecture** | x64 或 [AWS Graviton](https://aws.amazon.com/ec2/graviton/) |
+| **ClientSubnetType** | `Private`（默认）或 `Public`：运行沙箱的宿主机节点放在哪类子网，见[Client 节点放置](#client-节点放置) |
 | **Domain** | 您拥有的域名（例如 `example.com`） |
 | **EC2 Key Pair** | 用于 SSH 访问的现有密钥对 |
 | **AllowRemoteSSHIPs** | SSH 访问的 IP 范围（默认限制为私有网络） |
@@ -98,6 +99,53 @@ E2B on AWS 为在您自己的 AWS 账户中运行 AI Agent 沙箱提供了安全
 5. 填写所有必填字段并启动堆栈
 
 > **提示：** 参阅 [AWS Graviton 技术指南](https://github.com/aws/aws-graviton-getting-started) 了解 Graviton 最佳实践。
+
+#### Client 节点放置
+
+`ClientSubnetType` 决定 client 节点（运行沙箱的宿主机）放在哪里：
+
+| | `Private`（默认） | `Public` |
+|---|---|---|
+| 子网 | 私有子网 | 公有子网，每个节点一个公网 IP |
+| 沙箱出网 | 经 NAT 网关 | 经互联网网关，从节点自己的公网 IP 出去 |
+| 来自互联网的入站 | 无 | 无：client 安全组只放行 VPC 内部的流量 |
+| 取舍 | 有 NAT 数据处理费，受 NAT 端口数限制 | 没有 NAT 费用和 NAT 端口限制（节点自身的连接跟踪限制仍在）；沙箱流量的出口是各节点自己的地址，而不是固定的 NAT 地址 |
+
+在运行中的栈上切换（client 节点上的沙箱会丢失）：
+
+```bash
+# 1. 在栈上记录新值，沿用已部署的模板。
+#    以下两种情况跳过这一步：栈是用还没有 ClientSubnetType 的旧模板建的；或者建栈之后
+#    Ubuntu AMI 更新了，CloudFormation 要替换堡垒机（stack policy 会拦下这次更新）。
+#    terraform 只读第 2 步写的值。
+aws cloudformation update-stack --stack-name <stack> --use-previous-template \
+  --capabilities CAPABILITY_IAM --parameters \
+  $(aws cloudformation describe-stacks --stack-name <stack> \
+      --query 'Stacks[0].Parameters[?ParameterKey!=`ClientSubnetType`].ParameterKey' --output text \
+    | tr '\t' '\n' | sed 's/.*/ParameterKey=&,UsePreviousValue=true/') \
+  ParameterKey=ClientSubnetType,ParameterValue=Public
+
+# 2. 在堡垒机上。部署链从 /opt/config.properties 读这个值，它是建栈时 init 步骤写的。
+#    不要为此重跑 --only init：它会按栈输出重写整个文件，把后续步骤追加进去的内容冲掉。
+if grep -q '^CFNCLIENTSUBNETTYPE=' /opt/config.properties; then
+  sudo sed -i 's/^CFNCLIENTSUBNETTYPE=.*/CFNCLIENTSUBNETTYPE=Public/' /opt/config.properties
+else
+  echo 'CFNCLIENTSUBNETTYPE=Public' | sudo tee -a /opt/config.properties
+fi
+sudo bash deploy-all.sh --only terraform
+
+# 3. 替换 client 节点；terraform 应用这个改动时不会自动替换它们。
+aws autoscaling terminate-instance-in-auto-scaling-group \
+  --instance-id <client-instance-id> --no-should-decrement-desired-capacity
+```
+
+如果公有子网和私有子网覆盖的可用区不同（使用现有 VPC 模板时可能出现），Auto Scaling
+组会自行在新的可用区之间做重平衡，可能在第 3 步之前就替换掉 client 节点。
+
+**在 `ClientSubnetType` 出现之前创建的栈**，`/opt/config.properties` 里没有
+`CFNCLIENTSUBNETTYPE`，用这份代码下一次跑 `deploy-all.sh --only terraform` 时会停在
+`prepare.sh`，并列出缺失的键。按这些栈一直以来的值补上即可：
+`echo 'CFNCLIENTSUBNETTYPE=Private' | sudo tee -a /opt/config.properties`。
 
 ### 步骤 2 — 验证域名证书
 
@@ -359,6 +407,7 @@ curl -X POST \
 | `ExistingPrivateSubnet1Id` / `2Id` | 私有子网 ID（两个可用区） |
 | `ExistingPublicSubnet1Id` / `2Id` | 公有子网 ID（两个可用区） |
 | `PublicAccess` | `public` 或 `private` 访问模式 |
+| `ClientSubnetType` | `Private`（默认）或 `Public`；`Public` 使用上面两个公有子网，它们必须把 `0.0.0.0/0` 路由到互联网网关 |
 | **Architecture、Domain、Key Pair、DB** | 与标准部署相同 |
 
 4. 模板会通过 Lambda 函数自动发现您的 VPC CIDR 块
