@@ -56,27 +56,28 @@ locals {
   # CloudFormation stack update. data.aws_ec2_instance_type below reads the same
   # locals, so the bare-metal detection can never drift from what the ASG runs.
 
-  # Client nodes host customer sandboxes. Bare metal, so Firecracker gets
-  # hardware virtualization directly.
+  # Client nodes host customer sandboxes.
   #
-  # The size floor is not ours to choose: a sandbox may only be placed on a node
-  # whose CPU model matches the one its template was built on
+  # The CPU is not ours to choose: a sandbox may only be placed on a node whose
+  # CPU model matches the one its template was built on
   # (shared/pkg/machineinfo.IsCompatibleWith allows same architecture + family +
   # model, with a single hardcoded exception for Ice Lake builds on Emerald
-  # Rapids nodes). The build pool has to be 8th-generation Intel for nested
-  # virtualization, so the client pool has to be 8th-generation Intel metal - and
-  # AWS only sells that in metal-48xl (192 vCPU) and metal-96xl (384 vCPU).
+  # Rapids nodes). The build pool is 8th-generation Intel (m8i, for nested
+  # virtualization), so the client pool has to be 8th-generation Intel too.
   #
-  # An earlier attempt at m5zn.metal, the smallest x86 metal at 48 vCPU, deployed
-  # cleanly and then refused every sandbox with
+  # An earlier attempt at m5zn.metal deployed cleanly and then refused every
+  # sandbox with
   #   503 sandbox_no_compatible_node: no compatible node for this template's
   #   requirements
   # because Cascade Lake is not the Granite Rapids the build ran on.
   #
-  # c8i rather than m8i at the same 192 vCPU: half the memory (384 GiB against
-  # 768 GiB) for the same CPU generation, and sandbox density here is bounded by
-  # vCPU, not by RAM.
-  client_instance_type_x86 = "c8i.metal-48xl"
+  # Bare metal is not required: like the build node, an 8th-generation Intel
+  # instance with nested virtualization gives Firecracker a working /dev/kvm
+  # (null_resource.client_nested_virtualization turns the flag on whenever this
+  # is not a metal type). r8i.8xlarge - 32 vCPU / 256 GiB, Xeon 6975P-C, family 6
+  # model 173 like m8i - ran the full sandbox lifecycle on a live stack where the
+  # previous c8i.metal-48xl (192 vCPU / 384 GiB) was the floor for metal.
+  client_instance_type_x86 = "r8i.8xlarge"
 
   # arm64: the same rule applies, so this has to match whatever the arm build
   # node reports. c8g.metal-48xl is the Graviton4 equivalent; a1.metal is not an
