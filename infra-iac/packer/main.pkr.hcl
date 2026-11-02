@@ -166,9 +166,17 @@ build {
     ]
   }
 
+  # Go from the official release rather than the snap store, which answered the
+  # first Ubuntu 24.04 bastions with HTTP 429 and timeouts for minutes at a time
+  # (see the bastion UserData). 1.26.6 is the version go.work requires.
   provisioner "shell" {
     inline = [
-      "sudo DEBIAN_FRONTEND=noninteractive snap install go --classic"
+      "GO_TGZ=go1.26.6.linux-${var.architecture == "x86_64" ? "amd64" : "arm64"}.tar.gz",
+      "curl -fsSL --retry 5 --retry-all-errors -o /tmp/$GO_TGZ https://dl.google.com/go/$GO_TGZ",
+      "echo \"$(curl -fsSL --retry 5 --retry-all-errors https://dl.google.com/go/$GO_TGZ.sha256)  /tmp/$GO_TGZ\" | sha256sum -c -",
+      "sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf /tmp/$GO_TGZ && rm -f /tmp/$GO_TGZ",
+      "sudo ln -sf /usr/local/go/bin/go /usr/local/bin/go",
+      "sudo ln -sf /usr/local/go/bin/gofmt /usr/local/bin/gofmt"
     ]
   }
 
