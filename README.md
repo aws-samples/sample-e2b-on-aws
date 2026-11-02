@@ -382,7 +382,9 @@ exporter sends no headers, which is what an unauthenticated collector wants.
 # On the bastion, from the repository root (/opt/infra/sample-e2b-on-aws):
 # the script reads /opt/config.properties, which only exists there.
 
-# Create from e2bdev/code-interpreter (default)
+# Create from e2bdev/code-interpreter (default on x86_64). That image is published
+# for linux/amd64 only, so arm64 (Graviton) stacks default to e2bdev/base instead,
+# with no start command (no Jupyter).
 bash tools/legacy/create_template.sh
 
 # Create from a Dockerfile
@@ -563,7 +565,8 @@ calls `Sandbox.create()` with no template.
   template `code-interpreter-v1`, which this deployment does not have, and the
   create fails with a 404. The template the deploy chain builds (alias
   `test-<timestamp>`) comes from `e2bdev/code-interpreter`, so it serves both
-  `e2b.Sandbox` and `e2b_code_interpreter.Sandbox`.
+  `e2b.Sandbox` and `e2b_code_interpreter.Sandbox`. On an arm64 stack it comes
+  from `e2bdev/base`, which has no Jupyter, so only `e2b.Sandbox` works there.
 
 ---
 

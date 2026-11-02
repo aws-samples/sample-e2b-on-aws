@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Default Dockerfile
+# Default Dockerfile (x86_64 stacks; arm64 stacks switch it below)
 DOCKERFILE="FROM e2bdev/code-interpreter:latest"
 DOCKER_IMAGE="e2bdev/code-interpreter:latest"
 CREATE_TYPE="default"
@@ -50,13 +50,35 @@ if [ -f /opt/config.properties ]; then
     # Use grep to extract variables
     AWSREGION=$(grep -E "^AWSREGION=" /opt/config.properties | cut -d'=' -f2)
     CFNDOMAIN=$(grep -E "^CFNDOMAIN=" /opt/config.properties | cut -d'=' -f2)
-    
+    CFNARCHITECTURE=$(grep -E "^CFNARCHITECTURE=" /opt/config.properties | cut -d'=' -f2)
+
     echo "Found AWSREGION: $AWSREGION"
     echo "Found CFNDOMAIN: $CFNDOMAIN"
+    echo "Found CFNARCHITECTURE: $CFNARCHITECTURE"
 else
     echo "Error: Configuration file /opt/config.properties not found"
     exit 1
 fi
+
+# e2bdev/code-interpreter is published for linux/amd64 only, so on a Graviton
+# stack the default pull fails. Default to e2bdev/base there, which is
+# multi-arch. It has no Jupyter, hence no start command. An explicit
+# --docker-file or --ecr-image is the caller's choice and is left alone.
+case "$CFNARCHITECTURE" in
+    x86_64)
+        ;;
+    arm64)
+        if [ "$CREATE_TYPE" = "default" ]; then
+            DOCKER_IMAGE="e2bdev/base:latest"
+            DOCKERFILE="FROM $DOCKER_IMAGE"
+            START_COMMAND=""
+        fi
+        ;;
+    *)
+        echo "Error: unsupported CFNARCHITECTURE '$CFNARCHITECTURE' in /opt/config.properties (expected x86_64 or arm64)" >&2
+        exit 1
+        ;;
+esac
 
 # Credentials written by infra-iac/db/init-db.sh after it seeds the database.
 # Resolved from the repository root: the script cds into tools/legacy above, so

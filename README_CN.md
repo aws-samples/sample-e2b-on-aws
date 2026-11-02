@@ -354,7 +354,8 @@ EOF
 # 在堡垒机上、于仓库根目录（/opt/infra/sample-e2b-on-aws）执行：
 # 脚本读取 /opt/config.properties，该文件只存在于堡垒机。
 
-# 从 e2bdev/code-interpreter 创建（默认）
+# 从 e2bdev/code-interpreter 创建（x86_64 默认）。该镜像只发布了 linux/amd64，
+# 因此 arm64（Graviton）栈默认改用 e2bdev/base，且不设启动命令（没有 Jupyter）。
 bash tools/legacy/create_template.sh
 
 # 从 Dockerfile 创建
@@ -525,6 +526,7 @@ EOF
 - **要传 `template=`。** 不传时 `e2b_code_interpreter` 会请求默认模板 `code-interpreter-v1`，
   本部署没有这个模板，创建会以 404 失败。部署链构建的模板（别名 `test-<时间戳>`）来自
   `e2bdev/code-interpreter`，`e2b.Sandbox` 和 `e2b_code_interpreter.Sandbox` 都能用。
+  arm64 栈上它来自 `e2bdev/base`，没有 Jupyter，只能用 `e2b.Sandbox`。
 
 ---
 
