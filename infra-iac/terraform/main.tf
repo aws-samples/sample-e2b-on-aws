@@ -79,9 +79,9 @@ locals {
   # previous c8i.metal-48xl (192 vCPU / 384 GiB) was the floor for metal.
   client_instance_type_x86 = "r8i.8xlarge"
 
-  # arm64: the same rule applies, so this has to match whatever the arm build
-  # node reports. c8g.metal-48xl is the Graviton4 equivalent; a1.metal is not an
-  # option regardless, since Firecracker's aarch64 support starts at Graviton2.
+  # arm64: the same rule applies, so this has to match the arm build node,
+  # build_instance_type_arm below - both Graviton4. a1.metal is not an option
+  # regardless, since Firecracker's aarch64 support starts at Graviton2.
   client_instance_type_arm = "c8g.metal-48xl"
 
   # Resolved once so data.aws_ec2_instance_type.client below describes the shape
@@ -96,13 +96,26 @@ locals {
   # is VPC-only either way: client_sg admits nothing from outside the VPC.
   client_in_public_subnets = lower(var.client_subnet_type) == "public"
 
-  # The build node runs template-manager on its own. It does not need bare
-  # metal: nested virtualization is supported on 8th-generation Intel families
-  # (c8i, m8i, r8i and their flex variants, per the CpuOptions API), which gives
-  # the build sandbox a working /dev/kvm at a fraction of a metal instance.
-  # null_resource.build_nested_virtualization turns the flag on, because the AWS
-  # provider pinned here has no cpu_options.nested_virtualization argument.
-  build_instance_type = "m8i.4xlarge"
+  # The build node runs template-manager on its own. On x86 it does not need
+  # bare metal: nested virtualization is supported on 8th-generation Intel
+  # families (c8i, m8i, r8i and their flex variants, per the CpuOptions API),
+  # which gives the build sandbox a working /dev/kvm at a fraction of a metal
+  # instance. null_resource.build_nested_virtualization turns the flag on,
+  # because the AWS provider pinned here has no cpu_options.nested_virtualization
+  # argument.
+  build_instance_type_x86 = "m8i.4xlarge"
+
+  # Graviton has no nested virtualization, so on arm64 /dev/kvm means bare metal.
+  # It also has to be the client pool's generation: the compatibility rule above
+  # compares architecture, family and model, and on arm64 the model is
+  # /proc/cpuinfo's "CPU part" - Graviton4 for both c8g sizes. 24xl is the
+  # smallest Graviton4 metal.
+  build_instance_type_arm = "c8g.metal-24xl"
+
+  # Resolved like client_instance_type, so data.aws_ec2_instance_type.build
+  # describes what the build ASG launches: bare metal on arm64 is what drops
+  # null_resource.build_nested_virtualization to count = 0 there.
+  build_instance_type = var.architecture == "x86_64" ? local.build_instance_type_x86 : local.build_instance_type_arm
 
   # Define cluster configurations for different node types
   clusters = {
@@ -143,8 +156,8 @@ locals {
     # sandbox egress into their own proxy, so on a shared host whichever wrote
     # last takes over the other's sandboxes and template builds lose the network.
     build = {
-      instance_type_x86    = local.build_instance_type
-      instance_type_arm    = local.build_instance_type
+      instance_type_x86    = local.build_instance_type_x86
+      instance_type_arm    = local.build_instance_type_arm
       desired_capacity = 1
       max_size         = 1
       min_size         = 1
@@ -777,9 +790,9 @@ resource "null_resource" "client_nested_virtualization" {
   }
 }
 
-# Same treatment for the build launch template. This is the one that actually
-# needs it: the build pool runs a non-metal m8i, so Firecracker inside the
-# template build only gets /dev/kvm with nested virtualization turned on.
+# Same treatment for the build launch template. On x86 the build pool runs a
+# non-metal m8i, so Firecracker inside the template build only gets /dev/kvm with
+# nested virtualization turned on; on arm64 the build pool is metal and count is 0.
 # The ASG tracks version "$Latest", so it picks up the version created here.
 resource "null_resource" "build_nested_virtualization" {
   count = data.aws_ec2_instance_type.build.bare_metal ? 0 : 1

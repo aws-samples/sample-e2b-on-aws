@@ -41,10 +41,16 @@ The code layer (`packages/`, `spec/`, `scripts/`, `tests/`, `firecracker/`) is a
 byte-for-byte copy of
 [e2b-dev/infra](https://github.com/e2b-dev/infra) at
 [`225f963`](https://github.com/e2b-dev/infra/commit/225f963a8dfbd516ee513b33d5f2846588c2f82c),
-with two exceptions: three packages this deployment does not build and so does
+with three exceptions: three packages this deployment does not build and so does
 not vendor (`dashboard-api`, `local-dev`, `nomad-nodepool-apm` — none of them
-appear in `go.work`), and upstream's `.env*` samples, which `.gitignore`
-excludes. A sync replaces that layer wholesale rather than merging into it. The
+appear in `go.work`); upstream's `.env*` samples, which `.gitignore` excludes;
+and four files taken as they are from the later upstream commit
+[`d01654d8`](https://github.com/e2b-dev/infra/commit/d01654d820d72c5ce37ad2bb3482a7694cd93c78)
+for arm64 — `packages/api/Makefile` and `packages/api/docker-bake.hcl` (the api
+and db-migrator images follow `BUILD_ARCH`), and
+`packages/orchestrator/pkg/sandbox/fc/kernel_args.go` with its test (no x86-only
+kernel parameters on arm64 guests). The rest of that commit is not carried. A
+sync replaces that layer wholesale rather than merging into it. The
 deployment layer (CloudFormation, `infra-iac/`, `nomad/`) is specific to this
 repository.
 
@@ -376,7 +382,9 @@ exporter sends no headers, which is what an unauthenticated collector wants.
 # On the bastion, from the repository root (/opt/infra/sample-e2b-on-aws):
 # the script reads /opt/config.properties, which only exists there.
 
-# Create from e2bdev/code-interpreter (default)
+# Create from e2bdev/code-interpreter (default on x86_64). That image is published
+# for linux/amd64 only, so arm64 (Graviton) stacks default to e2bdev/base instead,
+# with no start command (no Jupyter).
 bash tools/legacy/create_template.sh
 
 # Create from a Dockerfile
@@ -557,7 +565,8 @@ calls `Sandbox.create()` with no template.
   template `code-interpreter-v1`, which this deployment does not have, and the
   create fails with a 404. The template the deploy chain builds (alias
   `test-<timestamp>`) comes from `e2bdev/code-interpreter`, so it serves both
-  `e2b.Sandbox` and `e2b_code_interpreter.Sandbox`.
+  `e2b.Sandbox` and `e2b_code_interpreter.Sandbox`. On an arm64 stack it comes
+  from `e2bdev/base`, which has no Jupyter, so only `e2b.Sandbox` works there.
 
 ---
 

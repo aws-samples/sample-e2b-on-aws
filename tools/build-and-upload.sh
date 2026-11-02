@@ -32,13 +32,30 @@ cfg() { grep "^$1=" "$CONFIG_FILE" | head -1 | cut -d'=' -f2-; }
 AWS_ACCOUNT_ID=$(cfg account_id)
 AWS_REGION=$(cfg AWSREGION)
 BUCKET_E2B=$(cfg BUCKET_E2B)
+ARCHITECTURE=$(cfg CFNARCHITECTURE)
 
-for name in AWS_ACCOUNT_ID AWS_REGION BUCKET_E2B; do
+for name in AWS_ACCOUNT_ID AWS_REGION BUCKET_E2B ARCHITECTURE; do
     if [ -z "${!name}" ]; then
         echo "Error: $name missing from $CONFIG_FILE"
         exit 1
     fi
 done
+
+# Every upstream Makefile defaults to BUILD_ARCH ?= amd64 and derives its Docker
+# platform from it, so leaving it unset on a Graviton stack still produces amd64
+# images and binaries - which only fail once an arm64 node tries to run them.
+# The stack parameter uses EC2's names (x86_64/arm64), the Makefiles GOARCH's.
+# Exported because make takes ?= variables from the environment; that is also
+# how tools/snapshot-retention, which is ours, gets it.
+case "$ARCHITECTURE" in
+    x86_64) BUILD_ARCH=amd64 ;;
+    arm64)  BUILD_ARCH=arm64 ;;
+    *)
+        echo "Error: unsupported CFNARCHITECTURE '$ARCHITECTURE' in $CONFIG_FILE (expected x86_64 or arm64)"
+        exit 1
+        ;;
+esac
+export BUILD_ARCH
 
 # The bastion authenticates through its instance profile. The upstream upload
 # targets pass --profile unconditionally, so the value has to name a real
@@ -54,6 +71,7 @@ ECR_REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
 echo "=== Build configuration ==="
 echo "  registry     : ${ECR_REGISTRY}/${PREFIX}core"
 echo "  binary target: s3://${AWS_BUCKET_PREFIX}fc-env-pipeline/"
+echo "  platform     : linux/${BUILD_ARCH}"
 
 # ECR repositories are not managed by Terraform here, so create them on demand.
 for repo in "${PREFIX}core/api" "${PREFIX}core/db-migrator" "${PREFIX}core/client-proxy"; do

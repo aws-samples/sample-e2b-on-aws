@@ -40,9 +40,14 @@ E2B on AWS 为在您自己的 AWS 账户中运行 AI Agent 沙箱提供了安全
 代码层（`packages/`、`spec/`、`scripts/`、`tests/`、`firecracker/`）是
 [e2b-dev/infra](https://github.com/e2b-dev/infra) 在
 [`225f963`](https://github.com/e2b-dev/infra/commit/225f963a8dfbd516ee513b33d5f2846588c2f82c)
-处的逐字节副本，仅有两处例外：本部署不构建、因此不 vendor 的三个包
-（`dashboard-api`、`local-dev`、`nomad-nodepool-apm`，三者都不在 `go.work` 中），
-以及被 `.gitignore` 排除的上游 `.env*` 样例文件。同步的做法是整体替换该层，而不是
+处的逐字节副本，有三处例外：本部署不构建、因此不 vendor 的三个包
+（`dashboard-api`、`local-dev`、`nomad-nodepool-apm`，三者都不在 `go.work` 中）；
+被 `.gitignore` 排除的上游 `.env*` 样例文件；以及为 arm64 从更新的上游提交
+[`d01654d8`](https://github.com/e2b-dev/infra/commit/d01654d820d72c5ce37ad2bb3482a7694cd93c78)
+原样取来的四个文件——`packages/api/Makefile` 和 `packages/api/docker-bake.hcl`
+（api 与 db-migrator 镜像跟随 `BUILD_ARCH`），以及
+`packages/orchestrator/pkg/sandbox/fc/kernel_args.go` 及其测试（arm64 guest 不带
+x86 专有的内核参数）。该提交的其余改动没有带入。同步的做法是整体替换该层，而不是
 往里合并。部署层（CloudFormation、`infra-iac/`、`nomad/`）为本仓库自研。
 
 ---
@@ -349,7 +354,8 @@ EOF
 # 在堡垒机上、于仓库根目录（/opt/infra/sample-e2b-on-aws）执行：
 # 脚本读取 /opt/config.properties，该文件只存在于堡垒机。
 
-# 从 e2bdev/code-interpreter 创建（默认）
+# 从 e2bdev/code-interpreter 创建（x86_64 默认）。该镜像只发布了 linux/amd64，
+# 因此 arm64（Graviton）栈默认改用 e2bdev/base，且不设启动命令（没有 Jupyter）。
 bash tools/legacy/create_template.sh
 
 # 从 Dockerfile 创建
@@ -520,6 +526,7 @@ EOF
 - **要传 `template=`。** 不传时 `e2b_code_interpreter` 会请求默认模板 `code-interpreter-v1`，
   本部署没有这个模板，创建会以 404 失败。部署链构建的模板（别名 `test-<时间戳>`）来自
   `e2bdev/code-interpreter`，`e2b.Sandbox` 和 `e2b_code_interpreter.Sandbox` 都能用。
+  arm64 栈上它来自 `e2bdev/base`，没有 Jupyter，只能用 `e2b.Sandbox`。
 
 ---
 

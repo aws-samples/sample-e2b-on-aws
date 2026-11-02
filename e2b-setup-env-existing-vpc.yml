@@ -1020,8 +1020,8 @@ Resources:
       Monitoring: true
       ImageId: !If
         - IsX64
-        - "{{resolve:ssm:/aws/service/canonical/ubuntu/server/22.04/stable/current/amd64/hvm/ebs-gp2/ami-id}}"
-        - "{{resolve:ssm:/aws/service/canonical/ubuntu/server/22.04/stable/current/arm64/hvm/ebs-gp2/ami-id}}"
+        - "{{resolve:ssm:/aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id}}"
+        - "{{resolve:ssm:/aws/service/canonical/ubuntu/server/24.04/stable/current/arm64/hvm/ebs-gp3/ami-id}}"
       BlockDeviceMappings:
         - DeviceName: /dev/sda1
           Ebs:
@@ -1073,8 +1073,26 @@ Resources:
               # Update system packages to latest versions
               apt update -y
             - |
-              # Install Go programming language for building E2B components
-              snap install go --classic
+              # Install Go programming language for building E2B components.
+              #
+              # From the official release, not the snap store: from the first
+              # Ubuntu 24.04 bastions the store answered "unable to contact snap
+              # store", HTTP 429 and timeouts for over ten minutes while
+              # dl.google.com answered in milliseconds, and under set -e that one
+              # step ended the whole bootstrap before the tree was cloned.
+              # 1.26.6 is the version go.work requires.
+              GO_VERSION=1.26.6
+              case "$(uname -m)" in
+                aarch64) GO_ARCH=arm64 ;;
+                x86_64)  GO_ARCH=amd64 ;;
+                *) echo "Unsupported architecture $(uname -m)"; exit 1 ;;
+              esac
+              GO_TGZ="go${GO_VERSION}.linux-${GO_ARCH}.tar.gz"
+              curl -fsSL --retry 5 --retry-all-errors -o "/tmp/${GO_TGZ}" "https://dl.google.com/go/${GO_TGZ}"
+              echo "$(curl -fsSL --retry 5 --retry-all-errors "https://dl.google.com/go/${GO_TGZ}.sha256")  /tmp/${GO_TGZ}" | sha256sum -c -
+              rm -rf /usr/local/go && tar -C /usr/local -xzf "/tmp/${GO_TGZ}" && rm -f "/tmp/${GO_TGZ}"
+              ln -sf /usr/local/go/bin/go /usr/local/bin/go
+              ln -sf /usr/local/go/bin/gofmt /usr/local/bin/gofmt
             - |
               # Install essential development and deployment tools
               # build-essential is required, not optional: the orchestrator and
