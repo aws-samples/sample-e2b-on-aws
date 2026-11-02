@@ -41,10 +41,16 @@ The code layer (`packages/`, `spec/`, `scripts/`, `tests/`, `firecracker/`) is a
 byte-for-byte copy of
 [e2b-dev/infra](https://github.com/e2b-dev/infra) at
 [`225f963`](https://github.com/e2b-dev/infra/commit/225f963a8dfbd516ee513b33d5f2846588c2f82c),
-with two exceptions: three packages this deployment does not build and so does
+with three exceptions: three packages this deployment does not build and so does
 not vendor (`dashboard-api`, `local-dev`, `nomad-nodepool-apm` — none of them
-appear in `go.work`), and upstream's `.env*` samples, which `.gitignore`
-excludes. A sync replaces that layer wholesale rather than merging into it. The
+appear in `go.work`); upstream's `.env*` samples, which `.gitignore` excludes;
+and four files taken as they are from the later upstream commit
+[`d01654d8`](https://github.com/e2b-dev/infra/commit/d01654d820d72c5ce37ad2bb3482a7694cd93c78)
+for arm64 — `packages/api/Makefile` and `packages/api/docker-bake.hcl` (the api
+and db-migrator images follow `BUILD_ARCH`), and
+`packages/orchestrator/pkg/sandbox/fc/kernel_args.go` with its test (no x86-only
+kernel parameters on arm64 guests). The rest of that commit is not carried. A
+sync replaces that layer wholesale rather than merging into it. The
 deployment layer (CloudFormation, `infra-iac/`, `nomad/`) is specific to this
 repository.
 
