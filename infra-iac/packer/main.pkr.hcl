@@ -15,9 +15,11 @@ source "amazon-ebs" "orch" {
   vpc_id        = var.vpc_id
   subnet_id     = var.subnet_id
 
+  # Ubuntu 24.04: 22.04's arm64 kernel is too old for the orchestrator - see the
+  # kernel check at the end of the build.
   source_ami_filter {
      filters = {
-       name = var.architecture == "x86_64" ? "ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*" : "ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-arm64-server-*"
+       name = var.architecture == "x86_64" ? "ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-*" : "ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-arm64-server-*"
        root-device-type    = "ebs"
        virtualization-type = "hvm"
        state               = "available"
@@ -227,6 +229,25 @@ build {
       "echo 'net.netfilter.nf_conntrack_max = 2097152' | sudo tee -a /etc/sysctl.conf",
       "sudo systemctl disable apt-daily.timer apt-daily-upgrade.timer || true",
       "sudo systemctl mask apt-daily.service apt-daily-upgrade.service unattended-upgrades.service || true"
+    ]
+  }
+
+  # Fail the image rather than every sandbox on it. A resumed sandbox's read
+  # faults are served with UFFDIO_COPY_MODE_WP
+  # (packages/orchestrator/pkg/sandbox/uffd/userfaultfd/userfaultfd.go), and
+  # arm64 has userfaultfd write-protect only from Linux 6.10 - on an older kernel
+  # the stack comes up healthy and every sandbox start fails with "Failed to UFFD
+  # object". GRUB boots the highest installed kernel, which need not be the one
+  # running this build, so that is the one checked. x86 has had write-protect
+  # since 5.7, so there the version is only printed.
+  provisioner "shell" {
+    inline = [
+      "k=$(sudo linux-version list | sort -V | tail -n1)",
+      "echo \"Highest installed kernel: $k\"",
+      "if [ \"${var.architecture}\" = \"arm64\" ] && dpkg --compare-versions \"$k\" lt 6.10; then",
+      "  echo \"ERROR: arm64 needs Linux >= 6.10 for userfaultfd write-protect; this image would boot '$k'\" >&2",
+      "  exit 1",
+      "fi"
     ]
   }
 }
