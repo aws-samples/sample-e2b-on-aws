@@ -74,10 +74,17 @@ locals {
   # Bare metal is not required: like the build node, an 8th-generation Intel
   # instance with nested virtualization gives Firecracker a working /dev/kvm
   # (null_resource.client_nested_virtualization turns the flag on whenever this
-  # is not a metal type). r8i.8xlarge - 32 vCPU / 256 GiB, Xeon 6975P-C, family 6
-  # model 173 like m8i - ran the full sandbox lifecycle on a live stack where the
-  # previous c8i.metal-48xl (192 vCPU / 384 GiB) was the floor for metal.
-  client_instance_type_x86 = "r8i.8xlarge"
+  # is not a metal type). r8i.24xlarge - 96 vCPU / 768 GiB, Xeon 6975P-C, family 6
+  # model 173 like m8i - is sized for 160 sandboxes of 4 vCPU / 8 GiB per node,
+  # which it held on a live stack with use-memfd off (1280 GiB of guest RAM).
+  #
+  # What caps a nested-virtualization node is the number of guest vCPUs, not
+  # memory: past roughly 9-10x the host's vCPUs (about 900 on this type,
+  # measured with 288 and 384 sandboxes) Firecracker VMs start dying with
+  # KVM_EXIT_FAIL_ENTRY. The orchestrator's max-sandboxes-per-node default of
+  # 200 keeps 4-vCPU templates at 800 guest vCPUs, below that; raise it only
+  # together with fewer vCPUs per template.
+  client_instance_type_x86 = "r8i.24xlarge"
 
   # arm64: the same rule applies, so this has to match the arm build node,
   # build_instance_type_arm below - both Graviton4. a1.metal is not an option

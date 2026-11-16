@@ -160,7 +160,14 @@ var (
 	// UseMemFdFlag asks Firecracker to back guest memory with a memfd and
 	// pass the fd over the UFFD socket; the orchestrator then mmaps it
 	// directly instead of using process_vm_readv on pause.
-	UseMemFdFlag = NewBoolFlag("use-memfd", true)
+	//
+	// Local override (upstream default is true): off, so sandbox memory can be
+	// overcommitted. The orchestrator's mmap of the hugetlb memfd carries no
+	// MAP_NORESERVE, so the kernel reserves every guest page up front and a
+	// node's total sandbox RAM is capped at its hugepage pool. Without the
+	// memfd, Firecracker's anonymous MAP_NORESERVE mapping allocates hugepages
+	// on first touch. Re-apply on every upstream sync.
+	UseMemFdFlag = NewBoolFlag("use-memfd", false)
 
 	// UseSyncWPFlag asks Firecracker (via use_sync_wp on snapshot load) to
 	// register guest memory for SYNCHRONOUS userfault write-protect events,
