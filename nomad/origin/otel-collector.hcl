@@ -191,30 +191,27 @@ processors:
             aggregation_type: sum
             label_set: [instance, node_id, node_status, node_pool]
 
+  # The services set host.id to their Nomad node ID (shared/pkg/telemetry
+  # GetResource) and host.name to the OS hostname, while what the collector
+  # scrapes from Nomad carries neither. Keep the Nomad ID under its own key, so
+  # resourcedetection below can give every signal the same EC2 host identity.
+  resource/nomad_node_id:
+    attributes:
+      - key: nomad.node.id
+        from_attribute: host.id
+        action: insert
+
   resourcedetection:
     # https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/processor/resourcedetectionprocessor
-    detectors: [gcp]
+    # ec2 reads the instance metadata service (IMDSv2; the collector runs on the
+    # host network, so the hop limit of 1 is enough) and sets host.id (instance
+    # ID), host.name, host.type, host.image.id, cloud.region,
+    # cloud.availability_zone and cloud.account.id, so the backend can tell nodes
+    # and zones apart and correlate one host across service and Nomad metrics.
+    # The gcp detector this replaced found nothing on AWS.
+    detectors: [ec2]
+    timeout: 5s
     override: true
-    gcp:
-      resource_attributes:
-        cloud.provider:
-          enabled: false
-        cloud.platform:
-          enabled: false
-        cloud.account.id:
-          enabled: false
-        cloud.availability_zone:
-          enabled: false
-        cloud.region:
-          enabled: false
-        host.type:
-          enabled: true
-        host.id:
-          enabled: true
-        gcp.gce.instance.name:
-          enabled: true
-        host.name:
-          enabled: true
 
   transform/set-name:
     metric_statements:
@@ -224,7 +221,6 @@ processors:
       - delete_key(datapoint.attributes, "node_class")
       - delete_key(datapoint.attributes, "node_status")
       - delete_key(datapoint.attributes, "service_name")
-      - set(datapoint.attributes["service.instance.id"], resource.attributes["gcp.gce.instance.name"])
 
   filter/rpc_duration_only:
     metrics:
@@ -284,23 +280,23 @@ service:
   pipelines:
     metrics:
       receivers: [otlp]
-      processors: [filter/otlp, resourcedetection, transform/set-name, batch]
+      processors: [filter/otlp, resource/nomad_node_id, resourcedetection, transform/set-name, batch]
       exporters: [otlphttp/customer]
     metrics/prometheus:
       receivers: [prometheus]
-      processors: [filter/prometheus, metricstransform, resourcedetection, transform/set-name, batch]
+      processors: [filter/prometheus, metricstransform, resource/nomad_node_id, resourcedetection, transform/set-name, batch]
       exporters: [otlphttp/customer]
     metrics/rpc_only:
       receivers: [otlp]
-      processors: [filter/rpc_duration_only, resource/remove_instance, resourcedetection, transform/set-name, batch]
+      processors: [filter/rpc_duration_only, resource/remove_instance, resource/nomad_node_id, resourcedetection, transform/set-name, batch]
       exporters: [otlphttp/customer]
     traces:
       receivers: [otlp]
-      processors: [batch]
+      processors: [resource/nomad_node_id, resourcedetection, batch]
       exporters: [otlphttp/customer]
     logs:
       receivers: [otlp]
-      processors: [filter/logs_severity, batch]
+      processors: [filter/logs_severity, resource/nomad_node_id, resourcedetection, batch]
       exporters: [otlphttp/customer]
 EOF
 

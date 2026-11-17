@@ -224,7 +224,9 @@ sudo bash deploy-all.sh --help
 <details>
 <summary><strong>📊 Logging & Monitoring (Optional)</strong></summary>
 
-The logging and monitoring stack consists of three components deployed via `nomad/deploy.sh --all`:
+The logging and monitoring stack consists of three components. The deploy step of
+`deploy-all.sh` deploys Loki and the logs collector on every stack, and the OTel
+collector once you have configured a backend for it (see below):
 
 | Component | Type | Purpose | Port |
 |---|---|---|---|
@@ -256,8 +258,9 @@ The logging and monitoring stack consists of three components deployed via `noma
 #### Deploy the logging module
 
 Sandbox user logs are the one part of this stack that needs no external backend:
-Vector ships them to a Loki that runs in the cluster and stores in S3. Two jobs,
-Loki first because Vector's sink resolves `loki.service.consul`:
+Vector ships them to a Loki that runs in the cluster and stores in S3. The deploy
+step does this on its own; to redeploy the two jobs by hand, Loki first because
+Vector's sink resolves `loki.service.consul`:
 
 ```bash
 source nomad/nomad.sh          # exports NOMAD_ADDR / NOMAD_TOKEN
@@ -310,32 +313,24 @@ arrived yet — either `logs-collector` is not deployed or no sandbox has run.
 #### Deploy with Customer OTel Endpoint
 
 Point the cluster at your own OTLP/HTTP backend — Grafana Cloud, Datadog,
-Honeycomb, New Relic, or a collector you run. Three steps, and the only thing you
-have to know is the endpoint:
+Honeycomb, New Relic, or a collector you run. Do it once the regular installation
+has finished: add the backend to `/opt/config.properties` on the bastion, then
+let `deploy-all.sh` render and deploy the collector.
 
 ```bash
-# 1. Write the endpoint into config.properties
-cat << EOF >> /opt/config.properties
+cd /opt/infra/sample-e2b-on-aws
 
-# Customer OTel endpoint. http:// for plaintext, https:// for TLS.
-otel_customer_endpoint=https://your-otel-backend:4318
-EOF
-
-# 2. Re-render the deploy HCLs so envsubst injects it
-bash nomad/prepare.sh
-
-# 3. Deploy the monitoring components
-bash nomad/deploy.sh --all
-```
-
-**If your backend needs authentication** — every hosted one does — add the header
-it expects. One header covers the common backends:
-
-```bash
-cat << EOF >> /opt/config.properties
+# 1. The backend. otel_customer_endpoint is the OTLP/HTTP base URL - the exporter
+#    appends /v1/metrics, /v1/traces and /v1/logs itself, so leave those out.
+cat << EOF | sudo tee -a /opt/config.properties
+otel_customer_endpoint=https://otlp-gateway-prod-us-east-0.grafana.net/otlp
 otel_customer_header_name=Authorization
-otel_customer_header_value=Basic <base64 of instanceID:token>
+otel_customer_header_value=Basic <base64(instanceID:token)>
 EOF
+
+# 2. Render the jobs with it, then deploy
+sudo bash deploy-all.sh --only prepare
+sudo bash deploy-all.sh --only deploy
 ```
 
 | Backend | `otel_customer_header_name` | `otel_customer_header_value` |
@@ -344,21 +339,41 @@ EOF
 | Datadog | `DD-API-KEY` | your API key |
 | Honeycomb | `x-honeycomb-team` | your ingest key |
 | New Relic | `api-key` | your licence key |
-| Self-hosted, no auth | *(leave both unset)* | |
+| Self-hosted, no auth | *(leave both out)* | |
 
-Both keys are optional and independent of the endpoint: leave them out and the
-exporter sends no headers, which is what an unauthenticated collector wants.
+The deploy step checks the settings before it deploys the collector (Loki and the
+logs collector go first either way) and fails with a message instead of shipping
+a collector that cannot start or that sends somewhere else:
 
-> **Important:** `otel_customer_endpoint` must be in `/opt/config.properties`
-> **before** `nomad/prepare.sh` runs. `prepare.sh` renders `origin/*.hcl` →
-> `deploy/*-deploy.hcl` with `envsubst`; with no endpoint the exporter gets an
-> empty one and the otel-collector job fails to start — deliberately, since
-> forwarding nowhere is a misconfiguration rather than a default.
+- With a header the endpoint must be `https://` — the credential is not sent in
+  clear. Set `otel_customer_header_name` and `otel_customer_header_value`
+  together, or neither.
+- The endpoint and the header value may not contain quotes, backslashes, `$`,
+  backticks, braces, control characters or double spaces: they are substituted
+  verbatim into the collector's YAML, which also expands `${...}` itself. API keys
+  and `Basic`/`Bearer` tokens never need them. Header names are letters, digits,
+  `-` and `_`.
+- If an `otel_customer_*` key changed after the last prepare, deploy refuses to
+  run with the stale rendered job and tells you to rerun prepare first.
+- The collector is a `system` job that `nomad job run` does not wait for, so the
+  step waits until it is running on every node without restarts. That proves the
+  collector is up, not that the backend accepts what it sends: a wrong credential
+  shows up as `Exporting failed` in `nomad alloc logs -stderr <alloc-id>`.
+
+To change the backend, append the new keys (the last occurrence of a key wins)
+and run the same two commands. To drop the header, append both header keys empty. To turn the collector off,
+append `otel_customer_endpoint=` and run them again: the deploy step stops the running
+collector, so it does not keep sending to the old backend with the old
+credential. Without an `otel_customer_endpoint` the deploy step simply leaves the
+collector out, which is what a fresh installation does.
+
+> The keys live in `/opt/config.properties`, like the other credentials there, and
+> are lost if the init step is rerun: init regenerates the file from the stack
+> outputs. Add them again afterwards.
 
 > **No backend yet?** Sandbox user logs do not need one: `logs-collector` writes
-> them to the in-cluster Loki, so `bash nomad/deploy.sh logs-collector` alone
-> gives you searchable sandbox logs through Loki's HTTP API. Only the OTel
-> pipeline (metrics, traces, service logs) requires an endpoint to send to.
+> them to the in-cluster Loki, and the deploy step runs it on every stack. Only the
+> OTel pipeline (metrics, traces, service logs) requires an endpoint to send to.
 
 #### Data Flow Details
 
@@ -369,6 +384,14 @@ exporter sends no headers, which is what an unauthenticated collector wants.
 | **Traces** | Go services OTel SDK | → OTel Collector → Customer endpoint | External |
 | **Application Logs** | Go services zap logger | → OTel Collector (OTLP log bridge) → Customer endpoint | External |
 | **Sandbox User Logs** | envd → orchestrator | → Vector (:30006) → Loki (:3100) | **S3** (Loki bucket) |
+
+> **Note:** Every metric, trace and log the OTel collector exports carries the EC2
+> host and zone it came from (`host.id` is the instance ID, plus `host.name`,
+> `host.type`, `cloud.availability_zone`, ...), read from the instance metadata
+> service. The node identity each service reports for itself is kept as
+> `nomad.node.id`: the Nomad node ID for api, client-proxy and orchestrator, the
+> Nomad node name (which is the instance ID) for template-manager. Nomad's own
+> metrics and the collector's self-metrics have no `nomad.node.id`.
 
 > **Note:** Sandbox user logs always go through Vector → Loki → S3, independent of the OTel pipeline. The Loki S3 bucket is created by CloudFormation (`{stack-name}-loki-{account-id}`); Terraform only grants the nodes access to it.
 

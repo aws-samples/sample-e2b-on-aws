@@ -207,11 +207,228 @@ wait_for_nomad() {
 # deployment's tier limits right after the jobs are up - even when a job after
 # api fails, since by then the migrator may already have rewritten the tiers
 # under a running API. The step still fails if nomad/deploy.sh did.
+#
+# Loki goes first because logs-collector ships sandbox logs to it, then the two
+# collectors, so the services find something listening on :30006 and :4317 when
+# they start. nomad/deploy.sh (the minimal set) runs loki again, which is a
+# no-op. A collector failing fails the step but does not stop the services from
+# being deployed.
 deploy_jobs() {
   local rc=0
+  bash nomad/deploy.sh loki || rc=$?
+  { bash nomad/deploy.sh logs-collector && wait_system_job logs-collector; } || rc=$?
+  deploy_otel_collector || rc=$?
   bash nomad/deploy.sh || rc=$?
   bash infra-iac/db/apply-tier-limits.sh || return 1
   return $rc
+}
+
+# A key of /opt/config.properties read the way nomad/prepare.sh reads it:
+# comment lines are skipped, the key is what precedes the first "=" with blanks
+# around it dropped (so "otel_customer_endpoint =..." counts too), and the last
+# occurrence wins. Only spaces and tabs are trimmed from the value - what xargs
+# trims - so a stray carriage return stays in it and is refused as a control
+# character instead of silently differing from what prepare renders. Fails when
+# the file cannot be read, rather than reporting the key as unset.
+config_value() {
+  awk -v want="$1" '
+    /^[[:space:]]*#/ || index($0, "=") == 0 { next }
+    {
+      key = substr($0, 1, index($0, "=") - 1)
+      gsub(/^[[:blank:]]+|[[:blank:]]+$/, "", key)
+      if (key == want) { val = substr($0, index($0, "=") + 1); found = 1 }
+    }
+    END { if (found) { gsub(/^[[:blank:]]+|[[:blank:]]+$/, "", val); print val } }
+  ' /opt/config.properties
+}
+
+# GET a Nomad API path. Prints the body, then the HTTP status on a last line
+# ("000" when the request itself failed), so callers can tell "no such job"
+# from "could not ask".
+nomad_get() {
+  curl -s --connect-timeout 5 --max-time 15 -H "X-Nomad-Token: ${NOMAD_TOKEN:-}" \
+    -w '\n%{http_code}' "$NOMAD_ADDR$1"
+}
+
+# ", ', \, $, ` and braces change meaning on the way into the collector: the
+# values are substituted verbatim into YAML double-quoted strings inside a Nomad
+# template (which parses "{{" even in a branch it does not take), the collector
+# expands ${...} itself, and prepare.sh reads them through xargs, which strips
+# quotes, squeezes runs of spaces and hands a leading "-n" or "-e" to echo as an
+# option. Control characters would break the KEY=VALUE file itself. Refuse all
+# of them rather than ship a config that breaks or sends something else.
+has_unsafe_chars() {
+  [[ "$1" == *[\"\'\\\$\`{}]* || "$1" == *[[:cntrl:]]* || "$1" == *"  "* || "$1" == -* ]]
+}
+
+# What prepare rendered otel-collector from, and what it rendered: the settings'
+# fingerprint plus the digest of the job file. deploy checks both, so neither a
+# key changed after the last prepare nor a job file rendered some other way
+# (nomad/prepare.sh run directly) can be validated against one configuration
+# and then shipped with another.
+OTEL_RENDERED=/opt/.e2b-otel-rendered
+OTEL_JOB_FILE=nomad/deploy/otel-collector-deploy.hcl
+otel_fingerprint() {
+  local endpoint name value
+  endpoint=$(config_value otel_customer_endpoint) || return 1
+  name=$(config_value otel_customer_header_name) || return 1
+  value=$(config_value otel_customer_header_value) || return 1
+  printf '%s\n' "$endpoint" "$name" "$value" | sha256sum | cut -d' ' -f1
+}
+
+# The fingerprint is taken before prepare reads the file, so it describes what
+# was rendered. prepare.sh falls back to the environment for otel_customer_*
+# keys the file lacks; unset them so only the file can feed the collector.
+prepare_jobs() {
+  local fp job
+  fp=$(otel_fingerprint) || return 1
+  env -u otel_customer_endpoint -u otel_customer_header_name -u otel_customer_header_value \
+    bash nomad/prepare.sh || return 1
+  job=$(sha256sum "$OTEL_JOB_FILE" | cut -d' ' -f1) || return 1
+  echo "$fp $job" > "$OTEL_RENDERED"
+}
+
+# Stops a job and waits until none of its allocations is still running. Succeeds
+# when the job does not exist; fails when Nomad cannot be asked, the stop fails
+# or a task is still up two minutes later, so a collector from an earlier
+# configuration is never assumed gone.
+stop_job_if_active() {
+  local res code stopped left deadline=$((SECONDS + 120))
+  res=$(nomad_get "/v1/job/$1"); code=${res##*$'\n'}
+  case "$code" in
+    404) return 0 ;;
+    200) ;;
+    *) echo "Error: could not look up job $1 (HTTP $code)." >&2; return 1 ;;
+  esac
+  # Not jq -e: that also fails when the answer is a legitimate "false".
+  if ! stopped=$(jq -r '.Stop | if type == "boolean" then . else error("no Stop flag") end' <<<"${res%$'\n'*}" 2>/dev/null); then
+    echo "Error: unexpected answer from Nomad for job $1." >&2
+    return 1
+  fi
+  if [ "$stopped" = false ]; then
+    echo "$1: stopping the copy left by an earlier configuration"
+    nomad job stop -yes "$1" >/dev/null || { echo "Error: nomad job stop $1 failed." >&2; return 1; }
+  fi
+  while [ $SECONDS -lt $deadline ]; do
+    # all=true also lists allocations of an earlier registration of the job.
+    res=$(nomad_get "/v1/job/$1/allocations?all=true"); code=${res##*$'\n'}
+    left=""
+    [ "$code" = 200 ] && left=$(jq '[.[] | select(.ClientStatus == "running" or .ClientStatus == "pending" or .ClientStatus == "unknown")] | length' <<<"${res%$'\n'*}")
+    [ "$left" = 0 ] && return 0
+    sleep 5
+  done
+  echo "Error: $1 still has ${left:-unknown} allocation(s) running two minutes after the stop." >&2
+  return 1
+}
+
+# otel-collector exports to the backend in the otel_customer_* keys, which the
+# operator adds to /opt/config.properties once the regular installation is done
+# (README, "Deploy with Customer OTel Endpoint"). With no endpoint there is
+# nothing to export to, so the job is not deployed - and a copy from an earlier
+# configuration is stopped rather than left sending to the old backend with the
+# old credential. Stopping does not depend on the rendered job, so it happens
+# before the check that prepare has caught up.
+deploy_otel_collector() {
+  local endpoint header_name header_value rendered expected url_re
+  if ! endpoint=$(config_value otel_customer_endpoint) \
+      || ! header_name=$(config_value otel_customer_header_name) \
+      || ! header_value=$(config_value otel_customer_header_value); then
+    echo "Error: could not read /opt/config.properties." >&2
+    return 1
+  fi
+
+  if [ -z "$endpoint" ]; then
+    echo "otel-collector: no otel_customer_endpoint in /opt/config.properties - not deployed"
+    stop_job_if_active otel-collector
+    return
+  fi
+  rendered=$(cat "$OTEL_RENDERED" 2>/dev/null)
+  expected="$(otel_fingerprint) $(sha256sum "$OTEL_JOB_FILE" 2>/dev/null | cut -d' ' -f1)"
+  if ! [[ "$rendered" =~ ^[0-9a-f]{64}\ [0-9a-f]{64}$ ]] || [ "$expected" != "$rendered" ]; then
+    echo "Error: $OTEL_JOB_FILE was not rendered by the last prepare from the current otel_customer_* settings." >&2
+    echo "       Run: sudo bash deploy-all.sh --only prepare && sudo bash deploy-all.sh --only deploy" >&2
+    return 1
+  fi
+  # The exporter appends /v1/metrics etc. to the endpoint string as it is, so a
+  # query or fragment would swallow the signal path; percent-escapes must be
+  # well formed, or the collector rejects the URL after the job is submitted.
+  url_re='^https?://[A-Za-z0-9][A-Za-z0-9.-]*(:[0-9]+)?(/([A-Za-z0-9._~!&()*+,;=:@/-]|%[0-9A-Fa-f]{2})*)?$'
+  if ! [[ "$endpoint" =~ $url_re ]] || has_unsafe_chars "$endpoint"; then
+    echo "Error: otel_customer_endpoint must be http(s)://host[:port][/path] - no query, fragment, spaces, quotes or malformed %-escapes." >&2
+    return 1
+  fi
+  if [ -n "$header_name" ] || [ -n "$header_value" ]; then
+    if [ -z "$header_name" ] || [ -z "$header_value" ]; then
+      echo "Error: set otel_customer_header_name and otel_customer_header_value together, or neither." >&2
+      return 1
+    fi
+    if ! [[ "$header_name" =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ ]]; then
+      echo "Error: otel_customer_header_name may only contain letters, digits, hyphens and underscores, starting with a letter or digit." >&2
+      return 1
+    fi
+    if [[ "$endpoint" != https://* ]]; then
+      echo "Error: refusing to send the $header_name header to a plain http:// endpoint; use https://." >&2
+      return 1
+    fi
+    if has_unsafe_chars "$header_value"; then
+      echo "Error: the OTel header value contains a quote, backslash, \$, \`, brace, control character or double space, or starts with -, which the collector config cannot carry." >&2
+      return 1
+    fi
+  fi
+  bash nomad/deploy.sh otel-collector && wait_system_job otel-collector
+}
+
+# `nomad job run` returns for a system job once its allocations are placed:
+# system jobs get no deployment, so nothing waits for them to come up, and a
+# collector that rejects its config would crash-loop behind a green step. Wait
+# until the job's current version runs on every ready, eligible node (both
+# collectors target node pool "all"), and the same allocations of the same
+# version are still running 20 seconds later without having restarted in
+# between. This proves the collector is up, not that the backend accepts what it
+# sends - a rejected credential shows up as "Exporting failed" in its logs.
+wait_system_job() {
+  local job=$1 deadline=$((SECONDS + 300)) res code version node_ids allocs failed running_nodes missing ids restarts
+  local seen="" seen_restarts=0
+  while [ $SECONDS -lt $deadline ]; do
+    res=$(nomad_get "/v1/job/$job"); code=${res##*$'\n'}
+    version=""; [ "$code" = 200 ] && version=$(jq -r '.Version // empty' <<<"${res%$'\n'*}")
+    res=$(nomad_get "/v1/nodes"); code=${res##*$'\n'}
+    node_ids=""; [ "$code" = 200 ] && node_ids=$(jq -r '.[] | select(.Status == "ready" and .SchedulingEligibility == "eligible") | .ID' <<<"${res%$'\n'*}" | sort)
+    res=$(nomad_get "/v1/job/$job/allocations"); code=${res##*$'\n'}
+    if [ -z "$version" ] || [ -z "$node_ids" ] || [ "$code" != 200 ]; then
+      seen=""; sleep 5; continue
+    fi
+    # The job's current allocations: this version, wanted running, not replaced.
+    allocs=$(jq -c --argjson v "$version" '[.[] | select(.JobVersion == $v and .DesiredStatus == "run" and ((.NextAllocation // "") == ""))]' <<<"${res%$'\n'*}")
+    failed=$(jq '[.[] | select(.ClientStatus == "failed" or .ClientStatus == "lost")] | length' <<<"$allocs")
+    if [ "$failed" -gt 0 ]; then
+      echo "Error: $job has $failed failed allocation(s) of version $version." >&2
+      echo "       nomad job status $job lists them; nomad alloc logs -stderr <alloc-id> says why." >&2
+      return 1
+    fi
+    running_nodes=$(jq -r '.[] | select(.ClientStatus == "running") | .NodeID' <<<"$allocs" | sort -u)
+    missing=$(comm -23 <(printf '%s\n' "$node_ids") <(printf '%s\n' "$running_nodes") | grep -c .)
+    if [ "$missing" -eq 0 ]; then
+      ids=$(jq -r '[.[] | select(.ClientStatus == "running") | .ID] | sort | join(",")' <<<"$allocs")
+      restarts=$(jq '[.[] | select(.ClientStatus == "running") | (.TaskStates // {})[] | .Restarts] | add // 0' <<<"$allocs")
+      if [ "$version|$ids" = "$seen" ]; then
+        if [ "$restarts" -gt "$seen_restarts" ]; then
+          echo "Error: $job restarted $((restarts - seen_restarts)) time(s) within 20 seconds - it is crash-looping." >&2
+          echo "       nomad alloc logs -stderr <alloc-id> says why." >&2
+          return 1
+        fi
+        echo "$job: running version $version on all $(printf '%s\n' "$node_ids" | grep -c .) ready node(s)"
+        return 0
+      fi
+      seen="$version|$ids"; seen_restarts=$restarts
+      sleep 20
+      continue
+    fi
+    seen=""
+    sleep 5
+  done
+  echo "Error: $job was not running on every ready node within 5 minutes (${missing:-?} without a running allocation)." >&2
+  return 1
 }
 
 run_named() {
@@ -221,7 +438,7 @@ run_named() {
     terraform)       run_step terraform bash infra-iac/terraform/start.sh ;;
     init-db)         run_step init-db bash infra-iac/db/init-db.sh ;;
     build)           run_step build bash tools/build-and-upload.sh ;;
-    prepare)         load_nomad_env && run_step prepare bash nomad/prepare.sh ;;
+    prepare)         load_nomad_env && run_step prepare prepare_jobs ;;
     deploy)          load_nomad_env && wait_for_nomad && run_step deploy deploy_jobs ;;
     create-template) run_step create-template bash tools/legacy/create_template.sh ;;
     *) echo "Unknown step: $1" >&2; return 2 ;;

@@ -111,7 +111,14 @@ for file in origin/*.hcl; do
         filename=$(basename "$file")
         output_file="deploy/${filename%.*}-deploy.hcl"
 
-        envsubst "$SHELL_FORMAT" < "$file" > "$output_file"
+        # Rendered to a temporary file and moved into place, so a failed render
+        # (full disk, unreadable source) stops here instead of leaving the
+        # previous job file to be deployed as if it were the new one.
+        if ! envsubst "$SHELL_FORMAT" < "$file" > "$output_file.tmp" || ! mv "$output_file.tmp" "$output_file"; then
+            echo "Error: failed to render $output_file" >&2
+            rm -f "$output_file.tmp"
+            exit 1
+        fi
         echo "Generated $output_file"
     fi
 done

@@ -207,7 +207,8 @@ sudo bash deploy-all.sh --help
 <details>
 <summary><strong>📊 日志与监控（可选）</strong></summary>
 
-日志与监控组件由 `nomad/deploy.sh --all` 一次性部署，共三个：
+日志与监控组件共三个。`deploy-all.sh` 的 deploy 步骤在每个栈上都会部署 Loki 和日志采集器；
+为 OTel collector 配置好后端之后，还会部署它（见下文）：
 
 | 组件 | 类型 | 用途 | 端口 |
 |---|---|---|---|
@@ -239,7 +240,8 @@ sudo bash deploy-all.sh --help
 #### 部署日志模块
 
 沙箱用户日志是这套系统里唯一**不需要外部后端**的部分：Vector 把日志送进集群内的 Loki，
-Loki 存到 S3。两个 job，先 Loki，因为 Vector 的 sink 要解析 `loki.service.consul`：
+Loki 存到 S3。deploy 步骤会自动部署这两个 job；如需手动重新部署，先 Loki，因为 Vector 的 sink
+要解析 `loki.service.consul`：
 
 ```bash
 source nomad/nomad.sh          # 导出 NOMAD_ADDR / NOMAD_TOKEN
@@ -287,30 +289,23 @@ curl -s --get "http://$LOKI:3100/loki/api/v1/query_range" \
 #### 使用客户 OTel 端点部署
 
 把集群的遥测数据指向您自己的 OTLP/HTTP 后端（Grafana Cloud、Datadog、Honeycomb、
-New Relic，或自建 collector）。三步，唯一需要知道的就是端点地址：
+New Relic，或自建 collector）。在常规安装完成之后进行：在堡垒机的 `/opt/config.properties`
+里加上后端配置，再由 `deploy-all.sh` 渲染并部署 collector。
 
 ```bash
-# 1. 把端点写入 config.properties
-cat << EOF >> /opt/config.properties
+cd /opt/infra/sample-e2b-on-aws
 
-# 客户 OTel 端点。明文用 http://，TLS 用 https://
-otel_customer_endpoint=https://your-otel-backend:4318
-EOF
-
-# 2. 重新渲染 deploy HCL，让 envsubst 注入
-bash nomad/prepare.sh
-
-# 3. 部署监控组件
-bash nomad/deploy.sh --all
-```
-
-**如果后端需要认证**（所有托管服务都需要），再加上它要求的 header。一个 header 足以覆盖常见后端：
-
-```bash
-cat << EOF >> /opt/config.properties
+# 1. 后端配置。otel_customer_endpoint 填 OTLP/HTTP 基础 URL，exporter 会自己拼上
+#    /v1/metrics、/v1/traces、/v1/logs，不要带这些路径。
+cat << EOF | sudo tee -a /opt/config.properties
+otel_customer_endpoint=https://otlp-gateway-prod-us-east-0.grafana.net/otlp
 otel_customer_header_name=Authorization
 otel_customer_header_value=Basic <base64(instanceID:token)>
 EOF
+
+# 2. 用新配置渲染 job，然后部署
+sudo bash deploy-all.sh --only prepare
+sudo bash deploy-all.sh --only deploy
 ```
 
 | 后端 | `otel_customer_header_name` | `otel_customer_header_value` |
@@ -319,18 +314,31 @@ EOF
 | Datadog | `DD-API-KEY` | 您的 API key |
 | Honeycomb | `x-honeycomb-team` | 您的 ingest key |
 | New Relic | `api-key` | 您的 licence key |
-| 自建、免认证 | *（两项都不填）* | |
+| 自建、免认证 | *（两项都不写）* | |
 
-这两个键是可选的、与端点相互独立：不填则 exporter 不发送任何 header，正是免认证 collector 需要的形式。
+deploy 步骤在部署 collector 之前会先检查配置（Loki 和日志采集器总是先部署），有问题就报错退出，
+而不是部署一个起不来、或者发往别处的 collector：
 
-> **重要：** 运行 `nomad/prepare.sh` **之前**，`/opt/config.properties` 里必须已定义
-> `otel_customer_endpoint`。`prepare.sh` 用 `envsubst` 把 `origin/*.hcl` 渲染成
-> `deploy/*-deploy.hcl`；端点缺失时 exporter 会拿到空地址、otel-collector 启动失败 ——
-> 这是故意的：转发到空地址属于配置错误，不是默认值。
+- 配置了 header 时 endpoint 必须是 `https://`（凭证不能明文传输）。`otel_customer_header_name` 和
+  `otel_customer_header_value` 要么同时设置，要么都不设。
+- endpoint 和 header 取值里不能含引号、反斜杠、`$`、反引号、花括号、控制字符或连续空格：它们会原样
+  代入 collector 的 YAML，而 collector 自己还会展开 `${...}`。API key 和 `Basic`/`Bearer` token 不会
+  用到这些字符。header 名称只能由字母、数字、`-` 和 `_` 组成。
+- 如果上次 prepare 之后又改了 `otel_customer_*` 配置，deploy 会拒绝使用过时的渲染结果，并提示先重跑 prepare。
+- collector 是 `system` 类型的 job，`nomad job run` 不会等它就绪，所以 deploy 步骤会一直等到它在每个
+  节点上都运行且没有重启。这只能证明 collector 起来了，不代表后端接受了它发送的数据：凭证错误会在
+  `nomad alloc logs -stderr <alloc-id>` 里表现为 `Exporting failed`。
+
+要更换后端，追加新的配置行（同名键以最后一次出现的为准），再执行上面两条命令。要去掉 header，把两个 header 键都追加成空值。要关闭 collector，
+追加一行 `otel_customer_endpoint=` 后同样执行这两条命令：deploy 步骤会停掉正在运行的 collector，
+避免它继续带着旧凭证往旧后端发送数据。没有 `otel_customer_endpoint` 时，deploy 步骤就不部署
+collector，新装的栈就是这种状态。
+
+> 这些配置和其他凭证一样存放在 `/opt/config.properties` 里。重跑 init 步骤时会丢失，因为 init 会根据
+> 栈的输出重新生成这个文件，之后需要再加一次。
 
 > **暂时没有后端？** 沙箱用户日志不需要它：`logs-collector` 会把日志写入集群内的 Loki，
-> 只跑 `bash nomad/deploy.sh logs-collector` 就能通过 Loki 的 HTTP API 检索沙箱日志。
-> 只有 OTel 管道（metrics、traces、服务日志）才必须有一个可发送的端点。
+> deploy 步骤在每个栈上都会部署它。只有 OTel 管道（metrics、traces、服务日志）才必须有一个可发送的端点。
 
 #### 数据流详情
 
@@ -341,6 +349,12 @@ EOF
 | **Traces** | Go 服务 OTel SDK | → OTel Collector → 客户端点 | 外部 |
 | **应用日志** | Go 服务 zap logger | → OTel Collector（OTLP log bridge）→ 客户端点 | 外部 |
 | **Sandbox 用户日志** | envd → orchestrator | → Vector (:30006) → Loki (:3100) | **S3**（Loki 桶） |
+
+> **注意：** OTel collector 导出的所有 metrics、traces、logs 都带有来源 EC2 主机和可用区的属性
+> （`host.id` 为实例 ID，另有 `host.name`、`host.type`、`cloud.availability_zone` 等），取自实例
+> 元数据服务。各服务自己上报的节点标识保留在 `nomad.node.id` 里：api、client-proxy、orchestrator
+> 是 Nomad 节点 ID，template-manager 是 Nomad 节点名（即实例 ID）；Nomad 自身指标和 collector
+> 自监控指标没有 `nomad.node.id`。
 
 > **注意：** Sandbox 用户日志始终走 Vector → Loki → S3，独立于 OTel 管道。Loki S3 桶由 CloudFormation 创建（`{stack-name}-loki-{account-id}`），Terraform 只负责给节点授权访问。
 
