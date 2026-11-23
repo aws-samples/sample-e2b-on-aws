@@ -160,6 +160,45 @@ in `/opt/config.properties`, so the next `deploy-all.sh --only terraform` with t
 code stops in `prepare.sh`, naming the missing key. Add it with the value those
 stacks always had: `echo 'CFNCLIENTSUBNETTYPE=Private' | sudo tee -a /opt/config.properties`.
 
+#### Client CPU and where templates are built
+
+A sandbox only runs on the CPU model its template was built on (architecture,
+family and model as `/proc/cpuinfo` reports them); on any other node it fails with
+`503 sandbox_no_compatible_node`. By default the client pool (`r8i.24xlarge`) and
+the build pool (`m8i.4xlarge`) both run the Xeon 6975P-C, so they match. Both are
+set in the `locals` of `infra-iac/terraform/main.tf`.
+
+If the client pool runs a CPU the build pool does not, for example a
+7th-generation `r7i.metal-24xl`, either give the build pool a type with the same
+CPU model or build the templates on the client nodes:
+
+```hcl
+client_instance_type_x86 = "r7i.metal-24xl"
+build_on_client          = true
+```
+
+The client orchestrator then runs template-manager in the same process, the build
+Auto Scaling group goes to zero and the `template-manager` job is not deployed.
+Builds use the client nodes' CPU, memory and `/orchestrator` disk alongside the
+sandboxes. A 7th-generation client has to be bare metal: only 8th-generation
+Intel offers nested virtualization.
+
+On a running stack this is a maintenance change: no template builds while it
+runs, and the sandboxes on the client nodes are lost. After editing `main.tf`:
+
+```bash
+sudo bash deploy-all.sh --only terraform   # build pool to 0, writes build_on_client
+# A new client type only reaches new instances: replace every client node
+# (aws autoscaling terminate-instance-in-auto-scaling-group ... per node) and
+# check the CPU model on each before building anything.
+sudo bash deploy-all.sh --only prepare
+sudo bash deploy-all.sh --only deploy      # stops template-manager, redeploys the orchestrator
+```
+
+The deploy step refuses to run if the orchestrator job was not re-rendered by
+`--only prepare` for the new setting. Templates built on the old CPU do not run on
+the new one: rebuild them.
+
 ### Step 2 — Validate Domain Certificate
 
 1. Navigate to Amazon Certificate Manager (ACM)

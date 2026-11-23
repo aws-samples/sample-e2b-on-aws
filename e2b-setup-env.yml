@@ -234,7 +234,7 @@ Parameters:
   # Source Configuration
   RepoBranch:
     Type: String
-    Default: main
+    Default: "2026-11-23"
     Description: >-
       Git branch of aws-samples/sample-e2b-on-aws that the bastion checks out.
       The bastion clones this branch whether or not AutoDeploy is enabled, so

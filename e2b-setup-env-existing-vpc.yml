@@ -206,7 +206,7 @@ Parameters:
   # Source Configuration
   RepoBranch:
     Type: String
-    Default: main
+    Default: "2026-11-23"
     Description: >-
       Git branch of aws-samples/sample-e2b-on-aws that the bastion checks out.
       Leaving the branch to the remote default would put the bastion on a

@@ -9,17 +9,22 @@ data "aws_region" "current" {}
 # Define required Terraform providers and their versions
 terraform {
   required_providers {
-    # AWS provider for creating and managing AWS resources
+    # AWS provider for creating and managing AWS resources. 6.33 is the first
+    # release with both things this file needs: gp3 throughput above 1000 MiB/s
+    # on a launch template (6.17, the client /orchestrator volume) and
+    # cpu_options.nested_virtualization (6.33).
     aws = {
       source  = "hashicorp/aws"
-      version = "~> 5.82"
+      version = "~> 6.33"
     }
     # Random provider for generating random values (UUIDs, encryption keys, etc.)
     random = {
       source  = "hashicorp/random"
       version = "3.5.1"
     }
-    # Null provider for running local-exec provisioners
+    # No resource uses the null provider any more. It stays because stacks built
+    # before the nested-virtualization null_resources were dropped still hold
+    # them in state, and Terraform needs the provider to remove them.
     null = {
       source  = "hashicorp/null"
       version = "3.2.2"
@@ -34,7 +39,7 @@ terraform {
 locals {
   # Extract account ID and region from data sources for use in resource configuration
   account_id = data.aws_caller_identity.current.account_id
-  aws_region = data.aws_region.current.name
+  aws_region = data.aws_region.current.region
   
   # Calculate file hashes for setup scripts to detect changes and force updates
   file_hash = {
@@ -73,8 +78,8 @@ locals {
   #
   # Bare metal is not required: like the build node, an 8th-generation Intel
   # instance with nested virtualization gives Firecracker a working /dev/kvm
-  # (null_resource.client_nested_virtualization turns the flag on whenever this
-  # is not a metal type). r8i.24xlarge - 96 vCPU / 768 GiB, Xeon 6975P-C, family 6
+  # (the client launch template's cpu_options turns it on whenever this is not a
+  # metal type). r8i.24xlarge - 96 vCPU / 768 GiB, Xeon 6975P-C, family 6
   # model 173 like m8i - is sized for 160 sandboxes of 4 vCPU / 8 GiB per node,
   # which it held on a live stack with use-memfd off (1280 GiB of guest RAM).
   #
@@ -107,9 +112,7 @@ locals {
   # bare metal: nested virtualization is supported on 8th-generation Intel
   # families (c8i, m8i, r8i and their flex variants, per the CpuOptions API),
   # which gives the build sandbox a working /dev/kvm at a fraction of a metal
-  # instance. null_resource.build_nested_virtualization turns the flag on,
-  # because the AWS provider pinned here has no cpu_options.nested_virtualization
-  # argument.
+  # instance. The build launch template's cpu_options turns the flag on.
   build_instance_type_x86 = "m8i.4xlarge"
 
   # Graviton has no nested virtualization, so on arm64 /dev/kvm means bare metal.
@@ -120,9 +123,24 @@ locals {
   build_instance_type_arm = "c8g.metal-24xl"
 
   # Resolved like client_instance_type, so data.aws_ec2_instance_type.build
-  # describes what the build ASG launches: bare metal on arm64 is what drops
-  # null_resource.build_nested_virtualization to count = 0 there.
+  # describes what the build ASG launches: bare metal on arm64 is what leaves
+  # nested virtualization off there.
   build_instance_type = var.architecture == "x86_64" ? local.build_instance_type_x86 : local.build_instance_type_arm
+
+  # Build templates on the client nodes instead of a build pool. The client
+  # orchestrator then runs template-manager in the same process
+  # (ORCHESTRATOR_SERVICES "orchestrator,template-manager", set by
+  # nomad/prepare.sh from the build_on_client output), the build ASG goes to
+  # zero and the template-manager job is not deployed. One process means one
+  # network slot pool and one set of nftables rules, which is what makes this
+  # safe where two processes on one host are not (see clusters.build below).
+  #
+  # Use it when the client pool runs a CPU that no build type here matches.
+  # A template only runs on the CPU model it was built on, so with a 7th-gen
+  # client such as r7i.metal-24xl the 8th-gen build pool cannot serve it; built
+  # on the client, every template matches the pool by construction. Builds then
+  # share the client nodes' CPU, memory and /orchestrator disk with sandboxes.
+  build_on_client = false
 
   # Define cluster configurations for different node types
   clusters = {
@@ -162,12 +180,13 @@ locals {
     # (veth-<idx>, 10.11.0.x) and both program the nftables rules that redirect
     # sandbox egress into their own proxy, so on a shared host whichever wrote
     # last takes over the other's sandboxes and template builds lose the network.
+    # With build_on_client the pool is empty instead.
     build = {
       instance_type_x86    = local.build_instance_type_x86
       instance_type_arm    = local.build_instance_type_arm
-      desired_capacity = 1
-      max_size         = 1
-      min_size         = 1
+      desired_capacity = local.build_on_client ? 0 : 1
+      max_size         = local.build_on_client ? 0 : 1
+      min_size         = local.build_on_client ? 0 : 1
     }
   }
 }
@@ -708,6 +727,16 @@ resource "aws_launch_template" "client" {
     instance_metadata_tags      = "enabled"
   }
 
+  # Firecracker needs /dev/kvm. A metal type has it; anything else needs nested
+  # virtualization, which this version of the launch template carries itself,
+  # so the ASG's first instance already boots with it.
+  dynamic "cpu_options" {
+    for_each = data.aws_ec2_instance_type.client.bare_metal ? [] : [1]
+    content {
+      nested_virtualization = "enabled"
+    }
+  }
+
   block_device_mappings {
     device_name = "/dev/sda1"
 
@@ -719,12 +748,22 @@ resource "aws_launch_template" "client" {
     }
   }
 
+  # /orchestrator: sandbox rootfs caches and every pause snapshot are written
+  # here before they go to S3. At the gp3 default of 125 MiB/s a burst of
+  # pauses outran writeback, the dirty pages crossed the kernel's throttle
+  # line and every pause timed out at the API's 70s deadline, losing the
+  # sandboxes. Throughput needs at least 4 IOPS per MiB/s (gp3 caps it at
+  # 0.25 MiB/s per IOPS). Running nodes keep their old volume until replaced;
+  # change those with aws ec2 modify-volume (a 4000 GB volume took ~35 min
+  # to reach the new rate).
   block_device_mappings {
     device_name = "/dev/sda2"
 
     ebs {
       volume_size           = 4000
       volume_type           = "gp3"
+      iops                  = 8000
+      throughput            = 1600
       encrypted             = true
       delete_on_termination = true
     }
@@ -777,48 +816,6 @@ data "aws_ec2_instance_type" "build" {
   instance_type = local.build_instance_type
 }
 
-# Create a new launch template version with NestedVirtualization enabled via AWS CLI
-# Terraform AWS provider does not support the NestedVirtualization parameter in cpu_options
-resource "null_resource" "client_nested_virtualization" {
-  count = data.aws_ec2_instance_type.client.bare_metal ? 0 : 1
-
-  triggers = {
-    launch_template_id      = aws_launch_template.client.id
-    launch_template_version = aws_launch_template.client.latest_version
-  }
-
-  provisioner "local-exec" {
-    command = <<-EOT
-      aws ec2 create-launch-template-version \
-        --launch-template-id ${aws_launch_template.client.id} \
-        --source-version ${aws_launch_template.client.latest_version} \
-        --launch-template-data '{"CpuOptions":{"NestedVirtualization":"enabled"}}'
-    EOT
-  }
-}
-
-# Same treatment for the build launch template. On x86 the build pool runs a
-# non-metal m8i, so Firecracker inside the template build only gets /dev/kvm with
-# nested virtualization turned on; on arm64 the build pool is metal and count is 0.
-# The ASG tracks version "$Latest", so it picks up the version created here.
-resource "null_resource" "build_nested_virtualization" {
-  count = data.aws_ec2_instance_type.build.bare_metal ? 0 : 1
-
-  triggers = {
-    launch_template_id      = aws_launch_template.build.id
-    launch_template_version = aws_launch_template.build.latest_version
-  }
-
-  provisioner "local-exec" {
-    command = <<-EOT
-      aws ec2 create-launch-template-version \
-        --launch-template-id ${aws_launch_template.build.id} \
-        --source-version ${aws_launch_template.build.latest_version} \
-        --launch-template-data '{"CpuOptions":{"NestedVirtualization":"enabled"}}'
-    EOT
-  }
-}
-
 # Create client auto scaling group
 resource "aws_autoscaling_group" "client" {
   name                = "${var.prefix}-client-asg"
@@ -829,13 +826,6 @@ resource "aws_autoscaling_group" "client" {
   desired_capacity = local.clusters.client.desired_capacity
   max_size         = local.clusters.client.max_size
   min_size         = local.clusters.client.min_size
-
-  # Same ordering problem as the build pool, for a client type that is not bare
-  # metal: without it the first node launches from the launch template version
-  # that predates the nested-virtualization flag, comes up without /dev/kvm, and
-  # cannot run a single sandbox. A no-op for metal types, where the null_resource
-  # has count 0.
-  depends_on = [null_resource.client_nested_virtualization]
 
   launch_template {
     id      = aws_launch_template.client.id
@@ -1185,6 +1175,14 @@ resource "aws_launch_template" "build" {
     instance_metadata_tags      = "enabled"
   }
 
+  # Same as the client: the template build runs Firecracker too.
+  dynamic "cpu_options" {
+    for_each = data.aws_ec2_instance_type.build.bare_metal ? [] : [1]
+    content {
+      nested_virtualization = "enabled"
+    }
+  }
+
   block_device_mappings {
     device_name = "/dev/sda1"
 
@@ -1241,12 +1239,6 @@ resource "aws_autoscaling_group" "build" {
   desired_capacity = local.clusters.build.desired_capacity
   max_size         = local.clusters.build.max_size
   min_size         = local.clusters.build.min_size
-
-  # The nested-virtualization flag is added as a new launch template version by
-  # a local-exec, which Terraform cannot order implicitly. Without this the first
-  # instance launches from the version that predates the flag and comes up with
-  # no /dev/kvm, so every template build fails until the node is replaced.
-  depends_on = [null_resource.build_nested_virtualization]
 
   launch_template {
     id      = aws_launch_template.build.id

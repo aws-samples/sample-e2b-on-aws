@@ -170,17 +170,19 @@ load_nomad_env() {
 # loki and api on api, orchestrator on the client nodes (default), and
 # template-manager on build - and `nomad job run` blocks until the deployment is
 # healthy, so a missing pool turns into a stalled step rather than a clear error.
+# With build_on_client the build pool is empty by design and is not waited for.
 wait_for_nomad() {
   local deadline=$((SECONDS + 900))
-  local leader pools missing pool
-  echo "$(date '+%Y-%m-%d %H:%M:%S') Waiting for the Nomad cluster to accept jobs at $NOMAD_ADDR"
+  local leader pools missing pool required="default api build"
+  [ "$(config_value build_on_client)" = true ] && required="default api"
+  echo "$(date '+%Y-%m-%d %H:%M:%S') Waiting for the Nomad cluster to accept jobs at $NOMAD_ADDR (pools: $required)"
   while [ $SECONDS -lt $deadline ]; do
     leader=$(curl -sf -H "X-Nomad-Token: ${NOMAD_TOKEN:-}" "$NOMAD_ADDR/v1/status/leader" | tr -d '"')
     if [ -n "$leader" ]; then
       pools=$(curl -sf -H "X-Nomad-Token: ${NOMAD_TOKEN:-}" "$NOMAD_ADDR/v1/nodes" \
         | jq -r '[.[] | select(.Status == "ready") | .NodePool] | unique | join(",")')
       missing=""
-      for pool in default api build; do
+      for pool in $required; do
         printf '%s\n' "$pools" | tr ',' '\n' | grep -qx "$pool" || missing="$missing $pool"
       done
       if [ -z "$missing" ]; then
@@ -213,11 +215,38 @@ wait_for_nomad() {
 # they start. nomad/deploy.sh (the minimal set) runs loki again, which is a
 # no-op. A collector failing fails the step but does not stop the services from
 # being deployed.
+#
+# With build_on_client the client orchestrators build templates and nomad/deploy.sh
+# skips template-manager; a stack switched over from a build pool still has that
+# job registered, so it is stopped before the orchestrator takes over. Before
+# anything is touched the rendered orchestrator job has to carry the matching
+# ORCHESTRATOR_SERVICES - a deploy without the prepare after the switch would
+# otherwise stop the old builder and start an orchestrator that does not build.
+# And if the old builder cannot be stopped the step stops there, so it is never
+# left taking builds for a CPU the client pool no longer runs.
 deploy_jobs() {
-  local rc=0
+  local rc=0 build_on_client services
+  build_on_client=$(config_value build_on_client) || return 1
+  # Missing is a stack from before the switch existed; present must be true/false.
+  if [ -z "$build_on_client" ] && ! grep -q '^[[:blank:]]*build_on_client[[:blank:]]*=' /opt/config.properties; then
+    build_on_client=false
+  fi
+  case "$build_on_client" in
+    true)  services="orchestrator,template-manager" ;;
+    false) services="orchestrator" ;;
+    *) echo "Error: build_on_client in /opt/config.properties must be true or false, got '$build_on_client'." >&2; return 1 ;;
+  esac
+  if ! grep -qF "ORCHESTRATOR_SERVICES = \"$services\"" nomad/deploy/orchestrator-deploy.hcl; then
+    echo "Error: nomad/deploy/orchestrator-deploy.hcl was not rendered for build_on_client=$build_on_client." >&2
+    echo "       Run: sudo bash deploy-all.sh --only prepare && sudo bash deploy-all.sh --only deploy" >&2
+    return 1
+  fi
   bash nomad/deploy.sh loki || rc=$?
   { bash nomad/deploy.sh logs-collector && wait_system_job logs-collector; } || rc=$?
   deploy_otel_collector || rc=$?
+  if [ "$build_on_client" = true ]; then
+    stop_job_if_active template-manager || return 1
+  fi
   bash nomad/deploy.sh || rc=$?
   bash infra-iac/db/apply-tier-limits.sh || return 1
   return $rc

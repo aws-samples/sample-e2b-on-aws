@@ -44,6 +44,32 @@ declare -A jobs_all=(
 order_minimal=(loki orchestrator api client-proxy template-manager snapshot-retention)
 order_all=(loki logs-collector otel-collector orchestrator api client-proxy template-manager snapshot-retention)
 
+# With build_on_client (infra-iac/terraform/main.tf) the client orchestrators
+# build templates in-process and the build pool is empty, so a template-manager
+# job would only sit pending - and on a client node it would fight the
+# orchestrator over network slots. Leave it out of both sets.
+# Read the way nomad/prepare.sh reads it: a missing key (or no config file) is a
+# stack from before the switch, anything present must be true or false.
+BUILD_ON_CLIENT=false
+if [[ -r /opt/config.properties ]] && grep -q '^build_on_client=' /opt/config.properties; then
+    BUILD_ON_CLIENT=$(awk -F= '$1 == "build_on_client" {v = $2} END {print v}' /opt/config.properties)
+fi
+if [[ "$BUILD_ON_CLIENT" != "true" && "$BUILD_ON_CLIENT" != "false" ]]; then
+    echo "Error: build_on_client in /opt/config.properties must be true or false, got '$BUILD_ON_CLIENT'" >&2
+    exit 1
+fi
+if [[ "$BUILD_ON_CLIENT" == "true" ]]; then
+    unset 'jobs_minimal[template-manager]' 'jobs_all[template-manager]'
+    without_template_manager() {
+        local name
+        for name in "$@"; do
+            [[ "$name" == "template-manager" ]] || printf '%s\n' "$name"
+        done
+    }
+    mapfile -t order_minimal < <(without_template_manager "${order_minimal[@]}")
+    mapfile -t order_all < <(without_template_manager "${order_all[@]}")
+fi
+
 # Set default jobs array to jobs_all for help and listing functions
 declare -A jobs
 for key in "${!jobs_all[@]}"; do
@@ -139,6 +165,10 @@ case "$1" in
     *)
         # Deploy specific service
         service=$1
+        if [[ "$service" == "template-manager" && "$BUILD_ON_CLIENT" == "true" ]]; then
+            echo "Error: build_on_client is set, the client orchestrators build templates; not deploying template-manager" >&2
+            exit 1
+        fi
         if [[ -n "${jobs[$service]}" ]]; then
             echo "deploying ${jobs[$service]}..."
             nomad job run "${jobs[$service]}"

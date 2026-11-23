@@ -13,7 +13,9 @@
 #     has applied whatever a code-layer sync brought in
 #
 # disk_mb is what the API hands a template build as its free disk
-# (packages/api/internal/template/register_build.go). default_free_disk_size_mb
+# (packages/api/internal/template/register_build.go): the template-manager grows
+# the rootfs until that much is free, and the size is fixed into the build, so a
+# change here only reaches templates built afterwards. default_free_disk_size_mb
 # is not read by the current code, but upstream initialised it from disk_mb when
 # it added the column, so it moves with disk_mb to stay what an old database
 # upgraded through the same migrations would hold. max_disk_size_mb keeps
@@ -48,8 +50,11 @@ BEGIN
         concurrent_instances      = 1000000,
         max_vcpu                  = 32,
         max_ram_mb                = 32768,
-        disk_mb                   = 8192,
-        default_free_disk_size_mb = 8192
+        disk_mb                   = 20480,
+        default_free_disk_size_mb = 20480,
+        -- tiers_default_free_disk_size_lte_max_check: the default may not exceed
+        -- the max, so lift a lower max with it instead of failing the UPDATE.
+        max_disk_size_mb          = GREATEST(max_disk_size_mb, 20480)
     WHERE id = 'base_v1';
     IF NOT FOUND THEN
         RAISE EXCEPTION 'tier base_v1 not found - the upstream migrations no longer create it';
