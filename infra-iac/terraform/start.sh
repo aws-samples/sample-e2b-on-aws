@@ -142,6 +142,16 @@ echo "account_id=$(aws sts get-caller-identity --query Account --output text)" >
 echo "build_id=latest" >> "$CONFIG_FILE"
 echo "environment=$ENVIRONMENT" >> "$CONFIG_FILE"
 
+# Where templates are built (main.tf local.build_on_client), for nomad/prepare.sh,
+# nomad/deploy.sh and deploy-all.sh. Fail instead of guessing: the wrong value
+# either leaves template-manager pending on an empty build pool or leaves the
+# stack with no template builder at all.
+if ! BUILD_ON_CLIENT=$(terraform output -raw build_on_client); then
+    echo "Error: could not read the build_on_client terraform output" >&2
+    exit 1
+fi
+echo "build_on_client=${BUILD_ON_CLIENT}" >> "$CONFIG_FILE"
+
 # Extract AWSREGION value from the config file
 AWSREGION=$(grep "^AWSREGION=" "$CONFIG_FILE" | cut -d'=' -f2)
 # Extract CFNAZ1 value from the config file

@@ -177,9 +177,18 @@ func newNomadServiceDiscovery(config cfg.Config) (serviceDiscovery, error) {
 		nodes = servicediscovery.NewMerged(nodes, nomad.NewNodePool(client, "default"))
 	}
 
+	// Local override (upstream lists only template-manager allocations here):
+	// orchestrator allocations are template builder candidates too, as in
+	// newLocalServiceDiscovery, so an orchestrator started with
+	// ORCHESTRATOR_SERVICES=orchestrator,template-manager (main.tf
+	// build_on_client) can take builds. Whether an instance builds is still
+	// decided by the TemplateBuilder role it reports, and local-cluster
+	// orchestrators found here are not registered as nodes a second time
+	// (Orchestrator.registersClusterOrchestrators). Re-apply on every upstream
+	// sync.
 	return serviceDiscovery{
 		nodes:            nodes,
-		templateBuilders: nomad.NewAllocations(client, sharedclusters.FilterTemplateBuilders),
+		templateBuilders: nomad.NewAllocations(client, sharedclusters.FilterTemplateBuildersAndOrchestrators),
 	}, nil
 }
 

@@ -116,7 +116,12 @@ job "orchestrator" {
 
         LAUNCH_DARKLY_API_KEY = "${launch_darkly_api_key}"
 
-        ORCHESTRATOR_SERVICES = "orchestrator"
+        # "orchestrator", or "orchestrator,template-manager" when the stack builds
+        # templates on the client nodes (main.tf build_on_client, resolved in
+        # nomad/prepare.sh). Both services in one process share one network slot
+        # pool and one set of nftables rules; a separate template-manager job on
+        # the same host would fight this one over both.
+        ORCHESTRATOR_SERVICES = "${orchestrator_services}"
       }
 
       config {

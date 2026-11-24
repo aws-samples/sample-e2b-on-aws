@@ -124,6 +124,21 @@ locals {
   # null_resource.build_nested_virtualization to count = 0 there.
   build_instance_type = var.architecture == "x86_64" ? local.build_instance_type_x86 : local.build_instance_type_arm
 
+  # Build templates on the client nodes instead of a build pool. The client
+  # orchestrator then runs template-manager in the same process
+  # (ORCHESTRATOR_SERVICES "orchestrator,template-manager", set by
+  # nomad/prepare.sh from the build_on_client output), the build ASG goes to
+  # zero and the template-manager job is not deployed. One process means one
+  # network slot pool and one set of nftables rules, which is what makes this
+  # safe where two processes on one host are not (see clusters.build below).
+  #
+  # Use it when the client pool runs a CPU that no build type here matches.
+  # A template only runs on the CPU model it was built on, so with a 7th-gen
+  # client such as r7i.metal-24xl the 8th-gen build pool cannot serve it; built
+  # on the client, every template matches the pool by construction. Builds then
+  # share the client nodes' CPU, memory and /orchestrator disk with sandboxes.
+  build_on_client = false
+
   # Define cluster configurations for different node types
   clusters = {
     # Server nodes run Consul and Nomad servers
@@ -162,12 +177,13 @@ locals {
     # (veth-<idx>, 10.11.0.x) and both program the nftables rules that redirect
     # sandbox egress into their own proxy, so on a shared host whichever wrote
     # last takes over the other's sandboxes and template builds lose the network.
+    # With build_on_client the pool is empty instead.
     build = {
       instance_type_x86    = local.build_instance_type_x86
       instance_type_arm    = local.build_instance_type_arm
-      desired_capacity = 1
-      max_size         = 1
-      min_size         = 1
+      desired_capacity = local.build_on_client ? 0 : 1
+      max_size         = local.build_on_client ? 0 : 1
+      min_size         = local.build_on_client ? 0 : 1
     }
   }
 }

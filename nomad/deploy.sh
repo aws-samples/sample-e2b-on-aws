@@ -44,6 +44,45 @@ declare -A jobs_all=(
 order_minimal=(loki orchestrator api client-proxy template-manager snapshot-retention)
 order_all=(loki logs-collector otel-collector orchestrator api client-proxy template-manager snapshot-retention)
 
+# With build_on_client (infra-iac/terraform/main.tf) the client orchestrators
+# build templates in-process and the build pool is empty, so a template-manager
+# job would only sit pending - and on a client node it would fight the
+# orchestrator over network slots. Leave it out of both sets.
+# Read the way nomad/prepare.sh reads it: a missing key (or no config file) is a
+# stack from before the switch, anything present must be true or false.
+BUILD_ON_CLIENT=false
+if [[ -r /opt/config.properties ]] && grep -q '^build_on_client=' /opt/config.properties; then
+    # Everything after the first "=", so "true=x" is rejected below, not read as true.
+    BUILD_ON_CLIENT=$(awk 'index($0, "build_on_client=") == 1 {v = substr($0, 17)} END {print v}' /opt/config.properties)
+fi
+if [[ "$BUILD_ON_CLIENT" != "true" && "$BUILD_ON_CLIENT" != "false" ]]; then
+    echo "Error: build_on_client in /opt/config.properties must be true or false, got '$BUILD_ON_CLIENT'" >&2
+    exit 1
+fi
+
+# The rendered orchestrator job has to match that setting: one rendered before a
+# switch would be submitted without (or with) the template-manager service while
+# the template-manager job is skipped (or deployed), leaving no builder.
+check_orchestrator_render() {
+    local want="orchestrator"
+    [[ "$BUILD_ON_CLIENT" == "true" ]] && want="orchestrator,template-manager"
+    if ! grep -qF "ORCHESTRATOR_SERVICES = \"$want\"" deploy/orchestrator-deploy.hcl; then
+        echo "Error: deploy/orchestrator-deploy.hcl was not rendered for build_on_client=$BUILD_ON_CLIENT; run nomad/prepare.sh first" >&2
+        exit 1
+    fi
+}
+if [[ "$BUILD_ON_CLIENT" == "true" ]]; then
+    unset 'jobs_minimal[template-manager]' 'jobs_all[template-manager]'
+    without_template_manager() {
+        local name
+        for name in "$@"; do
+            [[ "$name" == "template-manager" ]] || printf '%s\n' "$name"
+        done
+    }
+    mapfile -t order_minimal < <(without_template_manager "${order_minimal[@]}")
+    mapfile -t order_all < <(without_template_manager "${order_all[@]}")
+fi
+
 # Set default jobs array to jobs_all for help and listing functions
 declare -A jobs
 for key in "${!jobs_all[@]}"; do
@@ -117,6 +156,7 @@ case "$1" in
         ;;
     --all|-a)
         # Deploy all services if --all|-a provided
+        check_orchestrator_render
         for name in "${order_all[@]}"; do
             echo "deploying ${jobs_all[$name]}..."
             nomad job run "${jobs_all[$name]}"
@@ -124,6 +164,7 @@ case "$1" in
         ;;
     --min|-m)
         # Deploy minimal services if --min|-m provided
+        check_orchestrator_render
         for name in "${order_minimal[@]}"; do
             echo "deploying ${jobs_minimal[$name]}..."
             nomad job run "${jobs_minimal[$name]}"
@@ -131,6 +172,7 @@ case "$1" in
         ;;
     "")
         # Deploy minimal services if no argument provided
+        check_orchestrator_render
         for name in "${order_minimal[@]}"; do
             echo "deploying ${jobs_minimal[$name]}..."
             nomad job run "${jobs_minimal[$name]}"
@@ -139,6 +181,11 @@ case "$1" in
     *)
         # Deploy specific service
         service=$1
+        if [[ "$service" == "template-manager" && "$BUILD_ON_CLIENT" == "true" ]]; then
+            echo "Error: build_on_client is set, the client orchestrators build templates; not deploying template-manager" >&2
+            exit 1
+        fi
+        [[ "$service" == "orchestrator" ]] && check_orchestrator_render
         if [[ -n "${jobs[$service]}" ]]; then
             echo "deploying ${jobs[$service]}..."
             nomad job run "${jobs[$service]}"

@@ -170,31 +170,48 @@ load_nomad_env() {
 # loki and api on api, orchestrator on the client nodes (default), and
 # template-manager on build - and `nomad job run` blocks until the deployment is
 # healthy, so a missing pool turns into a stalled step rather than a clear error.
+# With build_on_client the build pool is empty by design and is not waited for.
+#
+# A node is reported ready before Nomad has fingerprinted its Consul agent, and
+# until it has, the node fails the "${attr.consul.version} semver >= 1.8.0"
+# constraint Nomad adds to every job with a Consul service. A system job such as
+# logs-collector then skips that node and `nomad job run` exits non-zero on the
+# placement failure. It happened on switching build_on_client back to false: the
+# build node terraform had just started was ready but not yet fingerprinted when
+# the deploy step ran. So every ready node has to carry consul.version as well.
 wait_for_nomad() {
   local deadline=$((SECONDS + 900))
-  local leader pools missing pool
-  echo "$(date '+%Y-%m-%d %H:%M:%S') Waiting for the Nomad cluster to accept jobs at $NOMAD_ADDR"
+  local leader nodes pools missing pool id name unprinted required="default api build"
+  [ "$(config_value build_on_client)" = true ] && required="default api"
+  echo "$(date '+%Y-%m-%d %H:%M:%S') Waiting for the Nomad cluster to accept jobs at $NOMAD_ADDR (pools: $required)"
   while [ $SECONDS -lt $deadline ]; do
-    leader=$(curl -sf -H "X-Nomad-Token: ${NOMAD_TOKEN:-}" "$NOMAD_ADDR/v1/status/leader" | tr -d '"')
+    leader=$(curl -sf --connect-timeout 5 --max-time 15 -H "X-Nomad-Token: ${NOMAD_TOKEN:-}" "$NOMAD_ADDR/v1/status/leader" | tr -d '"')
     if [ -n "$leader" ]; then
-      pools=$(curl -sf -H "X-Nomad-Token: ${NOMAD_TOKEN:-}" "$NOMAD_ADDR/v1/nodes" \
-        | jq -r '[.[] | select(.Status == "ready") | .NodePool] | unique | join(",")')
+      nodes=$(curl -sf --connect-timeout 5 --max-time 15 -H "X-Nomad-Token: ${NOMAD_TOKEN:-}" "$NOMAD_ADDR/v1/nodes")
+      pools=$(jq -r '[.[] | select(.Status == "ready") | .NodePool] | unique | join(",")' <<<"${nodes:-[]}")
       missing=""
-      for pool in default api build; do
+      for pool in $required; do
         printf '%s\n' "$pools" | tr ',' '\n' | grep -qx "$pool" || missing="$missing $pool"
       done
-      if [ -z "$missing" ]; then
+      # The node list carries no attributes; each ready node is read on its own.
+      unprinted=""
+      while read -r id name; do
+        [ -n "$id" ] || continue
+        curl -sf --connect-timeout 5 --max-time 15 -H "X-Nomad-Token: ${NOMAD_TOKEN:-}" "$NOMAD_ADDR/v1/node/$id" \
+          | jq -e '.Attributes["consul.version"] // empty' >/dev/null || unprinted="$unprinted $name"
+      done < <(jq -r '.[] | select(.Status == "ready") | "\(.ID) \(.Name)"' <<<"${nodes:-[]}")
+      if [ -z "$missing" ] && [ -z "$unprinted" ]; then
         echo "$(date '+%Y-%m-%d %H:%M:%S') Cluster ready: leader $leader, pools ready: $pools"
         return 0
       fi
-      echo "  leader $leader, pools ready: ${pools:-none}, still waiting for:$missing"
+      echo "  leader $leader, pools ready: ${pools:-none}, still waiting for:${missing:- none}; no Consul fingerprint yet:${unprinted:- none}"
     else
       echo "  no leader yet at $NOMAD_ADDR"
     fi
     sleep 15
   done
   echo "Error: the Nomad cluster was not ready within 15 minutes." >&2
-  echo "       Last seen: leader='${leader:-none}' ready pools='${pools:-none}'." >&2
+  echo "       Last seen: leader='${leader:-none}' ready pools='${pools:-none}' ready nodes without a Consul fingerprint='${unprinted:-none}'." >&2
   echo "       Check the server and client instances came up and joined:" >&2
   echo "         nomad server members ; nomad node status" >&2
   echo "       and, on a node that never joined, /var/log/cloud-init-output.log." >&2
@@ -213,11 +230,38 @@ wait_for_nomad() {
 # they start. nomad/deploy.sh (the minimal set) runs loki again, which is a
 # no-op. A collector failing fails the step but does not stop the services from
 # being deployed.
+#
+# With build_on_client the client orchestrators build templates and nomad/deploy.sh
+# skips template-manager; a stack switched over from a build pool still has that
+# job registered, so it is stopped before the orchestrator takes over. Before
+# anything is touched the rendered orchestrator job has to carry the matching
+# ORCHESTRATOR_SERVICES - a deploy without the prepare after the switch would
+# otherwise stop the old builder and start an orchestrator that does not build.
+# And if the old builder cannot be stopped the step stops there, so it is never
+# left taking builds for a CPU the client pool no longer runs.
 deploy_jobs() {
-  local rc=0
+  local rc=0 build_on_client services
+  build_on_client=$(config_value build_on_client) || return 1
+  # Missing is a stack from before the switch existed; present must be true/false.
+  if [ -z "$build_on_client" ] && ! grep -q '^[[:blank:]]*build_on_client[[:blank:]]*=' /opt/config.properties; then
+    build_on_client=false
+  fi
+  case "$build_on_client" in
+    true)  services="orchestrator,template-manager" ;;
+    false) services="orchestrator" ;;
+    *) echo "Error: build_on_client in /opt/config.properties must be true or false, got '$build_on_client'." >&2; return 1 ;;
+  esac
+  if ! grep -qF "ORCHESTRATOR_SERVICES = \"$services\"" nomad/deploy/orchestrator-deploy.hcl; then
+    echo "Error: nomad/deploy/orchestrator-deploy.hcl was not rendered for build_on_client=$build_on_client." >&2
+    echo "       Run: sudo bash deploy-all.sh --only prepare && sudo bash deploy-all.sh --only deploy" >&2
+    return 1
+  fi
   bash nomad/deploy.sh loki || rc=$?
   { bash nomad/deploy.sh logs-collector && wait_system_job logs-collector; } || rc=$?
   deploy_otel_collector || rc=$?
+  if [ "$build_on_client" = true ]; then
+    stop_job_if_active template-manager || return 1
+  fi
   bash nomad/deploy.sh || rc=$?
   bash infra-iac/db/apply-tier-limits.sh || return 1
   return $rc
@@ -278,11 +322,12 @@ otel_fingerprint() {
 
 # The fingerprint is taken before prepare reads the file, so it describes what
 # was rendered. prepare.sh falls back to the environment for otel_customer_*
-# keys the file lacks; unset them so only the file can feed the collector.
+# and build_on_client when the file lacks them; unset those so only the file
+# decides, as it does for nomad/deploy.sh.
 prepare_jobs() {
   local fp job
   fp=$(otel_fingerprint) || return 1
-  env -u otel_customer_endpoint -u otel_customer_header_name -u otel_customer_header_value \
+  env -u otel_customer_endpoint -u otel_customer_header_name -u otel_customer_header_value -u build_on_client \
     bash nomad/prepare.sh || return 1
   job=$(sha256sum "$OTEL_JOB_FILE" | cut -d' ' -f1) || return 1
   echo "$fp $job" > "$OTEL_RENDERED"

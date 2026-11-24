@@ -65,3 +65,10 @@ output "volume_token_key" {
   value       = random_password.volume_token_key.result
   sensitive   = true
 }
+
+# start.sh writes it into config.properties as build_on_client, where
+# nomad/prepare.sh, nomad/deploy.sh and deploy-all.sh read it.
+output "build_on_client" {
+  description = "Whether templates are built by the client orchestrators instead of a build pool"
+  value       = local.build_on_client
+}

@@ -86,10 +86,24 @@ export otel_customer_header_value="${otel_customer_header_value:-}"
 # re-run prepare and `nomad/deploy.sh snapshot-retention`, to let it delete.
 export RETENTION_APPLY="${RETENTION_APPLY:-false}"
 
+# Templates are built by the template-manager job on the build pool, unless
+# main.tf's build_on_client moved them into the client orchestrator process
+# (infra-iac/terraform/start.sh records that terraform output here). A missing
+# key is a stack from before the switch existed, and those have a build pool;
+# a key that is present must say true or false.
+case "${build_on_client-false}" in
+    true)  export orchestrator_services="orchestrator,template-manager" ;;
+    false) export orchestrator_services="orchestrator" ;;
+    *)
+        echo "Error: build_on_client in /opt/config.properties must be true or false, got '${build_on_client}'" >&2
+        exit 1
+        ;;
+esac
+
 # Derived above rather than read from the config file.
 SUBST_KEYS+=(postgres_password postgres_host postgres_user CFNDBURL REDIS_CA_B64 VOLUME_TOKEN_KEY_B64)
 SUBST_KEYS+=(otel_customer_endpoint otel_customer_header_name otel_customer_header_value)
-SUBST_KEYS+=(RETENTION_APPLY)
+SUBST_KEYS+=(RETENTION_APPLY orchestrator_services)
 
 # Process each HCL file in the origin directory.
 #

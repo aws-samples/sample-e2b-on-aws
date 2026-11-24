@@ -152,6 +152,47 @@ aws autoscaling terminate-instance-in-auto-scaling-group \
 `prepare.sh`，并列出缺失的键。按这些栈一直以来的值补上即可：
 `echo 'CFNCLIENTSUBNETTYPE=Private' | sudo tee -a /opt/config.properties`。
 
+#### Client 机型与模板在哪里构建
+
+沙箱只能跑在与其模板构建时 CPU 型号相同的节点上（以 `/proc/cpuinfo` 里的架构、family、model
+为准），否则报 `503 sandbox_no_compatible_node`。默认的 client 池（`r8i.24xlarge`）和 build 池
+（`m8i.4xlarge`）都是 Xeon 6975P-C，所以能匹配。两者都在 `infra-iac/terraform/main.tf` 的
+`locals` 里设置。
+
+如果 client 池用的 CPU 与 build 池不同，比如 7 代 `r7i.metal-24xl`，要么给 build 池换一个
+CPU 型号相同的机型，要么改为在 client 节点上构建模板：
+
+```hcl
+client_instance_type_x86 = "r7i.metal-24xl"
+build_on_client          = true
+```
+
+client 上的 orchestrator 会在同一个进程里同时运行 template-manager，build 的 Auto Scaling
+组缩到 0，`template-manager` job 不再部署。模板构建与沙箱共用 client 节点的 CPU、内存和
+`/orchestrator` 磁盘。7 代 client 必须是裸金属：只有 8 代 Intel 支持嵌套虚拟化。
+
+对已运行的栈，这是一次维护操作：期间不要构建模板，client 节点上的沙箱会丢失。改完
+`main.tf` 后：
+
+```bash
+sudo bash deploy-all.sh --only terraform   # build 池缩到 0，并写入 build_on_client
+# 新机型只作用于新实例：逐台替换 client 节点
+# （每台执行 aws autoscaling terminate-instance-in-auto-scaling-group ...），
+# 构建之前先确认每台节点的 CPU 型号。
+sudo bash deploy-all.sh --only build       # 仅当栈上的 API 早于这个开关时需要
+sudo bash deploy-all.sh --only prepare
+sudo bash deploy-all.sh --only deploy      # 停掉 template-manager，重新部署 orchestrator
+```
+
+只有加入这个开关之后构建的 API 才会把 client orchestrator 识别为 builder。api job 的 spec
+没变时 `--only deploy` 不会重启它，所以 `--only build` 之后要逐个重启 api 的 allocation
+（`nomad job allocs api`，每个执行 `nomad alloc stop <id>` 并等替代的起来）；在它们换成新构建
+之前，模板构建会一直报 `503 Error when getting available build client`。
+
+如果 orchestrator job 没有经过 `--only prepare` 按新设置重新渲染，deploy 步骤会拒绝执行。
+在旧 CPU 上构建的模板无法在新 CPU 上运行，需要重新构建。切回独立 build 池的步骤相同，
+把 `build_on_client` 改为 `false` 即可。
+
 ### 步骤 2 — 验证域名证书
 
 1. 进入 Amazon Certificate Manager (ACM)
