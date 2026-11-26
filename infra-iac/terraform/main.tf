@@ -81,9 +81,10 @@ locals {
   # What caps a nested-virtualization node is the number of guest vCPUs, not
   # memory: past roughly 9-10x the host's vCPUs (about 900 on this type,
   # measured with 288 and 384 sandboxes) Firecracker VMs start dying with
-  # KVM_EXIT_FAIL_ENTRY. The orchestrator's max-sandboxes-per-node default of
-  # 200 keeps 4-vCPU templates at 800 guest vCPUs, below that; raise it only
-  # together with fewer vCPUs per template.
+  # KVM_EXIT_FAIL_ENTRY. The orchestrator's max-sandboxes-per-node is raised to
+  # 1000 here (flags.go), so it no longer keeps a node below that ceiling: with
+  # 4-vCPU templates this type holds about 225 sandboxes, and the placement
+  # does not know it. Size the client pool, or the template's vCPUs, for it.
   client_instance_type_x86 = "r8i.24xlarge"
 
   # arm64: the same rule applies, so this has to match the arm build node,
