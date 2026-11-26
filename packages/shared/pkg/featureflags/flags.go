@@ -414,7 +414,14 @@ func NewIntFlag(name string, fallback int) IntFlag {
 }
 
 var (
-	MaxSandboxesPerNode = NewIntFlag("max-sandboxes-per-node", 200)
+	// Local override (upstream default is 200): 1000. With use-memfd off, sandbox
+	// memory is allocated on first touch, so a large node holds more idle
+	// sandboxes than upstream's count allows. The count is still not a safety
+	// limit: the node's hugepage pool (memory the guests actually use) and, on a
+	// nested-virtualization node, roughly 9-10x the host's vCPUs in guest vCPUs
+	// are reached first by busy or many-vCPU sandboxes. Re-apply on every
+	// upstream sync.
+	MaxSandboxesPerNode = NewIntFlag("max-sandboxes-per-node", 1000)
 	// The LD keys keep the legacy "gcloud-" prefix, but the limits apply to uploads on all storage providers.
 	StorageConcurrentUploadLimit  = NewIntFlag("gcloud-concurrent-upload-limit", 8)
 	StorageMaxUploadTasks         = NewIntFlag("gcloud-max-tasks", 16)
